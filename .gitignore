@@ -1,0 +1,9 @@
+.env
+.venv
+.venv.nosync/
+__pycache__/
+*.pyc
+.pytest_cache/
+data/
+*.db
+token_cache.json
