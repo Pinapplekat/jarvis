@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Protocol
+from xml.sax.saxutils import escape
 
 import httpx
 
@@ -36,6 +37,7 @@ class InboundSms:
 
 class SmsClient(Protocol):
     def send(self, to: str, body: str) -> None: ...
+    def call(self, to: str, message: str) -> None: ...
     def inbound(self, since: datetime) -> list[InboundSms]: ...
 
 
@@ -58,6 +60,13 @@ class TwilioClient:
         if not r.is_success:
             raise RuntimeError(f"Twilio send failed ({r.status_code}): {r.text[:300]}")
 
+    def call(self, to: str, message: str) -> None:
+        r = self.http.post("/Calls.json", data={
+            "From": config.TWILIO_FROM_NUMBER, "To": to, "Twiml": call_twiml(message),
+        })
+        if not r.is_success:
+            raise RuntimeError(f"Twilio call failed ({r.status_code}): {r.text[:300]}")
+
     def inbound(self, since: datetime) -> list[InboundSms]:
         r = self.http.get("/Messages.json", params={
             "To": config.TWILIO_FROM_NUMBER,
@@ -70,6 +79,14 @@ class TwilioClient:
             for m in r.json()["messages"]
             if m["direction"] == "inbound"
         ]
+
+
+def call_twiml(message: str) -> str:
+    said = escape(f"This is JARVIS with an urgent alert. {message}")
+    return (
+        f'<Response><Pause length="1"/><Say voice="Polly.Matthew">{said}</Say>'
+        f'<Pause length="1"/><Say voice="Polly.Matthew">Again. {escape(message)}</Say></Response>'
+    )
 
 
 def parse_reply(text: str) -> tuple[bool, int | None] | None:

@@ -52,6 +52,21 @@ uv run jarvis sms-test         # one text to yourself
 uv run jarvis tick             # text new drafts, apply replies, send approved
 ```
 
+## Alerts and phone calls
+
+- `high`: a text.
+- `urgent`: a text plus a phone call that reads the message twice. During `QUIET_HOURS` (default `23-7`, empty to disable), the text goes out right away and the call waits until morning.
+
+Voice calls don't need 10DLC registration; they cost about 1–2¢ per minute.
+
+```bash
+uv run jarvis call-test
+uv run jarvis alert "Rent due tomorrow" --level high
+uv run jarvis alert "Exam moved to today" --level urgent --key exam-moved --now
+```
+
+`--key` makes an alert one-time, so a source that checks every few minutes can't call you twice about the same thing.
+
 ## Outlook access test (Microsoft Graph) — blocked by school tenant
 
 1. Sign in to https://entra.microsoft.com with a **personal** Microsoft account (not school). A free account gets you a tenant to register apps in.

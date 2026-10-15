@@ -42,6 +42,16 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     resolved_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY,
+    level TEXT NOT NULL CHECK (level IN ('high', 'urgent')),
+    message TEXT NOT NULL,
+    dedupe_key TEXT UNIQUE,          -- same key never alerts twice
+    created_at TEXT NOT NULL,
+    texted_at TEXT,
+    called_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS processed_sms (
     sid TEXT PRIMARY KEY,
     at TEXT NOT NULL
@@ -180,6 +190,28 @@ class Memory:
         )
         self.db.commit()
         return cur.rowcount == 1
+
+    def raise_alert(self, level: str, message: str, dedupe_key: str | None = None) -> int | None:
+        """Record an alert to deliver. None if an alert with this key already exists."""
+        cur = self.db.execute(
+            "INSERT OR IGNORE INTO alerts (level, message, dedupe_key, created_at) VALUES (?, ?, ?, ?)",
+            (level, message, dedupe_key, _now()),
+        )
+        self.db.commit()
+        return cur.lastrowid if cur.rowcount else None
+
+    def undelivered_alerts(self) -> list[sqlite3.Row]:
+        return self.db.execute(
+            """SELECT * FROM alerts
+               WHERE texted_at IS NULL OR (level = 'urgent' AND called_at IS NULL)
+               ORDER BY id"""
+        ).fetchall()
+
+    def mark_alert(self, alert_id: int, field: str) -> None:
+        if field not in ("texted_at", "called_at"):
+            raise ValueError(field)
+        self.db.execute(f"UPDATE alerts SET {field} = ? WHERE id = ?", (_now(), alert_id))
+        self.db.commit()
 
     def context_snapshot(self) -> str:
         """Plain-text dump of what JARVIS knows, for feeding to the model."""

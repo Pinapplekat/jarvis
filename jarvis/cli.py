@@ -6,6 +6,14 @@ from jarvis import config
 from jarvis.memory import Memory
 
 
+def _deliver(mem: Memory, client) -> tuple[int, int]:
+    from datetime import datetime
+
+    from jarvis.alerts import deliver_alerts, parse_quiet_hours
+    return deliver_alerts(mem, client, config.MY_PHONE_NUMBER, datetime.now(),
+                          parse_quiet_hours(config.QUIET_HOURS))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="jarvis")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -54,6 +62,13 @@ def main() -> None:
 
     sub.add_parser("relay", help="Send all approved emails through Apple Mail")
     sub.add_parser("sms-test", help="Text yourself once to check Twilio setup")
+    sub.add_parser("call-test", help="Call yourself once to check Twilio voice")
+
+    al = sub.add_parser("alert", help="Raise an alert (delivered on next tick)")
+    al.add_argument("message")
+    al.add_argument("--level", choices=["high", "urgent"], default="high")
+    al.add_argument("--key", help="Dedupe key: an alert with the same key is never repeated")
+    al.add_argument("--now", action="store_true", help="Deliver immediately instead of waiting for tick")
     sub.add_parser("tick", help="Text new drafts, apply SMS replies, send approved emails")
 
     args = parser.parse_args()
@@ -107,14 +122,32 @@ def main() -> None:
         TwilioClient().send(config.MY_PHONE_NUMBER, "JARVIS: SMS is working.")
         print(f"Texted {config.MY_PHONE_NUMBER}")
         return
+    if args.cmd == "call-test":
+        from jarvis.sms import TwilioClient
+        TwilioClient().call(config.MY_PHONE_NUMBER, "Voice calls are working.")
+        print(f"Calling {config.MY_PHONE_NUMBER}")
+        return
+    if args.cmd == "alert":
+        aid = mem.raise_alert(args.level, args.message, args.key)
+        if aid is None:
+            print(f"Already alerted for key {args.key!r}; skipping")
+            return
+        print(f"Alert #{aid} ({args.level}) queued")
+        if args.now:
+            from jarvis.sms import TwilioClient
+            texts, calls = _deliver(mem, TwilioClient())
+            print(f"Texted {texts}, called {calls}")
+        return
     if args.cmd == "tick":
         from jarvis.mailrelay import process_approved
         from jarvis.sms import TwilioClient, handle_replies, notify_pending
         client = TwilioClient()
+        texts, calls = _deliver(mem, client)
         texted = notify_pending(mem, client, config.MY_PHONE_NUMBER)
         changed = handle_replies(mem, client, config.MY_PHONE_NUMBER)
         sent, failed = process_approved(mem)
-        print(f"Texted {texted} draft(s), {changed} reply(ies) applied, sent {sent}, failed {failed}")
+        print(f"Alerts: texted {texts}, called {calls}. Drafts texted {texted}, "
+              f"{changed} reply(ies) applied, sent {sent}, failed {failed}")
         if failed:
             client.send(config.MY_PHONE_NUMBER, f"JARVIS: {failed} approved email(s) failed to send.")
         sys.exit(1 if failed else 0)
