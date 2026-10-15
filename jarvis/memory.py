@@ -52,6 +52,17 @@ CREATE TABLE IF NOT EXISTS alerts (
     called_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS deadlines (
+    key TEXT PRIMARY KEY,            -- canvas:<assignment id> overrides the feed's copy
+    course TEXT NOT NULL,
+    title TEXT NOT NULL,
+    due TEXT NOT NULL,               -- ISO 8601 with offset
+    url TEXT,
+    source TEXT NOT NULL,            -- weekly | manual
+    done INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS processed_sms (
     sid TEXT PRIMARY KEY,
     at TEXT NOT NULL
@@ -216,6 +227,31 @@ class Memory:
             raise ValueError(field)
         self.db.execute(f"UPDATE alerts SET {field} = ? WHERE id = ?", (_now(), alert_id))
         self.db.commit()
+
+    def upsert_deadline(self, key: str, course: str, title: str, due: datetime,
+                        source: str, url: str | None = None, done: bool | None = None) -> None:
+        """Insert or update. done=None keeps the existing done flag (a re-import won't un-finish work)."""
+        self.db.execute(
+            """INSERT INTO deadlines (key, course, title, due, url, source, done, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(key) DO UPDATE SET
+                 course = excluded.course, title = excluded.title, due = excluded.due,
+                 url = COALESCE(excluded.url, deadlines.url), source = excluded.source,
+                 done = CASE WHEN ? IS NULL THEN deadlines.done ELSE excluded.done END,
+                 updated_at = excluded.updated_at""",
+            (key, course, title, due.isoformat(), url, source, int(bool(done)), _now(), done),
+        )
+        self.db.commit()
+
+    def set_deadline_done(self, key: str, done: bool = True) -> bool:
+        cur = self.db.execute(
+            "UPDATE deadlines SET done = ?, updated_at = ? WHERE key = ?", (int(done), _now(), key)
+        )
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def deadlines(self) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM deadlines ORDER BY due").fetchall()
 
     def context_snapshot(self) -> str:
         """Plain-text dump of what JARVIS knows, for feeding to the model."""

@@ -69,6 +69,19 @@ uv run jarvis digest --text    # ...and text it to you
 
 Alerts: a text 24h before anything not done, and a call 3h before work that Canvas shows as unsubmitted. Items that are submitted outside Canvas (`submission_types: none`) and deadlines read from module titles like "(DUE OCT 11)" (ECON 100) only get the 24h text, marked "check it's done", since Canvas can't tell whether they're finished. `tick` syncs Canvas automatically once a token is set.
 
+### Deadlines the feed misses
+
+The feed lacks ECON's module-title dates, CMST's Sunday homework, and ENGL work posted mid-week. The `/weekly` skill pushes every deadline it finds into JARVIS at the end of each run. You can also add them yourself:
+
+```bash
+uv run jarvis deadline add --course "ECON 100" --title "Module 3" --due 2026-10-18
+uv run jarvis deadline import deadlines.json   # [{"course","title","due","key"?,"url"?,"done"?}]
+uv run jarvis deadline list
+uv run jarvis deadline done <key>              # stop reminders
+```
+
+Use `--key canvas:<assignment id>` to replace the feed's copy of an assignment. These deadlines get the 24h text but never the 3h call, since their done status is only as fresh as the last update.
+
 ## Alerts and phone calls
 
 - `high`: a text.

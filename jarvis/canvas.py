@@ -177,6 +177,50 @@ def _infer_year(month: int, day: int, today: date) -> date | None:
     return min(options, key=lambda d: abs(d - today)) if options else None
 
 
+def from_memory(mem: Memory) -> list[Deadline]:
+    """Deadlines recorded by /weekly or by hand. Status comes from the user, not Canvas, so
+    they get the 24h 'check it's done' text but never the 3h call."""
+    return [
+        Deadline(
+            key=r["key"], course=r["course"], title=r["title"],
+            due=datetime.fromisoformat(r["due"]), url=r["url"],
+            status="submitted" if r["done"] else "unknown", trackable=False,
+        )
+        for r in mem.deadlines()
+    ]
+
+
+def parse_due(text: str, tz: ZoneInfo) -> datetime:
+    """'2026-10-18 23:59', '2026-10-18T23:59-07:00' or '2026-10-18' (= 11:59 PM)."""
+    text = text.strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return datetime.combine(date.fromisoformat(text), time(23, 59), tz)
+    dt = datetime.fromisoformat(text.replace(" ", "T", 1))
+    return dt if dt.tzinfo else dt.replace(tzinfo=tz)
+
+
+def deadline_key(course: str, title: str, due: datetime) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", f"{course} {title}".lower()).strip("-")
+    return f"manual:{slug}:{due:%Y%m%d}"
+
+
+def import_deadlines(mem: Memory, items: list[dict], tz: ZoneInfo, source: str = "weekly") -> int:
+    """Items: {course, title, due, key?, url?, done?}. Returns how many were saved."""
+    for item in items:
+        due = parse_due(item["due"], tz)
+        key = item.get("key") or deadline_key(item["course"], item["title"], due)
+        mem.upsert_deadline(key, item["course"], item["title"], due, source,
+                            url=item.get("url"), done=item.get("done"))
+    return len(items)
+
+
+def merge(primary: list[Deadline], overrides: list[Deadline]) -> list[Deadline]:
+    """Overrides replace primary items with the same key."""
+    by_key = {d.key: d for d in primary}
+    by_key.update({d.key: d for d in overrides})
+    return sorted(by_key.values(), key=lambda d: d.due)
+
+
 def raise_deadline_alerts(mem: Memory, deadlines: list[Deadline], now: datetime) -> int:
     """Text 24h before anything not yet done; call 3h before trackable work still unsubmitted."""
     raised = 0

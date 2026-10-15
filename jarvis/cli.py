@@ -19,7 +19,9 @@ def _deliver(mem: Memory, client) -> tuple[int, int]:
 
 
 def _sync_canvas(mem: Memory):
-    from jarvis.canvas import CanvasClient, fetch_feed, from_feed, raise_deadline_alerts
+    from jarvis.canvas import (
+        CanvasClient, fetch_feed, from_feed, from_memory, merge, raise_deadline_alerts,
+    )
     now = _now_local()
     if config.CANVAS_TOKEN:
         deadlines = CanvasClient().fetch_deadlines(now.tzinfo, now.date())
@@ -27,6 +29,7 @@ def _sync_canvas(mem: Memory):
         deadlines = from_feed(fetch_feed(config.CANVAS_ICS_URL), now.tzinfo)
     else:
         sys.exit("Set CANVAS_ICS_URL (Canvas → Calendar → Calendar Feed) or CANVAS_TOKEN in .env")
+    deadlines = merge(deadlines, from_memory(mem))
     raised = raise_deadline_alerts(mem, deadlines, now)
     due = [d for d in deadlines if d.kind == "due"]
     todo = sum(1 for d in due if d.due > now and not d.done)
@@ -91,6 +94,23 @@ def main() -> None:
     al.add_argument("--now", action="store_true", help="Deliver immediately instead of waiting for tick")
     sub.add_parser("tick", help="Sync Canvas, deliver alerts, handle drafts and replies, send approved")
     sub.add_parser("canvas", help="Fetch Canvas deadlines and raise deadline alerts")
+    dl = sub.add_parser("deadline", help="Deadlines Canvas doesn't know about (fed by /weekly)")
+    dls = dl.add_subparsers(dest="dcmd", required=True)
+    da = dls.add_parser("add", help="Add or update one deadline")
+    da.add_argument("--course", required=True)
+    da.add_argument("--title", required=True)
+    da.add_argument("--due", required=True, help="'2026-10-18 23:59' or '2026-10-18' (= 11:59 PM)")
+    da.add_argument("--key", help="Use canvas:<assignment id> to replace the feed's copy")
+    da.add_argument("--url")
+    da.add_argument("--done", action="store_true")
+    di = dls.add_parser("import", help="Add/update deadlines from a JSON list (file or - for stdin)")
+    di.add_argument("file")
+    di.add_argument("--source", default="weekly")
+    dd = dls.add_parser("done", help="Mark a deadline done so it stops alerting")
+    dd.add_argument("key")
+    dd.add_argument("--undo", action="store_true")
+    dls.add_parser("list", help="Show stored deadlines with their keys")
+
     dg = sub.add_parser("digest", help="Show the week ahead from Canvas")
     dg.add_argument("--days", type=int, default=7)
     dg.add_argument("--text", action="store_true", help="Also text it to you")
@@ -166,6 +186,25 @@ def main() -> None:
         deadlines, raised = _sync_canvas(mem)
         due = sum(1 for d in deadlines if d.kind == "due")
         print(f"{due} deadlines, {len(deadlines) - due} calendar events, {raised} new alert(s)")
+        return
+    if args.cmd == "deadline":
+        from jarvis.canvas import import_deadlines
+        tz = _now_local().tzinfo
+        if args.dcmd == "add":
+            item = {"course": args.course, "title": args.title, "due": args.due,
+                    "key": args.key, "url": args.url, "done": True if args.done else None}
+            import_deadlines(mem, [item], tz, source="manual")
+            print("Saved")
+        elif args.dcmd == "import":
+            raw = sys.stdin.read() if args.file == "-" else open(args.file).read()
+            print(f"Saved {import_deadlines(mem, json.loads(raw), tz, args.source)} deadline(s)")
+        elif args.dcmd == "done":
+            if not mem.set_deadline_done(args.key, not args.undo):
+                sys.exit(f"No stored deadline {args.key!r} (see: jarvis deadline list)")
+            print("Updated")
+        elif args.dcmd == "list":
+            for r in mem.deadlines():
+                print(f"{'x' if r['done'] else ' '} {r['due'][:16]}  {r['course']}: {r['title']}  [{r['key']}]")
         return
     if args.cmd == "digest":
         from jarvis.canvas import format_digest
