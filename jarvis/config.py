@@ -10,6 +10,11 @@ DB_PATH = DATA_DIR / "jarvis.db"
 TOKEN_CACHE_PATH = DATA_DIR / "token_cache.json"
 
 MAIL_ACCOUNT = os.getenv("MAIL_ACCOUNT", "")
+TIMEZONE = os.getenv("TIMEZONE", "America/Los_Angeles")
+
+CANVAS_BASE_URL = os.getenv("CANVAS_BASE_URL", "https://canvas.seattlecolleges.edu")
+CANVAS_TOKEN = os.getenv("CANVAS_TOKEN", "")
+CANVAS_ICS_URL = os.getenv("CANVAS_ICS_URL", "")
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")

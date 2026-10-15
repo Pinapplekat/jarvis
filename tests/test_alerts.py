@@ -46,6 +46,13 @@ def test_urgent_call_waits_for_quiet_hours_to_end():
     assert deliver_alerts(m, t, ME, NOON, QUIET) == (0, 1)
 
 
+def test_stale_alerts_are_not_delivered():
+    m, t = Memory(":memory:"), FakeTwilio()
+    aid = m.raise_alert("urgent", "Due today")
+    m.db.execute("UPDATE alerts SET created_at = '2020-01-01T00:00:00+00:00' WHERE id = ?", (aid,))
+    assert deliver_alerts(m, t, ME, NOON, QUIET) == (0, 0)
+
+
 def test_dedupe_key_prevents_repeat_alerts():
     m = Memory(":memory:")
     assert m.raise_alert("urgent", "Paper due in 1h", "canvas:123:1h") is not None

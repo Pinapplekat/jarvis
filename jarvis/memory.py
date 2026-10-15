@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SCHEMA = """
@@ -200,11 +200,15 @@ class Memory:
         self.db.commit()
         return cur.lastrowid if cur.rowcount else None
 
-    def undelivered_alerts(self) -> list[sqlite3.Row]:
+    def undelivered_alerts(self, max_age: timedelta = timedelta(hours=6)) -> list[sqlite3.Row]:
+        """Alerts older than max_age are stale (e.g. raised while SMS was down) and dropped."""
+        cutoff = (datetime.now(timezone.utc) - max_age).isoformat(timespec="seconds")
         return self.db.execute(
             """SELECT * FROM alerts
-               WHERE texted_at IS NULL OR (level = 'urgent' AND called_at IS NULL)
-               ORDER BY id"""
+               WHERE (texted_at IS NULL OR (level = 'urgent' AND called_at IS NULL))
+                 AND created_at >= ?
+               ORDER BY id""",
+            (cutoff,),
         ).fetchall()
 
     def mark_alert(self, alert_id: int, field: str) -> None:

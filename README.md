@@ -52,6 +52,23 @@ uv run jarvis sms-test         # one text to yourself
 uv run jarvis tick             # text new drafts, apply replies, send approved
 ```
 
+## Canvas deadlines and weekly digest
+
+Seattle Colleges blocks student access tokens, so JARVIS reads your **Calendar Feed** instead:
+
+1. In Canvas: Calendar → **Calendar Feed** (bottom right) → copy the link.
+2. Paste it into `CANVAS_ICS_URL` in `.env` yourself. Treat it like a password: anyone with the link can see your Canvas calendar.
+
+The feed has dates but not submission status, so feed deadlines only get the 24h "check it's done" text, never the 3h call. If IT ever issues a token, set `CANVAS_TOKEN` and JARVIS switches to the API (with status, ECON module dates, and calls).
+
+```bash
+uv run jarvis canvas           # fetch deadlines, raise alerts
+uv run jarvis digest           # print the week ahead
+uv run jarvis digest --text    # ...and text it to you
+```
+
+Alerts: a text 24h before anything not done, and a call 3h before work that Canvas shows as unsubmitted. Items that are submitted outside Canvas (`submission_types: none`) and deadlines read from module titles like "(DUE OCT 11)" (ECON 100) only get the 24h text, marked "check it's done", since Canvas can't tell whether they're finished. `tick` syncs Canvas automatically once a token is set.
+
 ## Alerts and phone calls
 
 - `high`: a text.

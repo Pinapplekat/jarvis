@@ -6,12 +6,32 @@ from jarvis import config
 from jarvis.memory import Memory
 
 
-def _deliver(mem: Memory, client) -> tuple[int, int]:
+def _now_local():
     from datetime import datetime
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo(config.TIMEZONE))
 
+
+def _deliver(mem: Memory, client) -> tuple[int, int]:
     from jarvis.alerts import deliver_alerts, parse_quiet_hours
-    return deliver_alerts(mem, client, config.MY_PHONE_NUMBER, datetime.now(),
+    return deliver_alerts(mem, client, config.MY_PHONE_NUMBER, _now_local().replace(tzinfo=None),
                           parse_quiet_hours(config.QUIET_HOURS))
+
+
+def _sync_canvas(mem: Memory):
+    from jarvis.canvas import CanvasClient, fetch_feed, from_feed, raise_deadline_alerts
+    now = _now_local()
+    if config.CANVAS_TOKEN:
+        deadlines = CanvasClient().fetch_deadlines(now.tzinfo, now.date())
+    elif config.CANVAS_ICS_URL:
+        deadlines = from_feed(fetch_feed(config.CANVAS_ICS_URL), now.tzinfo)
+    else:
+        sys.exit("Set CANVAS_ICS_URL (Canvas → Calendar → Calendar Feed) or CANVAS_TOKEN in .env")
+    raised = raise_deadline_alerts(mem, deadlines, now)
+    due = [d for d in deadlines if d.kind == "due"]
+    todo = sum(1 for d in due if d.due > now and not d.done)
+    mem.log("canvas_sync", f"{len(due)} deadlines, {todo} upcoming not done, {raised} alerts")
+    return deadlines, raised
 
 
 def main() -> None:
@@ -69,7 +89,11 @@ def main() -> None:
     al.add_argument("--level", choices=["high", "urgent"], default="high")
     al.add_argument("--key", help="Dedupe key: an alert with the same key is never repeated")
     al.add_argument("--now", action="store_true", help="Deliver immediately instead of waiting for tick")
-    sub.add_parser("tick", help="Text new drafts, apply SMS replies, send approved emails")
+    sub.add_parser("tick", help="Sync Canvas, deliver alerts, handle drafts and replies, send approved")
+    sub.add_parser("canvas", help="Fetch Canvas deadlines and raise deadline alerts")
+    dg = sub.add_parser("digest", help="Show the week ahead from Canvas")
+    dg.add_argument("--days", type=int, default=7)
+    dg.add_argument("--text", action="store_true", help="Also text it to you")
 
     args = parser.parse_args()
 
@@ -138,10 +162,26 @@ def main() -> None:
             texts, calls = _deliver(mem, TwilioClient())
             print(f"Texted {texts}, called {calls}")
         return
+    if args.cmd == "canvas":
+        deadlines, raised = _sync_canvas(mem)
+        due = sum(1 for d in deadlines if d.kind == "due")
+        print(f"{due} deadlines, {len(deadlines) - due} calendar events, {raised} new alert(s)")
+        return
+    if args.cmd == "digest":
+        from jarvis.canvas import format_digest
+        deadlines, _ = _sync_canvas(mem)
+        text = format_digest(deadlines, _now_local(), args.days)
+        print(text)
+        if args.text:
+            from jarvis.sms import TwilioClient
+            TwilioClient().send(config.MY_PHONE_NUMBER, text)
+        return
     if args.cmd == "tick":
         from jarvis.mailrelay import process_approved
         from jarvis.sms import TwilioClient, handle_replies, notify_pending
         client = TwilioClient()
+        if config.CANVAS_TOKEN or config.CANVAS_ICS_URL:
+            _sync_canvas(mem)
         texts, calls = _deliver(mem, client)
         texted = notify_pending(mem, client, config.MY_PHONE_NUMBER)
         changed = handle_replies(mem, client, config.MY_PHONE_NUMBER)
