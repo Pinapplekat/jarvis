@@ -1,23 +1,27 @@
 from datetime import datetime, time
 
 from jarvis.alerts import deliver_alerts, in_quiet_hours, parse_quiet_hours
+from jarvis.calls import call_twiml
 from jarvis.memory import Memory
-from jarvis.sms import call_twiml
 
-ME = "+12065550100"
 QUIET = parse_quiet_hours("23-7")
 NOON = datetime(2026, 10, 15, 12, 0)
 MIDNIGHT = datetime(2026, 10, 15, 0, 30)
 
 
-class FakeTwilio:
+class FakeMessenger:
     def __init__(self):
-        self.texts, self.calls = [], []
+        self.sent = []
 
-    def send(self, to, body):
-        self.texts.append(body)
+    def send(self, text):
+        self.sent.append(text)
 
-    def call(self, to, message):
+
+class FakeCaller:
+    def __init__(self):
+        self.calls = []
+
+    def call(self, message):
         self.calls.append(message)
 
 
@@ -29,28 +33,40 @@ def test_quiet_hours_wrap_midnight():
     assert in_quiet_hours(time(14), parse_quiet_hours("13-15"))
 
 
-def test_high_texts_only_urgent_also_calls():
-    m, t = Memory(":memory:"), FakeTwilio()
+def test_high_messages_only_urgent_also_calls():
+    m, msg, call = Memory(":memory:"), FakeMessenger(), FakeCaller()
     m.raise_alert("high", "Rent due tomorrow")
     m.raise_alert("urgent", "Exam moved to today")
-    assert deliver_alerts(m, t, ME, NOON, QUIET) == (2, 1)
-    assert t.calls == ["Exam moved to today"]
-    assert deliver_alerts(m, t, ME, NOON, QUIET) == (0, 0)
+    assert deliver_alerts(m, msg, call, NOON, QUIET) == (2, 1)
+    assert call.calls == ["Exam moved to today"]
+    assert deliver_alerts(m, msg, call, NOON, QUIET) == (0, 0)
 
 
 def test_urgent_call_waits_for_quiet_hours_to_end():
-    m, t = Memory(":memory:"), FakeTwilio()
+    m, msg, call = Memory(":memory:"), FakeMessenger(), FakeCaller()
     m.raise_alert("urgent", "Server down")
-    assert deliver_alerts(m, t, ME, MIDNIGHT, QUIET) == (1, 0)
-    assert "after quiet hours" in t.texts[0]
-    assert deliver_alerts(m, t, ME, NOON, QUIET) == (0, 1)
+    assert deliver_alerts(m, msg, call, MIDNIGHT, QUIET) == (1, 0)
+    assert "after quiet hours" in msg.sent[0]
+    assert deliver_alerts(m, msg, call, NOON, QUIET) == (0, 1)
+
+
+def test_works_with_only_one_channel():
+    m, msg = Memory(":memory:"), FakeMessenger()
+    m.raise_alert("urgent", "No phone")
+    assert deliver_alerts(m, msg, None, NOON, QUIET) == (1, 0)
+    assert "Twilio isn't set up" in msg.sent[0]
+
+    m2, call = Memory(":memory:"), FakeCaller()
+    m2.raise_alert("urgent", "No Telegram")
+    m2.raise_alert("high", "Never delivered")
+    assert deliver_alerts(m2, None, call, NOON, QUIET) == (0, 1)
 
 
 def test_stale_alerts_are_not_delivered():
-    m, t = Memory(":memory:"), FakeTwilio()
+    m, msg, call = Memory(":memory:"), FakeMessenger(), FakeCaller()
     aid = m.raise_alert("urgent", "Due today")
     m.db.execute("UPDATE alerts SET created_at = '2020-01-01T00:00:00+00:00' WHERE id = ?", (aid,))
-    assert deliver_alerts(m, t, ME, NOON, QUIET) == (0, 0)
+    assert deliver_alerts(m, msg, call, NOON, QUIET) == (0, 0)
 
 
 def test_dedupe_key_prevents_repeat_alerts():

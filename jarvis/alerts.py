@@ -1,12 +1,20 @@
-"""Deliver alerts: 'high' is a text, 'urgent' is a text plus a phone call.
+"""Deliver alerts: 'high' is a Telegram message, 'urgent' is a message plus a phone call.
 
-Urgent calls wait out quiet hours; the text still goes out immediately.
+Urgent calls wait out quiet hours; the message still goes out immediately.
 """
 
 from datetime import datetime, time
+from typing import Protocol
 
 from jarvis.memory import Memory
-from jarvis.sms import SmsClient
+
+
+class Messenger(Protocol):
+    def send(self, text: str) -> object: ...
+
+
+class Caller(Protocol):
+    def call(self, message: str) -> None: ...
 
 
 def parse_quiet_hours(spec: str) -> tuple[time, time] | None:
@@ -27,21 +35,27 @@ def in_quiet_hours(now: time, window: tuple[time, time] | None) -> bool:
 
 
 def deliver_alerts(
-    mem: Memory, client: SmsClient, me: str, now: datetime, quiet: tuple[time, time] | None
+    mem: Memory, messenger: Messenger | None, caller: Caller | None,
+    now: datetime, quiet: tuple[time, time] | None,
 ) -> tuple[int, int]:
-    """Returns (texts sent, calls placed). `now` is local wall-clock time."""
-    texts = calls = 0
+    """Returns (messages sent, calls placed). `now` is local wall-clock time.
+    A missing messenger or caller just skips that channel."""
+    messages = calls = 0
     quiet_now = in_quiet_hours(now.time(), quiet)
     for alert in mem.undelivered_alerts():
-        if alert["texted_at"] is None:
-            prefix = "URGENT" if alert["level"] == "urgent" else "JARVIS"
-            note = " (calling you after quiet hours)" if alert["level"] == "urgent" and quiet_now else ""
-            client.send(me, f"{prefix}: {alert['message']}{note}")
+        urgent = alert["level"] == "urgent"
+        if alert["texted_at"] is None and messenger:
+            note = ""
+            if urgent and not caller:
+                note = " (no call: Twilio isn't set up)"
+            elif urgent and quiet_now:
+                note = " (calling you after quiet hours)"
+            messenger.send(f"{'🚨 URGENT' if urgent else '🔔'} {alert['message']}{note}")
             mem.mark_alert(alert["id"], "texted_at")
-            texts += 1
-        if alert["level"] == "urgent" and alert["called_at"] is None and not quiet_now:
-            client.call(me, alert["message"])
+            messages += 1
+        if urgent and caller and alert["called_at"] is None and not quiet_now:
+            caller.call(alert["message"])
             mem.mark_alert(alert["id"], "called_at")
             mem.log("alert_called", alert["message"])
             calls += 1
-    return texts, calls
+    return messages, calls

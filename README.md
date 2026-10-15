@@ -32,24 +32,24 @@ uv run jarvis mail-accounts
 uv run jarvis inbox --limit 10
 uv run jarvis draft --to someone@example.com --subject "Hi" --body "..."
 uv run jarvis queue
-uv run jarvis approve 1        # later: approved by SMS reply
+uv run jarvis approve 1        # or tap Approve in Telegram
 uv run jarvis relay            # sends everything approved
 ```
 
 The first run triggers a macOS prompt to let your terminal control Mail. Approved emails only go out while the Mac is awake and running `relay`.
 
-## SMS approvals (Twilio)
+## Approvals and alerts (Telegram, free)
 
-JARVIS texts you each queued draft; reply `YES 3` / `NO 3` (or just `yes` when only one is waiting). Only texts from `MY_PHONE_NUMBER`, sent after the draft was announced, count.
+Each queued draft arrives in Telegram with **Approve / Reject** buttons. Typing `yes 3` / `no 3` (or just `yes` when one is waiting) works too. Only your chat is obeyed, and a reply only counts for drafts sent before it.
 
 Setup:
-1. Create a Twilio account and buy a local US number (~$1–2/mo).
-2. US texting requires **A2P 10DLC** registration. Without a business tax ID, register as a **Sole Proprietor** (Console → Messaging → Regulatory Compliance). One-time brand fee ≈ $4.50 plus a small monthly campaign fee; approval can take days. Use case: "account notifications to myself".
-3. Fill `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` and `MY_PHONE_NUMBER` (E.164, e.g. `+12065550100`) in `.env`.
+1. In Telegram, message **@BotFather** → `/newbot` → pick a name and a username ending in `bot`. It replies with a token.
+2. Paste the token into `TELEGRAM_BOT_TOKEN` in `.env` yourself.
+3. Open your new bot in Telegram and press **Start**.
+4. Run `uv run jarvis telegram-setup`. It finds your chat, saves `TELEGRAM_CHAT_ID`, and sends a hello.
 
 ```bash
-uv run jarvis sms-test         # one text to yourself
-uv run jarvis tick             # text new drafts, apply replies, send approved
+uv run jarvis digest --send    # week ahead to Telegram
 ```
 
 ## Canvas deadlines and weekly digest
@@ -64,10 +64,10 @@ The feed has dates but not submission status, so feed deadlines only get the 24h
 ```bash
 uv run jarvis canvas           # fetch deadlines, raise alerts
 uv run jarvis digest           # print the week ahead
-uv run jarvis digest --text    # ...and text it to you
+uv run jarvis digest --send    # ...and send it to Telegram
 ```
 
-Alerts: a text 24h before anything not done, and a call 3h before work that Canvas shows as unsubmitted. Items that are submitted outside Canvas (`submission_types: none`) and deadlines read from module titles like "(DUE OCT 11)" (ECON 100) only get the 24h text, marked "check it's done", since Canvas can't tell whether they're finished. `tick` syncs Canvas automatically once a token is set.
+Alerts: a message 24h before anything not done, and a call 3h before work that Canvas shows as unsubmitted (API only). Feed items, off-Canvas work (`submission_types: none`) and module-title deadlines only get the 24h message, marked "check it's done". `tick` syncs Canvas automatically.
 
 ### Deadlines the feed misses
 
@@ -80,14 +80,14 @@ uv run jarvis deadline list
 uv run jarvis deadline done <key>              # stop reminders
 ```
 
-Use `--key canvas:<assignment id>` to replace the feed's copy of an assignment. These deadlines get the 24h text but never the 3h call, since their done status is only as fresh as the last update.
+Use `--key canvas:<assignment id>` to replace the feed's copy of an assignment. These deadlines get the 24h message but never the 3h call, since their done status is only as fresh as the last update.
 
 ## Alerts and phone calls
 
-- `high`: a text.
-- `urgent`: a text plus a phone call that reads the message twice. During `QUIET_HOURS` (default `23-7`, empty to disable), the text goes out right away and the call waits until morning.
+- `high`: a Telegram message.
+- `urgent`: a Telegram message plus a phone call that reads the message twice. During `QUIET_HOURS` (default `23-7`, empty to disable), the message goes out right away and the call waits until morning.
 
-Voice calls don't need 10DLC registration; they cost about 1–2¢ per minute.
+Calls use Twilio **voice only**, which needs no A2P 10DLC registration: about $1.15/mo for the number plus 1–2¢ per minute. Setup: create a Twilio account (trial credit works, since JARVIS only calls your own verified number), buy a local number, then fill `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` and `MY_PHONE_NUMBER` (E.164, e.g. `+12065550100`) in `.env`.
 
 ```bash
 uv run jarvis call-test
@@ -96,6 +96,19 @@ uv run jarvis alert "Exam moved to today" --level urgent --key exam-moved --now
 ```
 
 `--key` makes an alert one-time, so a source that checks every few minutes can't call you twice about the same thing.
+
+## Running automatically
+
+```bash
+uv run jarvis schedule install     # run tick every 5 min (--minutes N to change)
+uv run jarvis schedule status      # last exit code + recent log lines
+uv run jarvis schedule run-now
+uv run jarvis schedule uninstall
+```
+
+Each `tick` syncs Canvas, delivers alerts, sends new drafts to Telegram, applies your answers and sends approved email. Steps without config (Telegram, Twilio) are skipped, and a failing step doesn't stop the others. It runs via launchd, so only while the Mac is awake; missed runs catch up on wake. Log: `~/Library/Logs/JARVIS/tick.log`.
+
+The memory database lives in `~/Library/Application Support/JARVIS`, not in the iCloud project folder, because syncing a live SQLite file can corrupt it.
 
 ## Outlook access test (Microsoft Graph) — blocked by school tenant
 

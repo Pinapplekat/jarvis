@@ -63,9 +63,9 @@ CREATE TABLE IF NOT EXISTS deadlines (
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS processed_sms (
-    sid TEXT PRIMARY KEY,
-    at TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 """
 
@@ -194,13 +194,16 @@ class Memory:
         )
         self.db.commit()
 
-    def claim_sms(self, sid: str) -> bool:
-        """Record an inbound SMS as handled. False if it was already handled."""
-        cur = self.db.execute(
-            "INSERT OR IGNORE INTO processed_sms (sid, at) VALUES (?, ?)", (sid, _now())
+    def get_kv(self, key: str) -> str | None:
+        row = self.db.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_kv(self, key: str, value: str) -> None:
+        self.db.execute(
+            "INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
         )
         self.db.commit()
-        return cur.rowcount == 1
 
     def raise_alert(self, level: str, message: str, dedupe_key: str | None = None) -> int | None:
         """Record an alert to deliver. None if an alert with this key already exists."""
