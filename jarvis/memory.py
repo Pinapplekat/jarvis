@@ -41,7 +41,16 @@ CREATE TABLE IF NOT EXISTS pending_actions (
     created_at TEXT NOT NULL,
     resolved_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS processed_sms (
+    sid TEXT PRIMARY KEY,
+    at TEXT NOT NULL
+);
 """
+
+MIGRATIONS = [
+    ("pending_actions", "notified_at", "ALTER TABLE pending_actions ADD COLUMN notified_at TEXT"),
+]
 
 
 def _now() -> str:
@@ -56,6 +65,11 @@ class Memory:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys = ON")
         self.db.executescript(SCHEMA)
+        for table, column, sql in MIGRATIONS:
+            cols = {r["name"] for r in self.db.execute(f"PRAGMA table_info({table})")}
+            if column not in cols:
+                self.db.execute(sql)
+        self.db.commit()
 
     def remember(self, category: str, key: str, value: str, source: str | None = None) -> None:
         self.db.execute(
@@ -147,6 +161,25 @@ class Memory:
             (status, _now(), action_id),
         )
         self.db.commit()
+
+    def unnotified_actions(self) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM pending_actions WHERE status = 'pending' AND notified_at IS NULL ORDER BY id"
+        ).fetchall()
+
+    def mark_notified(self, action_id: int) -> None:
+        self.db.execute(
+            "UPDATE pending_actions SET notified_at = ? WHERE id = ?", (_now(), action_id)
+        )
+        self.db.commit()
+
+    def claim_sms(self, sid: str) -> bool:
+        """Record an inbound SMS as handled. False if it was already handled."""
+        cur = self.db.execute(
+            "INSERT OR IGNORE INTO processed_sms (sid, at) VALUES (?, ?)", (sid, _now())
+        )
+        self.db.commit()
+        return cur.rowcount == 1
 
     def context_snapshot(self) -> str:
         """Plain-text dump of what JARVIS knows, for feeding to the model."""

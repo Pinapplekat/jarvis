@@ -11,5 +11,10 @@ TOKEN_CACHE_PATH = DATA_DIR / "token_cache.json"
 
 MAIL_ACCOUNT = os.getenv("MAIL_ACCOUNT", "")
 
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
+MY_PHONE_NUMBER = os.getenv("MY_PHONE_NUMBER", "")
+
 GRAPH_CLIENT_ID =os.getenv("GRAPH_CLIENT_ID", "")
 GRAPH_TENANT = os.getenv("GRAPH_TENANT", "organizations")

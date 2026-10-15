@@ -53,6 +53,8 @@ def main() -> None:
         a.add_argument("id", type=int)
 
     sub.add_parser("relay", help="Send all approved emails through Apple Mail")
+    sub.add_parser("sms-test", help="Text yourself once to check Twilio setup")
+    sub.add_parser("tick", help="Text new drafts, apply SMS replies, send approved emails")
 
     args = parser.parse_args()
 
@@ -99,6 +101,22 @@ def main() -> None:
         from jarvis.mailrelay import process_approved
         sent, failed = process_approved(mem)
         print(f"Sent {sent}, failed {failed}")
+        sys.exit(1 if failed else 0)
+    if args.cmd == "sms-test":
+        from jarvis.sms import TwilioClient
+        TwilioClient().send(config.MY_PHONE_NUMBER, "JARVIS: SMS is working.")
+        print(f"Texted {config.MY_PHONE_NUMBER}")
+        return
+    if args.cmd == "tick":
+        from jarvis.mailrelay import process_approved
+        from jarvis.sms import TwilioClient, handle_replies, notify_pending
+        client = TwilioClient()
+        texted = notify_pending(mem, client, config.MY_PHONE_NUMBER)
+        changed = handle_replies(mem, client, config.MY_PHONE_NUMBER)
+        sent, failed = process_approved(mem)
+        print(f"Texted {texted} draft(s), {changed} reply(ies) applied, sent {sent}, failed {failed}")
+        if failed:
+            client.send(config.MY_PHONE_NUMBER, f"JARVIS: {failed} approved email(s) failed to send.")
         sys.exit(1 if failed else 0)
 
     if args.cmd == "remember":

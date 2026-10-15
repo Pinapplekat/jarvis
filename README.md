@@ -38,6 +38,20 @@ uv run jarvis relay            # sends everything approved
 
 The first run triggers a macOS prompt to let your terminal control Mail. Approved emails only go out while the Mac is awake and running `relay`.
 
+## SMS approvals (Twilio)
+
+JARVIS texts you each queued draft; reply `YES 3` / `NO 3` (or just `yes` when only one is waiting). Only texts from `MY_PHONE_NUMBER`, sent after the draft was announced, count.
+
+Setup:
+1. Create a Twilio account and buy a local US number (~$1–2/mo).
+2. US texting requires **A2P 10DLC** registration. Without a business tax ID, register as a **Sole Proprietor** (Console → Messaging → Regulatory Compliance). One-time brand fee ≈ $4.50 plus a small monthly campaign fee; approval can take days. Use case: "account notifications to myself".
+3. Fill `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER` and `MY_PHONE_NUMBER` (E.164, e.g. `+12065550100`) in `.env`.
+
+```bash
+uv run jarvis sms-test         # one text to yourself
+uv run jarvis tick             # text new drafts, apply replies, send approved
+```
+
 ## Outlook access test (Microsoft Graph) — blocked by school tenant
 
 1. Sign in to https://entra.microsoft.com with a **personal** Microsoft account (not school). A free account gets you a tenant to register apps in.
