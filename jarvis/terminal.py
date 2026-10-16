@@ -121,6 +121,7 @@ class Verdict:
     kind: str              # auto | approval | reject
     reason: str
     argv: list[str]        # what will actually run (auto commands get safety flags added)
+    sandboxed: bool = True  # auto commands run in the no-writes, no-network sandbox
 
 
 def parse(command) -> list[str]:
@@ -214,7 +215,8 @@ def classify(command, cwd: Path | None = None) -> Verdict:
     if tool in LOOKUPS:
         if (bad := _blocked_flag(tool, args)):
             return Verdict("approval", f"{tool} {bad} isn't allowed automatically", argv)
-        return Verdict("auto", f"read-only {tool}", argv)
+        # ps is setuid, which the sandbox can't launch; it only reads the process list and takes no files.
+        return Verdict("auto", f"read-only {tool}", argv, sandboxed=tool != "ps")
 
     if tool == "find":
         if (bad := _blocked_flag("find", args)):
@@ -266,7 +268,7 @@ def run_command(verdict: Verdict, cwd: Path | None = None, approved_by: str = "a
     if auto and verdict.kind != "auto":
         raise ValueError("this command needs approval")
     timeout = TEST_TIMEOUT if "pytest" in verdict.argv[:4] else AUTO_TIMEOUT if auto else APPROVED_TIMEOUT
-    result = run_argv(verdict.argv, where, timeout=timeout, sandboxed=auto)
+    result = run_argv(verdict.argv, where, timeout=timeout, sandboxed=auto and verdict.sandboxed)
     audit({"argv": verdict.argv, "cwd": str(where), "class": verdict.kind, "reason": verdict.reason,
            "approved_by": approved_by, "exit": result.code, "timed_out": result.timed_out,
            "output_chars": len(result.output)})

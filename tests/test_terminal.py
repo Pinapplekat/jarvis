@@ -142,3 +142,10 @@ def test_background_run_uses_its_own_db_connection(project, tmp_path):
     assert m.get_action(aid)["status"] == "done" and not target.exists()
     assert "exit 0" in tg.sent[-1][0]
 
+
+
+def test_ps_works_even_though_the_sandbox_cant_launch_it(project):
+    v = classify("ps -o pid,etime -p 1")
+    assert v.kind == "auto" and not v.sandboxed and classify("pgrep -fl python").sandboxed
+    result = terminal.run_command(v)
+    assert result.code == 0 and "PID" in result.output
