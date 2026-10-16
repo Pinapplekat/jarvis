@@ -84,22 +84,58 @@ def _sync_canvas(mem: Memory):
     return deadlines, raised
 
 
-def _inbox_text() -> str:
-    from jarvis.mailrelay import fetch_inbox_headers
-    from jarvis.mailwatch import inbox_for_prompt
-    return inbox_for_prompt(*fetch_inbox_headers(config.MAIL_ACCOUNT, limit=15, timeout=10))
+def _inbox_text(mem: Memory) -> str:
+    """Instant: the snapshot the background tick saves every 5 min (Mail is too slow to ask live)."""
+    from jarvis.mailwatch import inbox_for_prompt, snapshot
+    messages, as_of = snapshot(mem)
+    return inbox_for_prompt(messages[:15], None, as_of)
 
 
 def _attention(mem: Memory):
     from jarvis import judge
     from jarvis.attention import Attention
     from jarvis.voice import Announcer
-    return Attention(mem, judge.engine(), Announcer(_messenger(), mem))
+    return Attention(mem, judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])),
+                     Announcer(_messenger(), mem))
 
 
 def _activity(mem: Memory) -> str:
     from jarvis.watch import recent_activity
     return recent_activity(mem, 30)
+
+
+def _transcribe(audio: bytes) -> str:
+    from jarvis.speech import transcribe
+    return transcribe(audio)
+
+
+def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = False) -> str:
+    """One chat turn with full context. Shared by Telegram (typed or voice) and the desk mic."""
+    import time
+
+    from jarvis import judge, router
+    from jarvis.canvas import format_digest, from_memory
+    from jarvis.chat import respond
+    now = _now_local()
+    started = time.time()
+    recent = [f"{'Elijah' if h['role'] == 'user' else 'JARVIS'}: {h['text'][:300]}" for h in mem.chat_history(4)]
+    blocks = router.route(text, recent, judge.fast_engine(),
+                          on_error=lambda e: mem.log("route_failed", str(e)[:200]))
+    routed = time.time() - started
+    deadlines_text = ""
+    if "deadlines" in blocks:  # the Canvas fetch is the slow part; skip it when not needed
+        try:
+            deadlines = _deadlines(mem, now)
+        except Exception:  # feed down: answer from stored deadlines rather than not at all
+            deadlines = from_memory(mem)
+        deadlines_text = format_digest(deadlines, now, days=14)
+    message = f"(said out loud, transcribed) {text}" if spoken else text
+    reply = respond(mem, message, now, deadlines_text, on_progress=on_progress,
+                    inbox_text=_inbox_text(mem) if "inbox" in blocks else "",
+                    activity_text=_activity(mem) if "activity" in blocks else "", blocks=blocks)
+    mem.log("answered", f"{time.time() - started:.1f}s total, route {routed:.2f}s, "
+                        f"context: {', '.join(sorted(blocks)) or 'minimal'}")
+    return reply
 
 
 def _listen(mem: Memory) -> None:
@@ -108,8 +144,6 @@ def _listen(mem: Memory) -> None:
 
     from jarvis import plans, selfedit
     from jarvis.approvals import handle_updates, notify_pending
-    from jarvis.canvas import format_digest, from_memory
-    from jarvis.chat import respond
 
     tg = _messenger()
     if not tg:
@@ -117,14 +151,19 @@ def _listen(mem: Memory) -> None:
 
     def on_text(update):
         tg.typing()
-        now = _now_local()
-        try:
-            deadlines = _deadlines(mem, now)
-        except Exception:  # feed down: answer from stored deadlines rather than not at all
-            deadlines = from_memory(mem)
-        reply = respond(mem, update.text, now, format_digest(deadlines, now, days=14),
-                        on_progress=tg.typing, inbox_text=_inbox_text(), activity_text=_activity(mem))
-        tg.send(reply)
+        reply = _answer(mem, update.text, on_progress=tg.typing, spoken=update.via_voice)
+        if update.via_voice:  # answer a voice note with a voice note (walks, AirPods)
+            from jarvis.speech import voice_note
+            tg.action("record_voice")
+            try:
+                tg.send_voice(voice_note(reply), caption=reply if len(reply) <= 1000 else "")
+                if len(reply) > 1000:
+                    tg.send(reply)
+            except Exception as e:  # never lose the answer over audio trouble
+                mem.log("voice_note_failed", str(e)[:200])
+                tg.send(reply)
+        else:
+            tg.send(reply)
         notify_pending(mem, tg)  # drafts made in this chat get their buttons right away
         if mem.self_edits("drafting"):
             tg.typing()
@@ -145,7 +184,8 @@ def _listen(mem: Memory) -> None:
         try:
             deliver_reminders(mem, announcer, _now_local())
             # Short long-poll so reminders go out within ~25s of their time.
-            handle_updates(mem, tg, int(config.TELEGRAM_CHAT_ID), on_text, wait=25, on_button=on_button)
+            handle_updates(mem, tg, int(config.TELEGRAM_CHAT_ID), on_text, wait=25, on_button=on_button,
+                           transcribe=_transcribe)
         except Exception as e:  # network blips, Telegram hiccups: wait and reconnect
             print(f"listen error: {e}", flush=True)
             mem.log("listen_error", str(e)[:300])
@@ -281,6 +321,7 @@ def main() -> None:
     se = sub.add_parser("self-edit", help="Background worker for applying approved plans (off unless JARVIS_REPO is set)")
     se.add_argument("action", choices=["build", "deploy"])
     se.add_argument("id", nargs="?")
+    sub.add_parser("ears", help="Listen for 'Hey Jarvis' on the Mac's mic and answer out loud (runs forever)")
     sub.add_parser("listen", help="Stay connected to Telegram: chat and approval buttons (runs forever)")
     ask = sub.add_parser("ask", help="Ask JARVIS something from the terminal (same brain as Telegram)")
     ask.add_argument("message")
@@ -353,9 +394,10 @@ def main() -> None:
         from jarvis import schedule
         if args.action == "install":
             listen = bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
-            schedule.install(args.minutes * 60, listen=listen, watch=config.WATCH)
+            schedule.install(args.minutes * 60, listen=listen, watch=config.WATCH, ears=config.EARS)
             print(f"tick: every {args.minutes} min. listen: {'always on' if listen else 'skipped (Telegram not set up)'}."
-                  f" watch: {'on' if config.WATCH else 'off'}. Logs: {schedule.LOG_DIR}")
+                  f" watch: {'on' if config.WATCH else 'off'}. ears: {'on' if config.EARS else 'off'}."
+                  f" Logs: {schedule.LOG_DIR}")
         elif args.action == "uninstall":
             print("Removed" if schedule.uninstall() else "Wasn't scheduled")
         elif args.action == "run-now":
@@ -457,6 +499,14 @@ def main() -> None:
         return
     if args.cmd == "listen":
         _listen(mem)
+        return
+    if args.cmd == "ears":
+        from jarvis import speech
+        from jarvis.ears import Ears
+        speech._whisper()  # load the model up front so the first answer isn't slow
+        log = lambda s: print(s, flush=True)  # noqa: E731
+        Ears(answer=lambda text: _answer(mem, text, spoken=True), transcribe=speech.transcribe,
+             log=log).run_forever()
         return
     if args.cmd == "projects":
         from jarvis import projects
@@ -572,7 +622,7 @@ def main() -> None:
         from jarvis.chat import respond
         now = _now_local()
         print(respond(mem, args.message, now, format_digest(_deadlines(mem, now), now, days=14),
-                      inbox_text=_inbox_text(), activity_text=_activity(mem)))
+                      inbox_text=_inbox_text(mem), activity_text=_activity(mem)))
         return
     if args.cmd == "tick":
         import fcntl

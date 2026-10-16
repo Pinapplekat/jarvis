@@ -20,6 +20,8 @@ class Update:
     callback_data: str | None = None
     message_id: int | None = None      # ...on this message
     message_text: str | None = None
+    voice_file_id: str | None = None   # a voice note (transcribed into `text` before handling)
+    via_voice: bool = False
 
 
 class TelegramError(RuntimeError):
@@ -66,6 +68,30 @@ class TelegramClient:
         if not r.json().get("ok"):
             raise TelegramError(f"sendDocument failed ({r.status_code}): {r.json().get('description', '')}")
 
+    def download(self, file_id: str) -> bytes:
+        path = self._call("getFile", file_id=file_id)["file_path"]
+        try:  # the file URL contains the bot token, so errors are rebuilt without it
+            r = self.http.get(f"{self._base.replace('/bot', '/file/bot', 1)}/{path}")
+        except httpx.HTTPError as e:
+            raise TelegramError(f"download: {type(e).__name__}") from None
+        if r.status_code != 200:
+            raise TelegramError(f"download failed ({r.status_code})")
+        return r.content
+
+    def send_voice(self, ogg: bytes, caption: str = "") -> None:
+        try:
+            r = self.http.post(f"{self._base}/sendVoice",
+                               data={"chat_id": self.chat_id, "caption": caption[:1000]},
+                               files={"voice": ("jarvis.ogg", ogg, "audio/ogg")})
+        except httpx.HTTPError as e:
+            raise TelegramError(f"sendVoice: {type(e).__name__}") from None
+        if not r.json().get("ok"):
+            raise TelegramError(f"sendVoice failed ({r.status_code}): {r.json().get('description', '')}")
+
+    def action(self, kind: str) -> None:
+        """Chat status like 'typing' or 'record_voice'."""
+        self._call("sendChatAction", chat_id=self.chat_id, action=kind)
+
     def edit(self, message_id: int, text: str) -> None:
         """Replace a message's text (and drop its buttons)."""
         self._call("editMessageText", chat_id=self.chat_id, message_id=message_id, text=text[:MAX_TEXT])
@@ -85,6 +111,10 @@ class TelegramClient:
             if "message" in u and "text" in u["message"]:
                 m = u["message"]
                 out.append(Update(u["update_id"], m["from"]["id"], _ts(m["date"]), text=m["text"]))
+            elif "message" in u and "voice" in u["message"]:
+                m = u["message"]
+                out.append(Update(u["update_id"], m["from"]["id"], _ts(m["date"]),
+                                  voice_file_id=m["voice"]["file_id"]))
             elif "callback_query" in u:
                 q = u["callback_query"]
                 msg = q.get("message") or {}

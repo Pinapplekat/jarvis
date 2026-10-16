@@ -40,6 +40,9 @@ Voice:
 - Plain, spoken English: "Nothing due until Sunday, sir." / "Module 3 is due tonight.
   Shall I remind you at nine?" Contractions are fine.
 - If he's terse, be terse.
+- Messages starting "(said out loud, transcribed)" were spoken and run through speech-to-
+  text: expect small transcription slips and read past them. Your reply will be spoken
+  back, so keep it to what sounds natural aloud: no lists of links or code unless asked.
 - No filler: no "Great question", "Here's", "Let me know if...", "Is there anything else",
   no recapping what he said, no closing offers. No emoji.
 - Only list things when there are several items; then "- " lines, no headers.
@@ -151,9 +154,15 @@ def run_claude(system: str, prompt: str, schema: dict = REPLY_SCHEMA, model: str
     return out["structured_output"]
 
 
+SKIPPED = "(not loaded for this message; if you need it, say you'll check)"
+
+
 def build_prompt(mem: Memory, message: str, now: datetime, deadlines_text: str,
                  pages: list[Page] = (), inbox_text: str = "(not checked)",
-                 activity_text: str = "(not observed)") -> str:
+                 activity_text: str = "(not observed)", blocks: frozenset[str] | None = None) -> str:
+    """`blocks` (from router.route) limits which optional context is included; None = all."""
+    def want(name: str) -> bool:
+        return blocks is None or name in blocks
     pending = [json.loads(a["payload"]) | {"id": a["id"]} for a in mem.pending_actions(kind="send_email")]
     edits = [f"- #{s['id']} {s['title']}: {s['status']}" for s in mem.self_edits()][-8:]
     stored = [f"- [{r['key']}] {r['due'][:16]} {r['course']}: {r['title']}{' (done)' if r['done'] else ''}"
@@ -165,13 +174,17 @@ def build_prompt(mem: Memory, message: str, now: datetime, deadlines_text: str,
     return "\n\n".join([
         f"Now: {now:%A %B %-d, %Y %-I:%M %p} ({config.TIMEZONE}). Default sender: {config.MAIL_ACCOUNT or 'unset'}.",
         "<context>\n" + mem.context_snapshot() + "\n</context>",
-        "<upcoming>\n" + deadlines_text + "\n</upcoming>",
-        f"<inbox account=\"{config.MAIL_ACCOUNT or 'unset'}\">\n" + inbox_text + "\n</inbox>",
-        "<recent_activity>\n" + activity_text + "\n</recent_activity>",
-        "<journal (your notes on recent days)>\n" + journal_for_prompt(mem) + "\n</journal>",
-        "<project_briefs (recently active)>\n" + projects_for_prompt(mem, one_liners=False) + "\n</project_briefs>",
+        "<upcoming>\n" + (deadlines_text if want("deadlines") else SKIPPED) + "\n</upcoming>",
+        f"<inbox account=\"{config.MAIL_ACCOUNT or 'unset'}\">\n" + (inbox_text if want("inbox") else SKIPPED)
+        + "\n</inbox>",
+        "<recent_activity>\n" + (activity_text if want("activity") else SKIPPED) + "\n</recent_activity>",
+        "<journal (your notes on recent days)>\n" + (journal_for_prompt(mem) if want("journal") else SKIPPED)
+        + "\n</journal>",
+        "<project_briefs (recently active)>\n"
+        + (projects_for_prompt(mem, one_liners=False) if want("projects") else SKIPPED) + "\n</project_briefs>",
         "<your_unprompted_interjections (and why)>\n" + explain_recent(mem) + "\n</your_unprompted_interjections>",
-        "<stored_deadlines>\n" + ("\n".join(stored) or "(none)") + "\n</stored_deadlines>",
+        "<stored_deadlines>\n" + (("\n".join(stored) or "(none)") if want("deadlines") else SKIPPED)
+        + "\n</stored_deadlines>",
         "<drafts_awaiting_approval>\n"
         + ("\n".join(f"- #{p['id']} to {', '.join(p['to'])}: {p['subject']}" for p in pending) or "(none)")
         + "\n</drafts_awaiting_approval>",
@@ -253,7 +266,7 @@ def apply_actions(mem: Memory, actions: list[dict], tz) -> list[str]:
 def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             runner: Runner = run_claude, fetcher: Callable[[str], Page] = fetch_page,
             on_progress: Callable[[], None] = lambda: None, inbox_text: str = "(not checked)",
-            activity_text: str = "(not observed)") -> str:
+            activity_text: str = "(not observed)", blocks: frozenset[str] | None = None) -> str:
     """Answer one message: open any links, ask Claude (letting it open more pages for a
     few rounds), apply its final actions, and record the exchange."""
     mem.add_chat("user", message)
@@ -271,7 +284,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
         open_urls(find_urls(message))
         for round_ in range(MAX_ROUNDS):
             out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
-                                                          activity_text))
+                                                          activity_text, blocks))
             wanted = [str(a.get("url", "")) for a in out.get("actions") or [] if a.get("type") == "open_url"]
             before = len(requested)
             if wanted and round_ < MAX_ROUNDS - 1:

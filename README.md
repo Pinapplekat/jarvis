@@ -160,6 +160,21 @@ The watch loop also decides when JARVIS should speak up unprompted:
 - **Nightly journal:** after `JOURNAL_HOUR` (2), JARVIS writes up the previous day from chat, screen, terminal, git and events. It saves lasting facts and open loops. This is the long-term memory, since the raw timeline is pruned after 7 days. Chat sees the last 3 entries. `jarvis journal [show|write] [YYYY-MM-DD]`.
 - **Project briefs:** every repo becomes a project (`jarvis projects sync`) with a living brief built from its README, the last 15 commits, GitHub (`gh`: description, open issues and PRs) and your past week of activity in it. Briefs of projects you touched are refreshed nightly; chat gets the briefs of your recently active ones. `jarvis projects [list|show NAME|refresh [NAME]]`.
 
+## Talking to JARVIS
+
+Speech is handled on-device: Whisper (`faster-whisper`, model `WHISPER_MODEL`, default `base.en`, stored in `~/Library/Application Support/JARVIS/models`) for listening, and macOS `say` plus ffmpeg for JARVIS's voice. Audio isn't stored, and only the transcribed text goes to Claude.
+
+- **On walks (Telegram voice notes):** hold the mic in the bot chat and talk. JARVIS transcribes the note, answers with full context, and replies with a voice note in Daniel's voice, with the text as the caption. Spoken "yes 3" approvals work too. Voice notes from anyone else are never downloaded.
+- **At the desk ("Hey Jarvis"):** `jarvis ears` (a background job under the tiny **JARVIS Ears** app, which holds Microphone permission) listens for the wake word with openWakeWord. After a chime, speak; it stops when you pause, then JARVIS answers out loud. For `FOLLOW_UP_SECONDS` (6) afterwards you can just keep talking. A "pop" means it didn't catch you. The mic is ignored while JARVIS speaks. If it wakes by mistake, raise `WAKE_THRESHOLD` (0.6). `EARS=0` turns it off. The startup log line "mic check" shows whether macOS is allowing the mic.
+
+## Jev (fast decisions)
+
+With `TYPESAFE_API_KEY` set (from console.typesafe.ai → API Keys), JARVIS uses TypeSafe's Jev (`JEV_MODEL`, default `jev-latest`) for its quick typed decisions:
+- **Context routing:** before each chat message, five yes/no questions decide which context to load (deadlines, inbox, current screen and terminal, project briefs, journal). It leans toward including, and skips the Canvas fetch when deadlines aren't needed. Each answer's timing and chosen context are logged as `answered` events.
+- **Attention:** the "should I speak up?" judgment (Jev instead of Claude Haiku, so no Claude usage).
+
+`JUDGE_ENGINE=auto` (the default) means Jev when a key is set, otherwise Claude. Any Jev error falls back to Claude for that call (logged as `jev_fallback`), and without a key everything works as before.
+
 ## Running automatically
 
 ```bash

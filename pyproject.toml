@@ -11,6 +11,9 @@ dependencies = [
     "playwright>=1.47",
     "pyobjc-framework-vision>=10",
     "pyobjc-framework-quartz>=10",
+    "faster-whisper>=1.0",
+    "sounddevice>=0.4",
+    "openwakeword>=0.6",
 ]
 
 [project.optional-dependencies]

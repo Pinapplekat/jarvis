@@ -43,12 +43,20 @@ on run argv
         end repeat
         if acct is missing value then error "No Mail account with address " & acctAddr
         set box to missing value
-        repeat with mb in mailboxes of acct
-            if name of mb is "INBOX" or name of mb is "Inbox" then set box to contents of mb
-        end repeat
+        try
+            set box to mailbox "INBOX" of acct
+            count of messages of box
+        on error
+            set box to missing value
+            repeat with mb in mailboxes of acct
+                if name of mb is "INBOX" or name of mb is "Inbox" then set box to contents of mb
+            end repeat
+        end try
         if box is missing value then error "No inbox found for " & acctAddr
         set n to count of messages of box
         if n > limitN then set n to limitN
+        -- Per-message gets: on a huge inbox (18k+) Mail answers range gets ("messages 1 thru n")
+        -- even more slowly. Either way this takes seconds, so only background jobs call it.
         set out to ""
         repeat with i from 1 to n
             set msg to message i of box

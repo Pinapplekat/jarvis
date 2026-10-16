@@ -54,23 +54,49 @@ INFO = {
 STAMP = hashlib.sha256((SOURCE + repr(sorted(INFO.items()))).encode()).hexdigest()[:16]
 
 
-def built() -> bool:
-    stamp = APP / "Contents" / "Resources" / "stamp"
-    return EXECUTABLE.exists() and stamp.exists() and stamp.read_text() == STAMP
+# A second app for the desk microphone ("Hey Jarvis"). Separate so that granting or changing
+# it never touches JARVIS Senses' Screen Recording permission.
+EARS_APP = Path.home() / "Applications" / "JARVIS Ears.app"
+EARS_EXECUTABLE = EARS_APP / "Contents" / "MacOS" / "jarvis-senses"
+EARS_INFO = {
+    **{k: v for k, v in INFO.items() if k != "NSScreenCaptureUsageDescription"},
+    "CFBundleIdentifier": "com.jarvis.ears",
+    "CFBundleName": "JARVIS Ears",
+    "CFBundleDisplayName": "JARVIS Ears",
+    "NSMicrophoneUsageDescription": "JARVIS listens for \"Hey Jarvis\" and to what you say after it.",
+}
+EARS_STAMP = hashlib.sha256((SOURCE + repr(sorted(EARS_INFO.items()))).encode()).hexdigest()[:16]
 
 
-def build() -> bool:
-    """Build and ad-hoc sign the app if missing or outdated. Returns True if it (re)built."""
-    if built():
+def _built(app: Path, executable: Path, stamp: str) -> bool:
+    marker = app / "Contents" / "Resources" / "stamp"
+    return executable.exists() and marker.exists() and marker.read_text() == stamp
+
+
+def _build(app: Path, executable: Path, info: dict, stamp: str) -> bool:
+    if _built(app, executable, stamp):
         return False
-    (APP / "Contents" / "MacOS").mkdir(parents=True, exist_ok=True)
-    (APP / "Contents" / "Resources").mkdir(parents=True, exist_ok=True)
-    (APP / "Contents" / "Info.plist").write_bytes(plistlib.dumps(INFO))
+    (app / "Contents" / "MacOS").mkdir(parents=True, exist_ok=True)
+    (app / "Contents" / "Resources").mkdir(parents=True, exist_ok=True)
+    (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps(info))
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / "launcher.c"
         src.write_text(SOURCE)
-        subprocess.run(["clang", "-O2", "-o", str(EXECUTABLE), str(src)], check=True, capture_output=True)
-    subprocess.run(["codesign", "--force", "--sign", "-", "--identifier", BUNDLE_ID, str(APP)],
+        subprocess.run(["clang", "-O2", "-o", str(executable), str(src)], check=True, capture_output=True)
+    subprocess.run(["codesign", "--force", "--sign", "-", "--identifier", info["CFBundleIdentifier"], str(app)],
                    check=True, capture_output=True)
-    (APP / "Contents" / "Resources" / "stamp").write_text(STAMP)
+    (app / "Contents" / "Resources" / "stamp").write_text(stamp)
     return True
+
+
+def built() -> bool:
+    return _built(APP, EXECUTABLE, STAMP)
+
+
+def build() -> bool:
+    """Build and ad-hoc sign JARVIS Senses if missing or outdated. Returns True if it (re)built."""
+    return _build(APP, EXECUTABLE, INFO, STAMP)
+
+
+def build_ears() -> bool:
+    return _build(EARS_APP, EARS_EXECUTABLE, EARS_INFO, EARS_STAMP)

@@ -18,7 +18,7 @@ PROJECT = Path.home() / "Library/Application Support/JARVIS/app"
 COPY_EXCLUDES = [".git", ".venv", ".venv.nosync", "__pycache__", ".pytest_cache", "data"]
 LOG_DIR = Path.home() / "Library/Logs/JARVIS"
 AGENTS = Path.home() / "Library/LaunchAgents"
-TICK, LISTEN, WATCH = "com.jarvis.tick", "com.jarvis.listen", "com.jarvis.watch"
+TICK, LISTEN, WATCH, EARS = "com.jarvis.tick", "com.jarvis.listen", "com.jarvis.watch", "com.jarvis.ears"
 LOG = LOG_DIR / "tick.log"
 
 
@@ -85,7 +85,7 @@ def deploy(uv: str) -> None:
     subprocess.run([uv, "sync", "-q", "--project", str(PROJECT)], check=True)
 
 
-def install(interval: int = 300, listen: bool = True, watch: bool = True) -> None:
+def install(interval: int = 300, listen: bool = True, watch: bool = True, ears: bool = True) -> None:
     uv = shutil.which("uv")
     if not uv:
         raise SystemExit("uv not found on PATH")
@@ -102,11 +102,17 @@ def install(interval: int = 300, listen: bool = True, watch: bool = True) -> Non
         _load(WATCH, _plist(WATCH, uv, "watch", None, launcher=str(launcher.EXECUTABLE)))
     else:
         _unload(WATCH)
+    if ears:
+        from jarvis import launcher
+        launcher.build_ears()  # "Hey Jarvis" runs inside "JARVIS Ears.app" for the Microphone
+        _load(EARS, _plist(EARS, uv, "ears", None, launcher=str(launcher.EARS_EXECUTABLE)))
+    else:
+        _unload(EARS)
 
 
 def uninstall() -> bool:
     removed = False
-    for label in (TICK, LISTEN, WATCH):
+    for label in (TICK, LISTEN, WATCH, EARS):
         removed |= _unload(label)
         (AGENTS / f"{label}.plist").unlink(missing_ok=True)
     return removed
@@ -119,7 +125,7 @@ def run_now() -> None:
 def status(log_lines: int = 5) -> str:
     keep = ("state =", "run interval", "last exit code", "runs =", "pid =")
     out = []
-    for label, command in ((TICK, "tick"), (LISTEN, "listen"), (WATCH, "watch")):
+    for label, command in ((TICK, "tick"), (LISTEN, "listen"), (WATCH, "watch"), (EARS, "ears")):
         if not is_loaded(label):
             out.append(f"{command}: not installed (jarvis schedule install)")
             continue

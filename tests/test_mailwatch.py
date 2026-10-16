@@ -28,7 +28,7 @@ def settings(monkeypatch):
 def inbox(*messages):
     box = list(messages)
 
-    def fetch(account, limit=30, unread_only=False):
+    def fetch(account, limit=30, unread_only=False, **kw):
         return ([m for m in box if not (unread_only and m.read)], None)
     fetch.box = box
     return fetch
@@ -80,6 +80,18 @@ def test_mail_unavailable_is_reported_not_raised():
     assert check_new_mail(m, NOON, lambda *a, **k: ([], "couldn't read Mail (not running)")) == \
         "couldn't read Mail (not running)"
     assert m.get_kv("mail_watch_seeded") is None
+
+
+def test_snapshot_round_trip_for_instant_chat():
+    from jarvis.mailwatch import refresh_snapshot, snapshot
+    m = Memory(":memory:")
+    assert snapshot(m) == ([], None)
+    assert inbox_for_prompt([], None, None) == "(inbox not checked yet)"
+    refresh_snapshot(m, inbox(msg(1, "Dr. G <g@seattlecolleges.edu>", "Module 3"), msg(2, "A <a@b.c>", "hi", read=True)))
+    messages, as_of = snapshot(m)
+    assert [x.subject for x in messages] == ["Module 3", "hi"] and messages[1].read and as_of is not None
+    text = inbox_for_prompt(messages, None, as_of)
+    assert "Checked 0 min ago" in text and "Module 3" in text
 
 
 def test_inbox_for_prompt_marks_untrusted_and_unread():

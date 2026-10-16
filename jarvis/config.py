@@ -24,7 +24,9 @@ WATCH_ROOTS = os.getenv("WATCH_ROOTS", "~,~/Library/Mobile Documents/com~apple~C
 
 # Attention: JARVIS deciding on its own to speak up (e.g. when you're stuck)
 ATTENTION = os.getenv("ATTENTION", "1") == "1"
-JUDGE_ENGINE = os.getenv("JUDGE_ENGINE", "claude")            # claude | jev (later) | local (later)
+JUDGE_ENGINE = os.getenv("JUDGE_ENGINE", "auto")              # auto (Jev if keyed, else Claude) | jev | claude
+TYPESAFE_API_KEY = os.getenv("TYPESAFE_API_KEY", "")
+JEV_MODEL = os.getenv("JEV_MODEL", "jev-latest")
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "haiku")
 ATTENTION_REVIEW_MINUTES = int(os.getenv("ATTENTION_REVIEW_MINUTES", "10"))
 ATTENTION_THRESHOLD = float(os.getenv("ATTENTION_THRESHOLD", "0.75"))  # confidence needed to speak
@@ -44,6 +46,12 @@ VOICE = os.getenv("VOICE", "1") == "1"
 VOICE_NAME = os.getenv("VOICE_NAME", "Daniel")
 VOICE_RATE = int(os.getenv("VOICE_RATE", "185"))
 VOICE_IDLE_SECONDS = int(os.getenv("VOICE_IDLE_SECONDS", "180"))
+
+# Talking to JARVIS: on-device Whisper model, and the "Hey Jarvis" desk listener
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base.en")         # small.en is more accurate, slower
+EARS = os.getenv("EARS", "1") == "1"
+WAKE_THRESHOLD = float(os.getenv("WAKE_THRESHOLD", "0.6"))    # raise if it wakes by mistake
+FOLLOW_UP_SECONDS = int(os.getenv("FOLLOW_UP_SECONDS", "6"))  # listen for a follow-up without the wake word
 # Ping on Telegram for important new mail (school domains, saved professor addresses, keywords)
 MAIL_WATCH = os.getenv("MAIL_WATCH", "1") == "1"
 SCHOOL_EMAIL_DOMAINS = os.getenv("SCHOOL_EMAIL_DOMAINS", "seattlecolleges.edu")
