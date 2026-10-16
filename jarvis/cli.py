@@ -90,6 +90,13 @@ def _inbox_text() -> str:
     return inbox_for_prompt(*fetch_inbox_headers(config.MAIL_ACCOUNT, limit=15, timeout=10))
 
 
+def _attention(mem: Memory):
+    from jarvis import judge
+    from jarvis.attention import Attention
+    from jarvis.voice import Announcer
+    return Attention(mem, judge.engine(), Announcer(_messenger(), mem))
+
+
 def _activity(mem: Memory) -> str:
     from jarvis.watch import recent_activity
     return recent_activity(mem, 30)
@@ -261,6 +268,8 @@ def main() -> None:
     ask = sub.add_parser("ask", help="Ask JARVIS something from the terminal (same brain as Telegram)")
     ask.add_argument("message")
     sub.add_parser("call-test", help="Call yourself once to check Twilio voice")
+    at = sub.add_parser("attention", help="JARVIS deciding when to speak up: decision log, or review now")
+    at.add_argument("action", nargs="?", default="log", choices=["log", "review-now"])
     wa = sub.add_parser("watch", help="JARVIS's senses: screen text, terminal, git (runs in the background)")
     wa.add_argument("action", nargs="?", default="run",
                     choices=["run", "once", "timeline", "install-shell-hook", "status"])
@@ -424,10 +433,26 @@ def main() -> None:
     if args.cmd == "listen":
         _listen(mem)
         return
+    if args.cmd == "attention":
+        if args.action == "log":
+            for j in mem.recent_judgments(limit=15):
+                answers = json.loads(j["answers"])
+                verdict = "SPOKE" if j["spoke"] else f"quiet ({j['blocked']})"
+                print(f"{j['at'][5:16]} {j['trigger']:<8} {verdict:<32} speak={answers['speak']} "
+                      f"kind={answers['kind']['value']} signals={json.loads(j['signals'])}")
+                if j["message"]:
+                    print(f"    \"{j['message'][:160]}\"")
+        else:
+            from datetime import datetime, timezone
+            from jarvis.attention import stuck_signals
+            a = _attention(mem)
+            now = datetime.now(timezone.utc)
+            print(a.review(now, "manual", stuck_signals(mem, now)))
+        return
     if args.cmd == "watch":
         from jarvis import terminal, watch
         if args.action == "run":
-            watch.Watcher(mem, log=lambda s: print(s, flush=True)).run_forever()
+            watch.Watcher(mem, log=lambda s: print(s, flush=True), attention=_attention(mem)).run_forever()
         elif args.action == "once":
             w = watch.Watcher(mem)
             print("look:", w.look(__import__("time").time()))

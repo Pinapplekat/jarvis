@@ -17,8 +17,9 @@ PRUNE_EVERY = 6 * 3600
 
 
 class Watcher:
-    def __init__(self, mem: Memory, log=print, front=front_window, capture=capture_text, idle=idle_seconds):
-        self.mem, self.log = mem, log
+    def __init__(self, mem: Memory, log=print, front=front_window, capture=capture_text, idle=idle_seconds,
+                 attention=None):
+        self.mem, self.log, self.attention = mem, log, attention
         self._front, self._capture, self._idle = front, capture, idle
         self.last_text: dict[tuple, str] = {}
         self.last_capture: dict[tuple, float] = {}
@@ -84,6 +85,8 @@ class Watcher:
             try:
                 result = self.look(now)
                 notes = self.housekeeping(now)
+                if self.attention and (judged := self.attention.maybe_review(active=result != "idle")):
+                    notes.append(f"attention: {judged}")
                 if result.startswith(("saved", "capture failed")) or notes:
                     self.log(f"{datetime.now():%H:%M:%S} {result}" + (f" | {', '.join(notes)}" if notes else ""))
             except Exception as e:  # never let one bad look kill the senses

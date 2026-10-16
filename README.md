@@ -142,6 +142,16 @@ To turn it off: remove `JARVIS_REPO` from `.env` and run `uv run jarvis schedule
 
 Needs **Screen Recording** permission for **JARVIS Senses** (System Settings → Privacy & Security → Screen & System Audio Recording → + → `~/Applications/JARVIS Senses.app`). That's a tiny signed launcher app that the watch job runs under, because macOS won't reliably list a bare Python. It's only rebuilt when its source changes, since a rebuild would reset the permission. `jarvis watch status` shows what's being collected, `jarvis watch timeline` shows the last 30 minutes, and `WATCH=0` plus `jarvis schedule install` turns it off.
 
+## Attention (speaking up on its own)
+
+The watch loop also decides when JARVIS should speak up unprompted:
+- **Stuck triggers** (cheap rules, no AI): the same terminal command failing 3+ times in 10 min, 4+ failing commands, or error output on screen 3+ times in 10 min. These cause an immediate review (at most every 10 min).
+- **Periodic reviews:** every `ATTENTION_REVIEW_MINUTES` (10) of new activity.
+- **Decision layer** (`jarvis/judge.py`): a situation plus typed questions (speak? stuck_help / heads_up / none? urgency 0–1), answered with confidence. The engine is `JUDGE_ENGINE` (`claude` with `JUDGE_MODEL=haiku` now; Jev or a local Mac mini model later, same interface).
+- **Rules:** speak if confidence ≥ `ATTENTION_THRESHOLD` (0.75), or ≥ `ATTENTION_STUCK_THRESHOLD` (0.5) when stuck rules fired. At most `ATTENTION_DAILY_LIMIT` (8) per day, `ATTENTION_MIN_GAP_MINUTES` (15) apart unless urgency ≥ 0.9, never in quiet hours, only while you're active.
+- **What it says:** Claude writes one short spoken line (said aloud) and a Telegram version with the specific fix.
+- **Accountability:** every decision is logged. `jarvis attention log` shows the log, `jarvis attention review-now` forces a review, and asking JARVIS "why did you say that?" works because chat sees its recent interjections and reasons.
+
 ## Running automatically
 
 ```bash

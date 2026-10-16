@@ -105,6 +105,17 @@ CREATE TABLE IF NOT EXISTS observations (
 );
 CREATE INDEX IF NOT EXISTS observations_at ON observations(at);
 
+CREATE TABLE IF NOT EXISTS judgments (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    trigger TEXT NOT NULL,           -- periodic | stuck
+    signals TEXT NOT NULL,           -- JSON list
+    answers TEXT NOT NULL,           -- JSON {key: {value, confidence}}
+    spoke INTEGER NOT NULL,
+    blocked TEXT,                    -- rule that kept JARVIS quiet, if any
+    message TEXT
+);
+
 CREATE TABLE IF NOT EXISTS seen_mail (
     key TEXT PRIMARY KEY,            -- account:message id
     at TEXT NOT NULL
@@ -339,6 +350,27 @@ class Memory:
         cur = self.db.execute("DELETE FROM observations WHERE at < ?", (cutoff,))
         self.db.commit()
         return cur.rowcount
+
+    def add_judgment(self, trigger: str, signals: list[str], answers: dict, spoke: bool,
+                     blocked: str | None = None, message: str | None = None,
+                     at: datetime | None = None) -> None:
+        stamp = (at or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(timespec="seconds")
+        self.db.execute(
+            """INSERT INTO judgments (at, trigger, signals, answers, spoke, blocked, message)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (stamp, trigger, json.dumps(signals), json.dumps(answers), int(spoke), blocked, message),
+        )
+        self.db.commit()
+
+    def recent_judgments(self, spoke_only: bool = False, limit: int = 10) -> list[sqlite3.Row]:
+        sql = "SELECT * FROM judgments" + (" WHERE spoke = 1" if spoke_only else "")
+        return self.db.execute(sql + " ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+    def judgments_spoken_since(self, since: datetime) -> int:
+        cutoff = since.astimezone(timezone.utc).isoformat(timespec="seconds")
+        return self.db.execute(
+            "SELECT COUNT(*) FROM judgments WHERE spoke = 1 AND at >= ?", (cutoff,)
+        ).fetchone()[0]
 
     def mail_seen(self, key: str) -> bool:
         return self.db.execute("SELECT 1 FROM seen_mail WHERE key = ?", (key,)).fetchone() is not None

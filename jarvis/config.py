@@ -22,6 +22,16 @@ WATCH_EXCLUDE_APPS = os.getenv("WATCH_EXCLUDE_APPS", "")       # extra, comma-se
 WATCH_EXCLUDE_TITLES = os.getenv("WATCH_EXCLUDE_TITLES", "")   # extra title words, comma-separated
 WATCH_ROOTS = os.getenv("WATCH_ROOTS", "~,~/Library/Mobile Documents/com~apple~CloudDocs")
 
+# Attention: JARVIS deciding on its own to speak up (e.g. when you're stuck)
+ATTENTION = os.getenv("ATTENTION", "1") == "1"
+JUDGE_ENGINE = os.getenv("JUDGE_ENGINE", "claude")            # claude | jev (later) | local (later)
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", "haiku")
+ATTENTION_REVIEW_MINUTES = int(os.getenv("ATTENTION_REVIEW_MINUTES", "10"))
+ATTENTION_THRESHOLD = float(os.getenv("ATTENTION_THRESHOLD", "0.75"))  # confidence needed to speak
+ATTENTION_STUCK_THRESHOLD = float(os.getenv("ATTENTION_STUCK_THRESHOLD", "0.5"))  # when stuck rules fired
+ATTENTION_DAILY_LIMIT = int(os.getenv("ATTENTION_DAILY_LIMIT", "8"))   # unprompted interjections/day
+ATTENTION_MIN_GAP_MINUTES = int(os.getenv("ATTENTION_MIN_GAP_MINUTES", "15"))
+
 # Speaking out loud on the Mac when you're at it (keyboard/mouse used in the last N seconds)
 VOICE = os.getenv("VOICE", "1") == "1"
 VOICE_NAME = os.getenv("VOICE_NAME", "Daniel")

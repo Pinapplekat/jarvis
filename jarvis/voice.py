@@ -65,8 +65,13 @@ class Announcer:
         self.messenger, self.mem = messenger, mem
         self._now, self._speak, self._presence = now or datetime.now, speaker, presence
 
-    def send(self, text, buttons=None):
-        result = self.messenger.send(text, buttons=buttons) if buttons else self.messenger.send(text)
-        if self._presence(self._now()) and self._speak(text) and self.mem:
-            self.mem.log("spoke", speakable(text)[:200])
+    def send(self, text, buttons=None, spoken: str | None = None):
+        """Text always goes to the messenger (if any); `spoken` (default: the text) is said
+        aloud when Elijah is at the Mac."""
+        result = None
+        if self.messenger:
+            result = self.messenger.send(text, buttons=buttons) if buttons else self.messenger.send(text)
+        say = spoken or text
+        if self._presence(self._now()) and self._speak(say) and self.mem:
+            self.mem.log("spoke", speakable(say)[:200])
         return result
