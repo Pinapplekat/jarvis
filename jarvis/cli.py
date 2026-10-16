@@ -109,7 +109,17 @@ def _transcribe(audio: bytes) -> str:
     return transcribe(audio)
 
 
-def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = False) -> str:
+def _warm(mem: Memory):
+    """A persistent Claude session for chat (much faster per reply), or None if turned off."""
+    if not config.WARM_CLAUDE:
+        return None
+    from jarvis.chat import REPLY_SCHEMA, SYSTEM_PROMPT, run_claude
+    from jarvis.warm import WarmClaude
+    return WarmClaude(SYSTEM_PROMPT, REPLY_SCHEMA, fallback=run_claude,
+                      log=lambda s: mem.log("warm_fallback", s[:200]))
+
+
+def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = False, warm=None) -> str:
     """One chat turn with full context. Shared by Telegram (typed or voice) and the desk mic."""
     import time
 
@@ -130,9 +140,10 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
             deadlines = from_memory(mem)
         deadlines_text = format_digest(deadlines, now, days=14)
     message = f"(said out loud, transcribed) {text}" if spoken else text
+    extra = {"runner": warm.run} if warm else {}
     reply = respond(mem, message, now, deadlines_text, on_progress=on_progress,
                     inbox_text=_inbox_text(mem) if "inbox" in blocks else "",
-                    activity_text=_activity(mem) if "activity" in blocks else "", blocks=blocks)
+                    activity_text=_activity(mem) if "activity" in blocks else "", blocks=blocks, **extra)
     mem.log("answered", f"{time.time() - started:.1f}s total, route {routed:.2f}s, "
                         f"context: {', '.join(sorted(blocks)) or 'minimal'}")
     return reply
@@ -148,10 +159,11 @@ def _listen(mem: Memory) -> None:
     tg = _messenger()
     if not tg:
         sys.exit("Telegram isn't set up: add TELEGRAM_BOT_TOKEN to .env, then run jarvis telegram-setup")
+    warm = _warm(mem)
 
     def on_text(update):
         tg.typing()
-        reply = _answer(mem, update.text, on_progress=tg.typing, spoken=update.via_voice)
+        reply = _answer(mem, update.text, on_progress=tg.typing, spoken=update.via_voice, warm=warm)
         if update.via_voice:  # answer a voice note with a voice note (walks, AirPods)
             from jarvis.speech import voice_note
             tg.action("record_voice")
@@ -505,7 +517,8 @@ def main() -> None:
         from jarvis.ears import Ears
         speech._whisper()  # load the model up front so the first answer isn't slow
         log = lambda s: print(s, flush=True)  # noqa: E731
-        Ears(answer=lambda text: _answer(mem, text, spoken=True), transcribe=speech.transcribe,
+        warm = _warm(mem)
+        Ears(answer=lambda text: _answer(mem, text, spoken=True, warm=warm), transcribe=speech.transcribe,
              log=log).run_forever()
         return
     if args.cmd == "projects":

@@ -167,6 +167,10 @@ Speech is handled on-device: Whisper (`faster-whisper`, model `WHISPER_MODEL`, d
 - **On walks (Telegram voice notes):** hold the mic in the bot chat and talk. JARVIS transcribes the note, answers with full context, and replies with a voice note in Daniel's voice, with the text as the caption. Spoken "yes 3" approvals work too. Voice notes from anyone else are never downloaded.
 - **At the desk ("Hey Jarvis"):** `jarvis ears` (a background job under the tiny **JARVIS Ears** app, which holds Microphone permission) listens for the wake word with openWakeWord. After a chime, speak; it stops when you pause, then JARVIS answers out loud. For `FOLLOW_UP_SECONDS` (6) afterwards you can just keep talking. A "pop" means it didn't catch you. The mic is ignored while JARVIS speaks. If it wakes by mistake, raise `WAKE_THRESHOLD` (0.6). `EARS=0` turns it off. The startup log line "mic check" shows whether macOS is allowing the mic.
 
+### Warm Claude session (faster replies)
+
+Starting `claude -p` for each message cost about 2–3.5 s before Claude even began thinking. The Telegram listener and the "Hey Jarvis" listener each keep one **persistent session** instead (stream-json mode), so replies typically take 2–5 s instead of 5–8; what's left is Claude generating the answer. Each message still carries its own fresh context. A session retires after 12 messages or 2 hours idle, and the next one warms up just before the swap. Only one runs per listener at a time, about 170 MB each, because RAM is tight. If a session dies or stalls, that message falls back to a normal one-off call (logged as `warm_fallback`). Turn it off with `WARM_CLAUDE=0`.
+
 ## Jev (fast decisions)
 
 With `TYPESAFE_API_KEY` set (from console.typesafe.ai → API Keys), JARVIS uses TypeSafe's Jev (`JEV_MODEL`, default `jev-latest`) for its quick typed decisions:

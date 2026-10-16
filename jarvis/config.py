@@ -65,6 +65,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # Model for Telegram chat, run through the local Claude Code CLI (uses your Claude subscription)
 JARVIS_MODEL = os.getenv("JARVIS_MODEL", "sonnet")
+WARM_CLAUDE = os.getenv("WARM_CLAUDE", "1") == "1"  # keep a persistent chat session (≈3x faster replies)
 
 # Self-editing: the git repo JARVIS improves (your project folder), the model that writes
 # the code, and the local hour after which JARVIS may suggest one improvement a day.
