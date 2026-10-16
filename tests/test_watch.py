@@ -15,7 +15,7 @@ REPOS = ["/Users/e/Code/shop-site", "/Users/e/Code/JARVIS", "/Users/e/Code/JARVI
 def test_redact_secrets():
     assert redact("export OPENAI_API_KEY=sk-abc123def456") == "export OPENAI_API_KEY=<redacted>"
     assert redact('password: "hunter22"') == "password=<redacted>"
-    assert redact("TELEGRAM_BOT_TOKEN=8833614706:AAHACnj3WRrLEHYvqjb") == "TELEGRAM_BOT_TOKEN=<redacted>"
+    assert redact("TELEGRAM_BOT_TOKEN=1234567890:FAKEfakeFAKEfake123") == "TELEGRAM_BOT_TOKEN=<redacted>"
     assert "<redacted>" in redact("key ghp_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6")
     assert redact('export FAL_KEY="fal_sk_x:y"') == "export FAL_KEY=<redacted>"
     assert redact("STRIPE_KEY=abcd") == "STRIPE_KEY=<redacted>"
