@@ -324,12 +324,24 @@ def handle_button(mem: Memory, tg, verb: str, action_id: int, background: bool =
         return "Unknown button"
     mem.resolve_action(action_id, "approved")  # before running, so a second tap can't run it twice
 
+    db_file = mem.db.execute("PRAGMA database_list").fetchone()[2]  # '' for an in-memory db
+
     def go():
-        verdict = Verdict("approval", payload.get("reason", ""), payload["argv"])
-        result = run_command(verdict, payload["cwd"], approved_by="telegram")
-        mem.resolve_action(action_id, "done" if result.code == 0 else "failed")
-        mem.log("command", f"#{action_id} ran: {'timed out' if result.timed_out else f'exit {result.code}'}")
-        tg.send(f"Command #{action_id}: $ {shlex.join(payload['argv'])}\n{describe(result)}"[:3900])
+        # SQLite connections can't cross threads, so a background run opens its own.
+        own = Memory(db_file) if background and db_file else mem
+        try:
+            verdict = Verdict("approval", payload.get("reason", ""), payload["argv"])
+            result = run_command(verdict, payload["cwd"], approved_by="telegram")
+            tg.send(f"Command #{action_id}: $ {shlex.join(payload['argv'])}\n{describe(result)}"[:3900])
+            own.resolve_action(action_id, "done" if result.code == 0 else "failed")
+            own.log("command", f"#{action_id} ran: {'timed out' if result.timed_out else f'exit {result.code}'}")
+        except Exception as e:  # never leave him waiting in silence
+            own.resolve_action(action_id, "failed")
+            own.log("command", f"#{action_id} failed: {str(e)[:200]}")
+            tg.send(f"Command #{action_id} failed: {e}"[:3900])
+        finally:
+            if own is not mem:
+                own.db.close()
 
     threading.Thread(target=go, daemon=True).start() if background else go()
     return f"Running #{action_id}"

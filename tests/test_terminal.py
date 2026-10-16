@@ -126,3 +126,19 @@ def test_timeout_is_reported(project, monkeypatch):
     r = terminal.run_command(v, project, approved_by="telegram")
     assert r.timed_out and "timed out" in terminal.describe(r)
     assert terminal.recent_audit()[-1]["timed_out"] is True
+
+
+def test_background_run_uses_its_own_db_connection(project, tmp_path):
+    import time
+    m, tg = Memory(tmp_path / "jarvis.db"), FakeTelegram()
+    target = project / "scratch.txt"
+    target.write_text("x")
+    aid = request_approval(m, classify(f"rm {target}"), None, "")
+    assert handle_button(m, tg, "cmd_run", aid) == f"Running #{aid}"  # background thread, file db
+    for _ in range(200):
+        if m.get_action(aid)["status"] != "approved":
+            break
+        time.sleep(0.02)
+    assert m.get_action(aid)["status"] == "done" and not target.exists()
+    assert "exit 0" in tg.sent[-1][0]
+

@@ -263,11 +263,10 @@ def _listen(mem: Memory) -> None:
 
         reply = _answer(mem, update.text, on_progress=tg.typing, spoken=update.via_voice, warm=warm,
                         on_first=first_out)
-        if sent:
+        if sent:  # buttons and plans below must still go out, so no early return
             if reply.strip() != sent["text"]:
                 tg.edit(sent["id"], reply)
-            return
-        if update.via_voice:  # answer a voice note with a voice note (walks, AirPods)
+        elif update.via_voice:  # answer a voice note with a voice note (walks, AirPods)
             from jarvis.speech import voice_note
             tg.action("record_voice")
             try:
