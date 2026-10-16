@@ -11,6 +11,12 @@ DB_PATH = DATA_DIR / "jarvis.db"
 TOKEN_CACHE_PATH = DATA_DIR / "token_cache.json"
 
 MAIL_ACCOUNT = os.getenv("MAIL_ACCOUNT", "")
+
+# Speaking out loud on the Mac when you're at it (keyboard/mouse used in the last N seconds)
+VOICE = os.getenv("VOICE", "1") == "1"
+VOICE_NAME = os.getenv("VOICE_NAME", "Daniel")
+VOICE_RATE = int(os.getenv("VOICE_RATE", "185"))
+VOICE_IDLE_SECONDS = int(os.getenv("VOICE_IDLE_SECONDS", "180"))
 # Ping on Telegram for important new mail (school domains, saved professor addresses, keywords)
 MAIL_WATCH = os.getenv("MAIL_WATCH", "1") == "1"
 SCHOOL_EMAIL_DOMAINS = os.getenv("SCHOOL_EMAIL_DOMAINS", "seattlecolleges.edu")

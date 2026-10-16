@@ -125,11 +125,13 @@ def _listen(mem: Memory) -> None:
         return selfedit.handle_button(mem, tg, verb, edit_id)
 
     from jarvis.reminders import deliver_reminders
+    from jarvis.voice import Announcer
+    announcer = Announcer(tg, mem)
 
     print(f"Listening as chat {config.TELEGRAM_CHAT_ID}", flush=True)
     while True:
         try:
-            deliver_reminders(mem, tg, _now_local())
+            deliver_reminders(mem, announcer, _now_local())
             # Short long-poll so reminders go out within ~25s of their time.
             handle_updates(mem, tg, int(config.TELEGRAM_CHAT_ID), on_text, wait=25, on_button=on_button)
         except Exception as e:  # network blips, Telegram hiccups: wait and reconnect
@@ -146,7 +148,10 @@ def _tick(mem: Memory) -> int:
     from jarvis.mailrelay import process_approved
     from jarvis.reminders import deliver_reminders
 
+    from jarvis.voice import Announcer
+
     tg, caller = _messenger(), _caller()
+    announcer = Announcer(tg, mem) if tg else None  # alerts and reminders are also spoken
     report, errors = [], 0
 
     def step(name, fn):
@@ -164,12 +169,12 @@ def _tick(mem: Memory) -> int:
         from jarvis.mailwatch import check_new_mail
         step("mail-watch", lambda: check_new_mail(mem, _now_local()))  # before alerts: same-tick ping
     if tg or caller:
-        step("alerts", lambda: "messaged %d, called %d" % _deliver(mem, tg, caller))
+        step("alerts", lambda: "messaged %d, called %d" % _deliver(mem, announcer, caller))
     if tg:
         # Incoming messages and button presses are handled by `jarvis listen`, not here:
         # Telegram allows only one reader of updates at a time.
         step("drafts", lambda: f"sent {notify_pending(mem, tg)}")
-        step("reminders", lambda: f"sent {deliver_reminders(mem, tg, _now_local())}")  # backup for listener
+        step("reminders", lambda: f"sent {deliver_reminders(mem, announcer, _now_local())}")  # backup for listener
         from jarvis import plans
 
         def ideas():
@@ -251,6 +256,8 @@ def main() -> None:
     ask = sub.add_parser("ask", help="Ask JARVIS something from the terminal (same brain as Telegram)")
     ask.add_argument("message")
     sub.add_parser("call-test", help="Call yourself once to check Twilio voice")
+    sy = sub.add_parser("say", help="Speak text in JARVIS's voice (ignores presence and quiet hours)")
+    sy.add_argument("text")
 
     al = sub.add_parser("alert", help="Raise an alert (delivered on next tick)")
     al.add_argument("message")
@@ -284,6 +291,12 @@ def main() -> None:
     dg.add_argument("--send", action="store_true", help="Also send it to you on Telegram")
 
     args = parser.parse_args()
+
+    if args.cmd == "say":
+        from jarvis.voice import speak, speakable
+        speak(args.text)
+        print(f"Saying: {speakable(args.text)}")
+        return
 
     if args.cmd == "telegram-setup":
         _telegram_setup()
