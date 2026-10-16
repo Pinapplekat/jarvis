@@ -296,7 +296,8 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             runner: Runner = run_claude, fetcher: Callable[[str], Page] = fetch_page,
             on_progress: Callable[[], None] = lambda: None, inbox_text: str = "(not checked)",
             activity_text: str = "(not observed)", blocks: frozenset[str] | None = None,
-            on_text: Callable[[str], None] | None = None) -> str:
+            on_text: Callable[[str], None] | None = None,
+            spotter: Callable[[Page], list[str]] | None = None) -> str:
     """`on_text` (optional) receives the reply text as it streams, first round only; actions
     are still only applied once the complete reply has arrived."""
     """Answer one message: open any links, ask Claude (letting it open more pages for a
@@ -310,7 +311,10 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
         if fresh:
             on_progress()
             requested.update(fresh)
-            pages.extend(fetcher(u) for u in fresh)
+            for page in (fetcher(u) for u in fresh):
+                if spotter and not page.error:
+                    page.deadlines = spotter(page)
+                pages.append(page)
 
     try:
         open_urls(find_urls(message))

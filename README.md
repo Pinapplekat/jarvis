@@ -133,7 +133,7 @@ To turn it off: remove `JARVIS_REPO` from `.env` and run `uv run jarvis schedule
 ## Watching (senses)
 
 `jarvis watch` (a background job) builds a local timeline while you're at the Mac:
-- **Screen:** about every 30–60 s while you're active, the *front window only* is captured, its text read on-device with Apple Vision, and the image deleted at once. Only changed text is stored (max 4,000 characters).
+- **Screen:** about every 15–20 s while you're active, the *front window only* is captured, its text read on-device with Apple Vision, and the image deleted at once. Only changed text is stored (max 4,000 characters).
 - **Never read:** Messages (iMessage), password managers, banking apps, and windows whose title looks like a bank, payment or sign-in page. Add more with `WATCH_EXCLUDE_APPS` / `WATCH_EXCLUDE_TITLES`.
 - **Terminal:** with the zsh hook installed (`jarvis watch install-shell-hook`, which adds one `source` line to `~/.zshrc`), each command's folder, exit code and duration is logged.
 - **Git:** repos are found under `WATCH_ROOTS` (home and iCloud Drive); new commits and branch switches are noted.
@@ -146,7 +146,7 @@ Needs **Screen Recording** permission for **JARVIS Senses** (System Settings →
 
 The watch loop also decides when JARVIS should speak up unprompted:
 - **Stuck triggers** (cheap rules, no AI): the same terminal command failing 3+ times in 10 min, 4+ failing commands, or error output on screen 3+ times in 10 min. These cause an immediate review (at most every 10 min).
-- **Quick checks (with Jev):** whenever new screen, terminal or git activity was observed, at most every `ATTENTION_QUICK_SECONDS` (45), Jev answers the speak/kind/urgency questions about the last 10 minutes in about 0.2 s. Quiet answers are only counted, not logged; a yes goes through the full rules below. They're skipped during quiet hours or once the daily limit is reached. Cost is a few dollars a month at most. `ATTENTION_QUICK=0` turns them off.
+- **Quick checks (with Jev):** whenever new screen, terminal or git activity was observed, at most every `ATTENTION_QUICK_SECONDS` (20), Jev answers the speak/kind/urgency questions about the last 10 minutes in about 0.2 s. Quiet answers are only counted, not logged; a yes goes through the full rules below. They're skipped during quiet hours or once the daily limit is reached. Cost is a few dollars a month at most. `ATTENTION_QUICK=0` turns them off.
 - **Periodic reviews** (without Jev): every `ATTENTION_REVIEW_MINUTES` (10) of new activity.
 - **Decision layer** (`jarvis/judge.py`): a situation plus typed questions (speak? stuck_help / heads_up / none? urgency 0–1), answered with confidence. The engine is `JUDGE_ENGINE` (`claude` with `JUDGE_MODEL=haiku` now; Jev or a local Mac mini model later, same interface).
 - **Rules:** speak if confidence ≥ `ATTENTION_THRESHOLD` (0.75), or ≥ `ATTENTION_STUCK_THRESHOLD` (0.5) when stuck rules fired. At most `ATTENTION_DAILY_LIMIT` (8) per day, `ATTENTION_MIN_GAP_MINUTES` (15) apart unless urgency ≥ 0.9, never in quiet hours, only while you're active.
@@ -182,7 +182,22 @@ With `TYPESAFE_API_KEY` set (from console.typesafe.ai → API Keys), JARVIS uses
 - **Context routing:** before each chat message, five yes/no questions decide which context to load (deadlines, inbox, current screen and terminal, project briefs, journal). It leans toward including, and skips the Canvas fetch when deadlines aren't needed. Each answer's timing and chosen context are logged as `answered` events.
 - **Attention:** the "should I speak up?" judgment (Jev instead of Claude Haiku, so no Claude usage).
 
+- **What you're doing:** each saved screen is tagged (coding, homework, reading, writing, chatting, email, video, gaming, browsing, planning, other). Without Jev, an app-name guess does it. The journal and evening check-in get a time breakdown ("coding 2h10m, homework 45m…").
+- **Important mail:** Jev judges each new email from sender and subject only. Mail from your school's domain or a saved professor address always counts. Without Jev the keyword rules apply.
+- **Deadline spotting:** in pages JARVIS opens and in important email subjects, date-mentioning lines go to Jev, which keeps the real deadlines. Pages pass them to Claude as `likely_deadlines`. Mail pings that look like deadlines say so and accept a plain "add it" reply.
+
 `JUDGE_ENGINE=auto` (the default) means Jev when a key is set, otherwise Claude. Any Jev error falls back to Claude for that call (logged as `jev_fallback`), and without a key everything works as before.
+
+## Menu bar indicator
+
+**JARVIS Status** (a tiny Swift app in `~/Applications`, run as the `menubar` background job) shows what JARVIS is doing:
+- 👂 waiting for "Hey Jarvis"
+- 🎙 listening (red)
+- ⋯ working on a reply (orange)
+- 🔊 speaking (blue)
+- an "off" icon when the desk listener isn't running
+
+Click it for details. The parts of JARVIS write their state to `status.json` in the data folder. Busy states expire on their own, so a crash can't leave the icon stuck, and the desk listener sends a heartbeat every 10 s. "Hide Indicator" keeps it closed until the next `jarvis schedule install` or login. `MENUBAR=0` turns it off. (The orange microphone dot in the macOS menu bar is separate: that's macOS showing the desk listener has the mic.)
 
 ## Running automatically
 

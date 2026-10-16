@@ -139,6 +139,7 @@ MIGRATIONS = [
     ("projects", "repo", "ALTER TABLE projects ADD COLUMN repo TEXT"),
     ("projects", "brief", "ALTER TABLE projects ADD COLUMN brief TEXT"),
     ("projects", "brief_at", "ALTER TABLE projects ADD COLUMN brief_at TEXT"),
+    ("observations", "tag", "ALTER TABLE observations ADD COLUMN tag TEXT"),
 ]
 
 
@@ -379,11 +380,11 @@ class Memory:
         return cur.rowcount > 0
 
     def observe(self, source: str, text: str, app: str | None = None, title: str | None = None,
-                project: str | None = None, at: datetime | None = None) -> None:
+                project: str | None = None, at: datetime | None = None, tag: str | None = None) -> None:
         stamp = (at or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(timespec="seconds")
         self.db.execute(
-            "INSERT INTO observations (at, source, app, title, project, text) VALUES (?, ?, ?, ?, ?, ?)",
-            (stamp, source, app, title, project, text),
+            "INSERT INTO observations (at, source, app, title, project, text, tag) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (stamp, source, app, title, project, text, tag),
         )
         self.db.commit()
 

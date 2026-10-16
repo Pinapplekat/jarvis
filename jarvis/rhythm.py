@@ -37,7 +37,8 @@ suggestion for where to start. If the day is light, say so in a line."""
 
 EVENING = BASE + """
 Write the EVENING CHECK-IN: ask how the day went (one genuine question, not a survey),
-note what you saw him get done today (projects, commits) if anything, and what's coming
+note what you saw him get done today (projects, commits, and roughly how his screen time
+split up, if it's interesting; never judgmental) if anything, and what's coming
 up tomorrow. End with the question so he can just reply. Warm, brief."""
 
 
@@ -57,7 +58,9 @@ def context(mem: Memory, now: datetime, deadlines_text: str) -> str:
     pinged = [a["message"] for a in mem.db.execute(
         "SELECT message FROM alerts WHERE dedupe_key LIKE 'mail:%' AND created_at >= ?",
         ((now - timedelta(hours=24)).astimezone(timezone.utc).isoformat(timespec="seconds"),)).fetchall()]
+    from jarvis.tags import describe, time_by_tag
     today_projects = active_projects(mem, day_start, now)
+    time_split = describe(time_by_tag(mem.observations(day_start, source="screen"), now))
     commits = [o["text"][:120] + f" [{o['project']}]" for o in mem.observations(day_start, source="git")]
     return "\n\n".join([
         f"Now: {now:%A %B %-d, %-I:%M %p}.",
@@ -65,6 +68,7 @@ def context(mem: Memory, now: datetime, deadlines_text: str) -> str:
         "Reminders (next 36h):\n" + ("\n".join(reminders) or "(none)"),
         "Important mail pinged in last 24h:\n" + ("\n".join(f"- {p}" for p in pinged) or "\n".join(mail) or "(none)"),
         "Projects touched today: " + (", ".join(today_projects) or "(none)"),
+        "Screen time today by activity: " + time_split,
         "Commits today:\n" + ("\n".join(commits) or "(none)"),
         "Recent journal (yesterday and before):\n" + journal_for_prompt(mem, 2),
     ])

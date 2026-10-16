@@ -29,7 +29,8 @@ JOURNAL_SYSTEM = """You are JARVIS writing your private journal entry about Elij
 that weeks from now you still know what happened. From the day's material write:
 - entry: plain text, 6-15 short lines. What he did (school, work, each project he touched
   and what changed), what he told you (plans, feelings, problems), wins, what went wrong.
-  Specific: names, times, numbers. Third person ("Elijah ..."). No fluff.
+  Specific: names, times, numbers. Third person ("Elijah ..."). No fluff. Include one line
+  on how his screen time split up (from "Time at the Mac by activity").
 - open_loops: unfinished things worth following up (due soon, promised, stuck, unanswered).
 - remember: only durable facts worth keeping beyond this day (a new professor's name, a
   work schedule pattern, a preference he stated), not one-off events. Usually 0-3.
@@ -65,8 +66,10 @@ def material(mem: Memory, day: date, tz) -> str:
     events = [f"{datetime.fromisoformat(e['at']).astimezone(tz):%-I:%M %p} {e['kind']}: {e['content'][:200]}"
               for e in mem.events_between(start, end)
               if e["kind"] not in ("canvas_sync", "spoke", "web_open", "tick_error", "watch_error")]
+    from jarvis.tags import describe, time_by_tag
     return "\n\n".join([
         f"Day: {day:%A %B %-d, %Y}",
+        "Time at the Mac by activity: " + describe(time_by_tag(obs, end)),
         "Conversation with JARVIS:\n" + ("\n".join(chat) or "(none)"),
         "Projects by activity: " + (", ".join(f"{p} ({n})" for p, n in by_project.most_common()) or "(none)"),
         "Windows used (in order):\n" + ("\n".join(windows[-80:]) or "(none)"),

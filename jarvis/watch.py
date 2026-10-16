@@ -18,8 +18,10 @@ PRUNE_EVERY = 6 * 3600
 
 class Watcher:
     def __init__(self, mem: Memory, log=print, front=front_window, capture=capture_text, idle=idle_seconds,
-                 attention=None):
+                 attention=None, tagger=None):
+        from jarvis.tags import guess
         self.mem, self.log, self.attention = mem, log, attention
+        self._tag = tagger or (lambda app, title, text: guess(app, title))
         self._front, self._capture, self._idle = front, capture, idle
         self.last_text: dict[tuple, str] = {}
         self.last_capture: dict[tuple, float] = {}
@@ -57,8 +59,9 @@ class Watcher:
         # Titles only: editors/terminals put the project there, while screen text mentions
         # repo names all the time (chats, docs) and would mis-tag.
         project = project_for(known_repos(self.mem), text=window.title or "")
-        self.mem.observe("screen", text, app=window.app, title=window.title, project=project)
-        return f"saved {window.app} ({len(text)} chars)"
+        tag = self._tag(window.app, window.title, text)
+        self.mem.observe("screen", text, app=window.app, title=window.title, project=project, tag=tag)
+        return f"saved {window.app} ({len(text)} chars, {tag})"
 
     def housekeeping(self, now: float) -> list[str]:
         notes = []
@@ -105,7 +108,8 @@ def recent_activity(mem: Memory, minutes: int = 30, now: datetime | None = None)
     for o in obs:
         local = datetime.fromisoformat(o["at"]).astimezone()
         if o["source"] == "screen":
-            label = f"{o['app']} | {o['title'] or '?'}" + (f" [{o['project']}]" if o["project"] else "")
+            label = f"{o['app']} | {o['title'] or '?'}" + (f" [{o['project']}]" if o["project"] else "") \
+                + (f" ({o['tag']})" if o["tag"] else "")
             if label != last_label:
                 lines.append(f"- {local:%-I:%M} screen: {label}")
                 last_label = label

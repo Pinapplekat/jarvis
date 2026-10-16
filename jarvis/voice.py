@@ -72,6 +72,18 @@ class Announcer:
         if self.messenger:
             result = self.messenger.send(text, buttons=buttons) if buttons else self.messenger.send(text)
         say = spoken or text
-        if self._presence(self._now()) and self._speak(say) and self.mem:
-            self.mem.log("spoke", speakable(say)[:200])
+        if self._presence(self._now()) and self._speak(say):
+            _report_speaking(speakable(say))
+            if self.mem:
+                self.mem.log("spoke", speakable(say)[:200])
         return result
+
+
+def _report_speaking(text: str) -> None:
+    import time
+
+    from jarvis.status import set_state, speech_seconds
+    try:
+        set_state("voice", "speaking", until=time.time() + speech_seconds(text))
+    except OSError:
+        pass  # the indicator is cosmetic

@@ -14,8 +14,8 @@ MAIL_ACCOUNT = os.getenv("MAIL_ACCOUNT", "")
 
 # Watching (screen text, terminal, git). Text only, kept locally for WATCH_RETENTION_DAYS.
 WATCH = os.getenv("WATCH", "1") == "1"
-WATCH_INTERVAL = int(os.getenv("WATCH_INTERVAL", "30"))        # seconds between looks
-WATCH_RECAPTURE = int(os.getenv("WATCH_RECAPTURE", "60"))      # re-read same window at most this often
+WATCH_INTERVAL = int(os.getenv("WATCH_INTERVAL", "15"))        # seconds between looks
+WATCH_RECAPTURE = int(os.getenv("WATCH_RECAPTURE", "20"))      # re-read same window at most this often
 WATCH_MAX_CHARS = int(os.getenv("WATCH_MAX_CHARS", "4000"))
 WATCH_RETENTION_DAYS = int(os.getenv("WATCH_RETENTION_DAYS", "7"))
 WATCH_EXCLUDE_APPS = os.getenv("WATCH_EXCLUDE_APPS", "")       # extra, comma-separated
@@ -29,7 +29,7 @@ TYPESAFE_API_KEY = os.getenv("TYPESAFE_API_KEY", "")
 JEV_MODEL = os.getenv("JEV_MODEL", "jev-latest")
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "haiku")
 ATTENTION_QUICK = os.getenv("ATTENTION_QUICK", "1") == "1"          # Jev glance on each change
-ATTENTION_QUICK_SECONDS = int(os.getenv("ATTENTION_QUICK_SECONDS", "45"))
+ATTENTION_QUICK_SECONDS = int(os.getenv("ATTENTION_QUICK_SECONDS", "20"))
 ATTENTION_REVIEW_MINUTES = int(os.getenv("ATTENTION_REVIEW_MINUTES", "10"))
 ATTENTION_THRESHOLD = float(os.getenv("ATTENTION_THRESHOLD", "0.75"))  # confidence needed to speak
 ATTENTION_STUCK_THRESHOLD = float(os.getenv("ATTENTION_STUCK_THRESHOLD", "0.5"))  # when stuck rules fired
@@ -52,6 +52,7 @@ VOICE_IDLE_SECONDS = int(os.getenv("VOICE_IDLE_SECONDS", "180"))
 # Talking to JARVIS: on-device Whisper model, and the "Hey Jarvis" desk listener
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base.en")         # small.en is more accurate, slower
 EARS = os.getenv("EARS", "1") == "1"
+MENUBAR = os.getenv("MENUBAR", "1") == "1"                    # status indicator in the menu bar
 WAKE_THRESHOLD = float(os.getenv("WAKE_THRESHOLD", "0.6"))    # raise if it wakes by mistake
 FOLLOW_UP_SECONDS = int(os.getenv("FOLLOW_UP_SECONDS", "6"))  # listen for a follow-up without the wake word
 # Ping on Telegram for important new mail (school domains, saved professor addresses, keywords)

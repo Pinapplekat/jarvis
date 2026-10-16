@@ -22,6 +22,7 @@ MISS = "/System/Library/Sounds/Pop.aiff"
 MAX_UTTERANCE = 15.0         # seconds
 END_SILENCE = 1.0            # seconds of quiet that end an utterance
 START_TIMEOUT = 4.0          # seconds to start talking after the chime
+HEARTBEAT_TTL = 30.0         # indicator shows "off" if the listener hasn't checked in this long
 
 
 def rms(chunk: np.ndarray) -> float:
@@ -56,12 +57,14 @@ class Endpointer:
 class Ears:
     def __init__(self, answer: Callable[..., str], transcribe: Callable[[np.ndarray], str],
                  log=print, speak: Callable[[str], None] | None = None, play: Callable[[str], None] | None = None,
-                 speak_async: Callable[[str], object] | None = None):
+                 speak_async: Callable[[str], object] | None = None, report: Callable | None = None):
         """`answer(text, on_first)`; `speak` blocks until done; `speak_async` starts speaking
-        and returns something with .wait() (used to say the first sentence early)."""
+        and returns something with .wait() (used to say the first sentence early). `report`
+        publishes state for the menu bar indicator."""
         self.answer, self.transcribe, self.log = answer, transcribe, log
         self.speak = speak or _say_and_wait
         self.speak_async = speak_async or _say_async
+        self.report = report or _report
         self.play = play or (lambda path: subprocess.Popen(["afplay", path]))
         self.noise = deque(maxlen=50)  # recent chunk levels while idle (~4 s)
         self._wake = None
@@ -83,6 +86,8 @@ class Ears:
         with sd.InputStream(samplerate=RATE, channels=1, dtype="int16", blocksize=CHUNK) as stream:
             checked = 0
             while True:
+                if checked % 125 == 0:  # heartbeat every ~10 s; a stopped listener shows as off
+                    self.report("waiting", until=time.time() + HEARTBEAT_TTL)
                 chunk = stream.read(CHUNK)[0][:, 0]
                 self.noise.append(rms(chunk))
                 checked += 1
@@ -97,11 +102,14 @@ class Ears:
                     self.converse(stream)
                     model.reset()
                     _drain(stream)
+                    self.report("waiting", until=time.time() + HEARTBEAT_TTL)
 
     # ----- one conversation -----
     def converse(self, stream) -> None:
         """Chime, then answer utterances until a follow-up window passes in silence."""
+        from jarvis.status import speech_seconds
         self.play(CHIME)
+        self.report("listening")
         timeout = START_TIMEOUT
         while True:
             audio = self.record(lambda: stream.read(CHUNK)[0][:, 0], timeout)
@@ -109,6 +117,7 @@ class Ears:
                 if timeout == START_TIMEOUT:
                     self.play(MISS)  # woke but heard nothing
                 return
+            self.report("working", detail="thinking")
             text = self.transcribe(audio.astype(np.float32) / 32768.0)
             if not text:
                 self.play(MISS)
@@ -118,6 +127,7 @@ class Ears:
 
             def on_first(sentence):  # start talking while the rest is still being written
                 early["sentence"], early["proc"] = sentence, self.speak_async(sentence)
+                self.report("speaking", until=time.time() + speech_seconds(sentence))
 
             reply = self.answer(text, on_first)
             self.log(f"said: {reply[:120]}")
@@ -128,8 +138,10 @@ class Ears:
                 left = remainder(reply, early["sentence"])
                 rest = reply if left is None else left
             if rest:
+                self.report("speaking", until=time.time() + speech_seconds(rest))
                 self.speak(rest)           # blocking, so it doesn't hear itself
             _drain(stream)
+            self.report("listening", detail="follow-up")
             timeout = config.FOLLOW_UP_SECONDS
 
     def record(self, read_chunk: Callable[[], np.ndarray], start_timeout: float) -> np.ndarray | None:
@@ -154,6 +166,14 @@ def _drain(stream) -> None:
             stream.read(available)
     except Exception:
         pass
+
+
+def _report(state: str, until: float | None = None, detail: str = "") -> None:
+    from jarvis.status import set_state
+    try:
+        set_state("ears", state, until=until, detail=detail)
+    except OSError:
+        pass  # the indicator is cosmetic; never let it break listening
 
 
 def _say_async(text: str) -> subprocess.Popen:

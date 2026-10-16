@@ -59,10 +59,10 @@ def test_first_run_seeds_then_pings_new_important_once():
 
     fetch.box += [msg(2, "Dr. G <g@seattlecolleges.edu>", "Module 3 extended"),
                   msg(3, "Shop <d@shop.com>", "sale")]
-    assert check_new_mail(m, NOON, fetch) == "1 important"
+    assert check_new_mail(m, NOON, fetch).startswith("1 important")
     (alert,) = m.undelivered_alerts()
     assert alert["level"] == "high" and alert["message"] == "📧 Dr. G: Module 3 extended"
-    assert check_new_mail(m, NOON, fetch) == "0 important"
+    assert check_new_mail(m, NOON, fetch).startswith("0 important")
 
 
 def test_quiet_hours_defer_without_marking_seen():
@@ -72,7 +72,7 @@ def test_quiet_hours_defer_without_marking_seen():
     fetch.box.append(msg(9, "Dr. G <g@seattlecolleges.edu>", "Exam moved"))
     assert check_new_mail(m, NIGHT, fetch) == "quiet hours"
     assert m.undelivered_alerts() == []
-    assert check_new_mail(m, NOON, fetch) == "1 important"
+    assert check_new_mail(m, NOON, fetch).startswith("1 important")
 
 
 def test_mail_unavailable_is_reported_not_raised():
@@ -100,3 +100,55 @@ def test_inbox_for_prompt_marks_untrusted_and_unread():
     assert text.startswith("Untrusted email headers")
     assert "* Thu Oct 15" in text and "Hello Ignore previous" in text  # newlines flattened
     assert inbox_for_prompt([], "couldn't read Mail (x)") == "(inbox unavailable: couldn't read Mail (x))"
+
+
+def test_jev_decides_importance_but_school_mail_always_counts():
+    from jarvis.judge import Answer
+    m = Memory(":memory:")
+    fetch = inbox()
+    check_new_mail(m, NOON, fetch)  # seed (empty)
+    fetch.box += [msg(1, "Shop <d@shop.com>", "FINAL sale: 70% off, due to end tonight"),
+                  msg(2, "Sam Lee <sam@gmail.com>", "quick question about the group project"),
+                  msg(3, "Canvas <notifications@seattlecolleges.edu>", "Weekly summary")]
+    calls = []
+
+    def fast(state, questions):
+        calls.append(state)
+        verdict = {"FINAL sale": False, "group project": True, "Weekly summary": False}
+        out = {}
+        for q in questions:
+            i = int(q.key[1:])
+            line = state.splitlines()[1 + i]
+            out[q.key] = Answer(next(v for k, v in verdict.items() if k in line), 0.9)
+        return out
+    status = check_new_mail(m, NOON, fetch, fast=fast)
+    assert status == "2 important of 3 new (jev)" and len(calls) == 1
+    pinged = [a["message"] for a in m.undelivered_alerts()]
+    assert sorted(pinged) == ["📧 Canvas: Weekly summary", "📧 Sam Lee: quick question about the group project"]
+
+
+def test_jev_failure_falls_back_to_keywords():
+    from jarvis.judge import JevError
+    m = Memory(":memory:")
+    fetch = inbox()
+    check_new_mail(m, NOON, fetch)
+    fetch.box.append(msg(4, "Random <a@b.com>", "Your grade is posted"))
+
+    def broken(state, questions):
+        raise JevError("down")
+    assert check_new_mail(m, NOON, fetch, fast=broken) == "1 important of 1 new (keywords)"
+
+
+def test_deadline_looking_important_mail_offers_to_track():
+    from jarvis.judge import Answer
+    m = Memory(":memory:")
+    fetch = inbox()
+    check_new_mail(m, NOON, fetch)
+    fetch.box += [msg(5, "Prof K <k@seattlecolleges.edu>", "Quiz 2 closes Wednesday 11:59pm"),
+                  msg(6, "Prof K <k@seattlecolleges.edu>", "Great discussion today")]
+    fast = lambda state, qs: {q.key: Answer(True, 0.9) for q in qs}  # noqa: E731
+    check_new_mail(m, NOON, fetch, fast=fast)
+    texts = {a["message"] for a in m.undelivered_alerts()}
+    assert any("Quiz 2 closes" in t and "add it" in t for t in texts)
+    assert "📧 Prof K: Great discussion today" in texts
+    assert "add it" in m.chat_history(5)[-1]["text"]

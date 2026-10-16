@@ -160,6 +160,15 @@ def latency_summary(lines: list[str]) -> str:
     return "\n".join(out)
 
 
+def _page_spotter():
+    """Jev deadline spotting for pages JARVIS opens, or None without Jev."""
+    from jarvis import judge, spotting
+    fast = judge.fast_engine()
+    if fast is None:
+        return None
+    return lambda page: spotting.spot(spotting.candidates(page.text), fast, context=f"web page: {page.title}")
+
+
 def _runner_for(route, warm):
     """Quick replies: the warm Haiku session. Heavy ones: a streamed one-off Sonnet call (not
     kept warm, to save RAM). Either falls back to a plain call if streaming fails."""
@@ -207,7 +216,7 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
     reply = respond(mem, message, now, deadlines_text, runner=runner, on_progress=on_progress,
                     inbox_text=_inbox_text(mem) if "inbox" in blocks else "",
                     activity_text=_activity(mem) if "activity" in blocks else "", blocks=blocks,
-                    on_text=first.feed if first else None)
+                    on_text=first.feed if first else None, spotter=_page_spotter())
     total = time.time() - started
     first_at = f"{first.at - started:.1f}s" if first and first.at else "-"
     # Timings and choices only; never the message text.
@@ -230,6 +239,14 @@ def _listen(mem: Memory) -> None:
     warm = _warm(mem)
 
     def on_text(update):
+        from jarvis.status import set_state
+        set_state("telegram", "working", detail="answering a voice note" if update.via_voice else "answering")
+        try:
+            _on_text(update)
+        finally:
+            set_state("telegram", "idle")
+
+    def _on_text(update):
         tg.typing()
         sent = {}
 
@@ -315,7 +332,8 @@ def _tick(mem: Memory) -> int:
         step("canvas", canvas)
     if config.MAIL_WATCH and config.MAIL_ACCOUNT:
         from jarvis.mailwatch import check_new_mail
-        step("mail-watch", lambda: check_new_mail(mem, _now_local()))  # before alerts: same-tick ping
+        from jarvis import judge as _judge
+        step("mail-watch", lambda: check_new_mail(mem, _now_local(), fast=_judge.fast_engine()))  # before alerts
     if tg or caller:
         step("alerts", lambda: "messaged %d, called %d" % _deliver(mem, announcer, caller))
     if tg:
@@ -487,7 +505,8 @@ def main() -> None:
         from jarvis import schedule
         if args.action == "install":
             listen = bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
-            schedule.install(args.minutes * 60, listen=listen, watch=config.WATCH, ears=config.EARS)
+            schedule.install(args.minutes * 60, listen=listen, watch=config.WATCH, ears=config.EARS,
+                             menubar=config.MENUBAR)
             print(f"tick: every {args.minutes} min. listen: {'always on' if listen else 'skipped (Telegram not set up)'}."
                   f" watch: {'on' if config.WATCH else 'off'}. ears: {'on' if config.EARS else 'off'}."
                   f" Logs: {schedule.LOG_DIR}")
@@ -678,7 +697,10 @@ def main() -> None:
     if args.cmd == "watch":
         from jarvis import terminal, watch
         if args.action == "run":
-            watch.Watcher(mem, log=lambda s: print(s, flush=True), attention=_attention(mem)).run_forever()
+            from jarvis import judge, tags
+            fast = judge.fast_engine()
+            watch.Watcher(mem, log=lambda s: print(s, flush=True), attention=_attention(mem),
+                          tagger=lambda app, title, text: tags.tag_window(app, title, text, fast)).run_forever()
         elif args.action == "once":
             w = watch.Watcher(mem)
             print("look:", w.look(__import__("time").time()))

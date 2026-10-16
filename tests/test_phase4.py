@@ -80,12 +80,12 @@ def test_journal_material_and_write():
     noon = datetime(2026, 10, 15, 12, 0, tzinfo=TZ)
     m.observe("screen", "x", app="Code", title="cart.py — shop-site", project="shop-site", at=noon)
     m.observe("git", "new commit on main: Add cart", project="shop-site", at=noon)
-    m.observe("screen", "tomorrow", app="Code", title="other", at=noon + timedelta(days=1))
+    m.observe("screen", "tomorrow", app="Code", title="next-day-window", at=noon + timedelta(days=1))
     m.db.execute("INSERT INTO chat_log (at, role, text) VALUES (?, 'user', 'work was rough today')",
                  (noon.astimezone(timezone.utc).isoformat(timespec="seconds"),))
     text = journal.material(m, day, TZ)
     assert "work was rough today" in text and "shop-site (2)" in text and "Add cart" in text
-    assert "other" not in text
+    assert "next-day-window" not in text
 
     out = {"entry": "Elijah worked on shop-site.", "open_loops": ["fix cart tests"],
            "remember": [{"category": "work", "key": "shift_pattern", "value": "Thursdays 2-8pm"}]}

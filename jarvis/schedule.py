@@ -19,6 +19,7 @@ COPY_EXCLUDES = [".git", ".venv", ".venv.nosync", "__pycache__", ".pytest_cache"
 LOG_DIR = Path.home() / "Library/Logs/JARVIS"
 AGENTS = Path.home() / "Library/LaunchAgents"
 TICK, LISTEN, WATCH, EARS = "com.jarvis.tick", "com.jarvis.listen", "com.jarvis.watch", "com.jarvis.ears"
+MENUBAR = "com.jarvis.menubar"
 LOG = LOG_DIR / "tick.log"
 
 
@@ -85,7 +86,8 @@ def deploy(uv: str) -> None:
     subprocess.run([uv, "sync", "-q", "--project", str(PROJECT)], check=True)
 
 
-def install(interval: int = 300, listen: bool = True, watch: bool = True, ears: bool = True) -> None:
+def install(interval: int = 300, listen: bool = True, watch: bool = True, ears: bool = True,
+            menubar: bool = True) -> None:
     uv = shutil.which("uv")
     if not uv:
         raise SystemExit("uv not found on PATH")
@@ -108,11 +110,25 @@ def install(interval: int = 300, listen: bool = True, watch: bool = True, ears: 
         _load(EARS, _plist(EARS, uv, "ears", None, launcher=str(launcher.EARS_EXECUTABLE)))
     else:
         _unload(EARS)
+    if menubar:
+        from jarvis import config, menubar as indicator
+        indicator.build()
+        _load(MENUBAR, {
+            "Label": MENUBAR,
+            "ProgramArguments": [str(indicator.EXECUTABLE), str(config.DATA_DIR / "status.json")],
+            "RunAtLoad": True,
+            # Restart after a crash, but stay closed if Elijah chooses "Hide Indicator".
+            "KeepAlive": {"SuccessfulExit": False},
+            "StandardOutPath": str(LOG_DIR / "menubar.log"),
+            "StandardErrorPath": str(LOG_DIR / "menubar.log"),
+        })
+    else:
+        _unload(MENUBAR)
 
 
 def uninstall() -> bool:
     removed = False
-    for label in (TICK, LISTEN, WATCH, EARS):
+    for label in (TICK, LISTEN, WATCH, EARS, MENUBAR):
         removed |= _unload(label)
         (AGENTS / f"{label}.plist").unlink(missing_ok=True)
     return removed
