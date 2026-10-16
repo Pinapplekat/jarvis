@@ -118,6 +118,23 @@ uv run jarvis alert "Exam moved to today" --level urgent --key exam-moved --now
 
 `--key` makes an alert one-time, so a source that checks every few minutes can't call you twice about the same thing.
 
+### Looking at its own code (read-only)
+
+Ask "how do you decide when to speak up?" or "do the tests pass?" and JARVIS reads its own project instead of guessing. The chat model still has no tools: it proposes an `inspect` action, and JARVIS checks and runs it, then asks again with the result (a few rounds per message, like opening web pages).
+
+- **What it can do:** read a file, list a folder, search the code (plain text), tail a log (`tick`, `listen`, `ears`, `watch`, `menubar`, `commands`), and run four fixed checks: the tests, `git status`, `git log`, `git diff --stat`.
+- **Limits:** only inside the project folder (`PROJECT_DIR`, default this repo; the background copy remembers where it came from). No `..` or symlink escapes. `.env`, token, key and database files are never opened. Checks run with no shell, a scrubbed environment and a timeout, inside a macOS sandbox that blocks file writes and network. Every result is redacted (your `.env` values plus token shapes like bot tokens, Twilio keys and the Canvas feed URL) and cut to 6,000 characters.
+- File contents and logs are treated as data, never instructions. Changing code still only happens through an approved plan. `SELF_INSPECT=0` turns it off.
+
+### Terminal commands (risky ones wait for your OK)
+
+JARVIS can also run commands in chat ("show me the last 5 commits", "delete the old logs").
+
+- **Run at once:** read-only commands on a strict allowlist, inside the project: `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `git status/log/diff/show`, and the tests. They run in the same no-writes, no-network sandbox, with flags that could write or run programs refused (`git diff --output`, `--ext-diff`, `tail -f`, `pytest -p`...), and secret files blocked. `jarvis cmd try "git log -5"` shows how a command would be treated.
+- **Wait for you:** anything else (writes, deletes, installs, other folders) arrives in Telegram with the exact command and folder and **Run / Reject** buttons. It runs only when you tap Run, once, then JARVIS sends the output. Requests lapse after `COMMAND_APPROVAL_MINUTES` (30), and a typed "yes" never runs a command.
+- **Never:** a shell. Pipes, redirects, `$`, `;` and `&&` are refused outright.
+- **Log:** every command (auto, approved, rejected, expired, timed out) is appended to `~/Library/Application Support/JARVIS/commands.jsonl` with the time, command, folder, who approved it and the exit code, never the output. `jarvis cmd log` shows it. `COMMANDS=0` turns commands off.
+
 ### Self-editing (off unless you turn it on)
 
 With it on, approving a plan makes JARVIS build it: Claude Code edits a private clone (`~/Library/Application Support/JARVIS/src`) on its own branch, allowed only to edit files and run the tests. The build must pass all tests, can't reduce the test count, and can't touch `.env`. You get a summary, the patch file, and **Deploy / Discard**. Changes to safety-critical files (approvals, chat lockdown, Telegram, web, mail, scheduling, self-edit) are flagged ⚠️. Deploy merges, redeploys the background jobs, and fast-forwards this repo; if that sync fails, JARVIS sends the `git pull` command to run.
@@ -171,10 +188,10 @@ Speech is handled on-device: Whisper (`faster-whisper`, model `WHISPER_MODEL`, d
 ### Fast replies (models, warm session, streaming)
 
 - **Two models:** quick replies use `JARVIS_MODEL` (default `haiku`), kept warm in a persistent session, typically **~2 s**. Heavier requests use `JARVIS_HEAVY_MODEL` (default `sonnet`) as a streamed one-off call, ~5–6 s: drafting email, planning, debugging, multi-step reasoning, long answers. Jev decides which, in the same call as context routing (or a keyword check without Jev). `JARVIS_MODEL_ROUTING=fast|heavy` forces one. Background writing (journal, briefs, plans, check-ins, interjections) stays on the heavy model.
-- **First sentence early:** replies stream. At the desk JARVIS starts speaking the first sentence while the rest is written. In Telegram the first sentence is sent right away and the message is then edited into the full reply. Actions are only checked and carried out once the full reply has arrived.
+- **Speaking as it writes:** replies stream. At the desk, each sentence is spoken as soon as it's finished, and the next one is rendered while the current one plays, so JARVIS starts talking after the first sentence instead of the whole reply. If the final reply doesn't match what streamed (an error, or a "checking" round), what's queued is stopped and the real answer is said instead. Telegram voice notes are still one recording of the full reply. In Telegram the first sentence is sent right away and the message is then edited into the full reply. Actions are only checked and carried out once the full reply has arrived.
 - **Warm session:** saves the 2–3.5 s it takes to start `claude -p`. It retires after 12 messages or 2 hours idle, and a spare warms up just before. One per listener (about 170 MB each) to keep RAM in check. On failure a message falls back to a one-off call (`warm_fallback`). `WARM_CLAUDE=0` turns it off.
 - **Cached inputs:** chat uses tick's copies of the inbox snapshot and the Canvas feed (up to 10 min old), so no reply waits on Mail or the network.
-- **Measure it:** `jarvis latency` shows median and slowest reply times and time to first sentence, per model. Only timings and choices are logged, never your message text.
+- **Measure it:** `jarvis latency` shows median and slowest reply times and time to first sentence, per model, plus desk time to first audio (from when you stop talking; target 1 s, also in the ears log as `time_to_first_audio=NNNms`). Claude's startup and Telegram network timeouts can still add delay. Only timings and choices are logged, never your message text.
 
 ## Jev (fast decisions)
 

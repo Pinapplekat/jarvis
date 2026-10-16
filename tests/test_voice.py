@@ -4,7 +4,10 @@ import pytest
 
 from jarvis import config
 from jarvis.memory import Memory
-from jarvis.voice import Announcer, should_speak, speakable, user_present
+import threading
+import time
+
+from jarvis.voice import Announcer, SpeakQueue, should_speak, speakable, user_present
 
 NOON = datetime(2026, 10, 15, 12, 0)
 NIGHT = datetime(2026, 10, 15, 23, 30)
@@ -59,3 +62,74 @@ def test_announcer_always_texts_and_speaks_only_when_present():
 def test_voice_off_never_speaks(monkeypatch):
     monkeypatch.setattr(config, "VOICE", False)
     assert not should_speak(NOON, idle=1)
+
+
+class FakeClip:
+    def __init__(self, text, log, gate=None):
+        self.text, self.log, self.gate, self.stopped = text, log, gate, False
+
+    def wait(self):
+        if self.gate:
+            self.gate.wait(2)
+        self.log.append(("played", self.text, self.stopped))
+
+    def terminate(self):
+        self.stopped = True
+        if self.gate:
+            self.gate.set()
+
+
+def test_speak_queue_renders_ahead_and_plays_in_order():
+    log = []
+    q = SpeakQueue(synth=lambda t: log.append(("rendered", t)) or t,
+                   play=lambda clip: log.append(("playing", clip)) or FakeClip(clip, log))
+    for s in ["One, sir.", "Two 🚀 https://x.test", "Three."]:
+        q.say(s)
+    assert q.wait(5)
+    played = [e[1] for e in log if e[0] == "played"]
+    assert played == ["One, sir.", "Two the link", "Three."]
+    assert q.first_audio_at is not None
+    q.reset()
+    assert q.first_audio_at is None
+
+
+def test_speak_queue_cancel_stops_playback_and_drops_the_rest():
+    log, gate = [], threading.Event()
+    rendered = []
+    q = SpeakQueue(synth=lambda t: rendered.append(t) or t,
+                   play=lambda clip: FakeClip(clip, log, gate if clip == "Long one." else None))
+    q.say("Long one.")
+    for _ in range(100):
+        if rendered:
+            break
+        time.sleep(0.01)
+    q.say("Stale two.")
+    q.say("Stale three.")
+    time.sleep(0.05)
+    q.cancel()
+    q.say("Fresh.")
+    assert q.wait(5)
+    played = [(e[1], e[2]) for e in log]
+    assert played[0] == ("Long one.", True)  # cut off mid-sentence
+    assert ("Fresh.", False) in played
+    assert not any(t.startswith("Stale") for t, _ in played)
+
+
+def test_speak_queue_survives_a_failed_render():
+    log = []
+
+    def synth(t):
+        if t == "Bad.":
+            raise RuntimeError("say failed")
+        return t
+    q = SpeakQueue(synth=synth, play=lambda clip: FakeClip(clip, log))
+    q.say("Bad.")
+    q.say("Good.")
+    assert q.wait(5) and [e[1] for e in log] == ["Good."]
+
+
+def test_latency_summary_includes_first_audio():
+    from jarvis.cli import latency_summary
+    out = latency_summary(["time_to_first_audio=900ms", "time_to_first_audio=1500ms",
+                           "2.0s total, first sentence 1.0s, model haiku warm"])
+    assert "time to first audio median 1.2s" in out and "target 1s" in out

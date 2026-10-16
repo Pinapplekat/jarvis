@@ -81,6 +81,7 @@ def deploy(uv: str) -> None:
     PROJECT.mkdir(parents=True, exist_ok=True)
     excludes = [arg for name in COPY_EXCLUDES for arg in ("--exclude", name)]
     subprocess.run(["rsync", "-a", "--delete", *excludes, f"{SOURCE}/", f"{PROJECT}/"], check=True)
+    (PROJECT / ".jarvis-source").write_text(str(SOURCE))  # so the copy knows where its repo lives
     if (PROJECT / ".env").exists():
         (PROJECT / ".env").chmod(0o600)
     subprocess.run([uv, "sync", "-q", "--project", str(PROJECT)], check=True)

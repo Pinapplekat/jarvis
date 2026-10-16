@@ -4,9 +4,15 @@ Speech is only used when Elijah is at the Mac (recent keyboard/mouse activity) a
 not quiet hours. Telegram always gets the text too, so nothing is lost if he's away.
 """
 
+import os
+import queue
 import re
 import subprocess
+import tempfile
+import threading
+import time
 from datetime import datetime
+from typing import Callable
 
 from jarvis import config
 from jarvis.alerts import in_quiet_hours, parse_quiet_hours
@@ -51,6 +57,134 @@ def speak(text: str) -> bool:
     subprocess.Popen(["say", "-v", config.VOICE_NAME, "-r", str(config.VOICE_RATE), spoken],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     return True
+
+
+def synthesize(text: str) -> str:
+    """Render one sentence to an AIFF file in JARVIS's voice; returns its path."""
+    fd, path = tempfile.mkstemp(prefix="jarvis-say-", suffix=".aiff")
+    os.close(fd)
+    subprocess.run(["say", "-v", config.VOICE_NAME, "-r", str(config.VOICE_RATE), "-o", path, text],
+                   check=True, timeout=60, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return path
+
+
+def play_file(path: str) -> subprocess.Popen:
+    return subprocess.Popen(["afplay", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+class SpeakQueue:
+    """Speak sentences in order as they arrive, rendering the next one while the current one
+    plays, so a streaming reply starts talking after its first sentence.
+
+    `synth(text) -> clip` renders, `play(clip)` starts playback and returns something with
+    .wait() and .terminate(), `discard(clip)` cleans up. `on_play(text)` fires as each
+    sentence starts; `first_audio_at` is when the first one since `reset()` began."""
+
+    def __init__(self, synth: Callable[[str], object] = synthesize, play: Callable[[object], object] = play_file,
+                 discard: Callable[[object], None] | None = None, on_play: Callable[[str], None] | None = None):
+        self._synth, self._play = synth, play
+        self._discard = discard or (lambda clip: _unlink(clip) if synth is synthesize else None)
+        self.on_play = on_play or (lambda text: None)
+        self._texts: queue.Queue = queue.Queue()
+        self._clips: queue.Queue = queue.Queue()
+        self._gen, self._pending, self._playing = 0, 0, None
+        self._cond = threading.Condition()
+        self.first_audio_at: float | None = None
+        for target in (self._render_loop, self._play_loop):
+            threading.Thread(target=target, daemon=True).start()
+
+    def say(self, text: str) -> None:
+        spoken = speakable(text)
+        if not spoken:
+            return
+        with self._cond:
+            self._pending += 1
+            self._texts.put((self._gen, spoken))
+
+    def reset(self) -> None:
+        """Start timing a new reply."""
+        self.first_audio_at = None
+
+    def cancel(self) -> None:
+        """Drop everything queued and stop what's playing (a newer reply takes over)."""
+        with self._cond:
+            self._gen += 1
+            for q in (self._texts, self._clips):
+                while True:
+                    try:
+                        item = q.get_nowait()
+                    except queue.Empty:
+                        break
+                    self._pending -= 1
+                    if q is self._clips and item[1] is not None:
+                        self._discard(item[1])
+            playing = self._playing
+            self._cond.notify_all()
+        if playing is not None:
+            try:
+                playing.terminate()
+            except OSError:
+                pass
+
+    def wait(self, timeout: float = 300) -> bool:
+        """Block until everything queued has been spoken (or dropped). False on timeout."""
+        deadline = time.time() + timeout
+        with self._cond:
+            while self._pending > 0:
+                left = deadline - time.time()
+                if left <= 0:
+                    return False
+                self._cond.wait(left)
+        return True
+
+    def _done_one(self) -> None:
+        with self._cond:
+            self._pending -= 1
+            self._cond.notify_all()
+
+    def _render_loop(self) -> None:
+        while True:
+            gen, text = self._texts.get()
+            try:
+                clip = self._synth(text) if gen == self._gen else None
+            except Exception:
+                clip = None  # one bad sentence shouldn't silence the rest
+            with self._cond:
+                if gen != self._gen:  # cancelled while rendering
+                    if clip is not None:
+                        self._discard(clip)
+                    self._pending -= 1
+                    self._cond.notify_all()
+                    continue
+                self._clips.put((gen, clip, text))
+
+    def _play_loop(self) -> None:
+        while True:
+            gen, clip, text = self._clips.get()
+            try:
+                with self._cond:
+                    if clip is None or gen != self._gen:
+                        continue
+                    self._playing = proc = self._play(clip)
+                if self.first_audio_at is None:
+                    self.first_audio_at = time.time()
+                self.on_play(text)
+                proc.wait()
+            except Exception:
+                pass
+            finally:
+                with self._cond:
+                    self._playing = None
+                if clip is not None:
+                    self._discard(clip)
+                self._done_one()
+
+
+def _unlink(path) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def should_speak(now: datetime, idle: float | None = None) -> bool:

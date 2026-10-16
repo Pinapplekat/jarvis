@@ -43,7 +43,9 @@ def format_draft(action_id: int, payload: dict) -> str:
 
 
 def notify_pending(mem: Memory, tg: TelegramClient) -> int:
-    count = 0
+    """Send buttons for new email drafts and for terminal commands waiting for an OK."""
+    from jarvis.terminal import notify_commands
+    count = notify_commands(mem, tg)
     for action in mem.unnotified_actions():
         if action["kind"] != "send_email":
             continue

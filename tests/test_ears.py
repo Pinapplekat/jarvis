@@ -44,60 +44,94 @@ class FakeStream:
         return chunk.reshape(-1, 1), False
 
 
+class FakeVoice:
+    """Stands in for SpeakQueue: records what would be said, in order."""
+
+    def __init__(self, events=None):
+        self.events = events if events is not None else []
+        self.first_audio_at = None
+
+    def say(self, text):
+        self.events.append(f"say:{text}")
+        self.first_audio_at = self.first_audio_at or 100.0
+
+    def cancel(self):
+        self.events.append("cancel")
+
+    def reset(self):
+        self.first_audio_at = None
+
+    def wait(self):
+        self.events.append("waited")
+
+
+def spoken_of(voice):
+    return [e[4:] for e in voice.events if e.startswith("say:")]
+
+
 def make(chunks, heard="what's due this week", monkeypatch=None):
-    played, spoken, answered = [], [], []
-    ears = Ears(answer=lambda t, on_first=None: answered.append(t) or "Econ on Sunday, sir.",
-                transcribe=lambda audio: heard, log=lambda s: None,
-                speak=spoken.append, play=played.append)
+    played, answered, voice = [], [], FakeVoice()
+    ears = Ears(answer=lambda t, on_text=None: answered.append(t) or "Econ on Sunday, sir.",
+                transcribe=lambda audio: heard, log=lambda s: None, play=played.append, voice=voice)
     ears.noise.extend([0.002] * 10)
-    return ears, FakeStream(chunks), played, spoken, answered
+    return ears, FakeStream(chunks), played, voice, answered
 
 
 def test_conversation_answers_then_waits_for_follow_up(monkeypatch):
     monkeypatch.setattr(config, "FOLLOW_UP_SECONDS", 1)
     speech = [LOUD] * 10 + [SILENT] * 14
-    ears, stream, played, spoken, answered = make(speech)
+    ears, stream, played, voice, answered = make(speech)
     ears.converse(stream)
     assert played == [CHIME]
-    assert answered == ["what's due this week"] and spoken == ["Econ on Sunday, sir."]
+    assert answered == ["what's due this week"] and spoken_of(voice) == ["Econ on Sunday, sir."]
 
 
 def test_follow_up_without_wake_word(monkeypatch):
     monkeypatch.setattr(config, "FOLLOW_UP_SECONDS", 2)
     turn = [LOUD] * 8 + [SILENT] * 14
-    ears, stream, played, spoken, answered = make(turn + [SILENT] * 3 + turn)
+    ears, stream, played, voice, answered = make(turn + [SILENT] * 3 + turn)
     ears.converse(stream)
-    assert len(answered) == 2 and len(spoken) == 2
+    assert len(answered) == 2 and len(spoken_of(voice)) == 2
 
 
-class FakeSpeech:
-    def __init__(self, log):
-        self.log = log
-
-    def wait(self):
-        self.log.append("waited")
-
-
-def test_first_sentence_spoken_early_then_the_rest(monkeypatch):
+def test_each_sentence_is_spoken_as_soon_as_it_streams(monkeypatch):
     monkeypatch.setattr(config, "FOLLOW_UP_SECONDS", 1)
     events = []
 
-    def answer(text, on_first=None):
-        on_first("Two things, sir.")
-        events.append("answer done")
-        return "Two things, sir. Econ on Sunday and English on Monday."
+    def answer(text, on_text=None):
+        for partial in ["Two", "Two things, sir.", "Two things, sir. Econ on Sunday.",
+                        "Two things, sir. Econ on Sunday. English"]:
+            on_text(partial)
+            events.append(f"streamed:{len(partial)}")
+        return "Two things, sir. Econ on Sunday. English on Monday."
 
-    ears = Ears(answer=answer, transcribe=lambda a: "what's due", log=lambda s: None,
-                speak=lambda t: events.append(f"say:{t}"), play=lambda p: None,
-                speak_async=lambda t: events.append(f"early:{t}") or FakeSpeech(events))
+    timings = []
+    ears = Ears(answer=answer, transcribe=lambda a: "what's due", log=lambda s: None, play=lambda p: None,
+                voice=FakeVoice(events), timing=timings.append)
     ears.noise.extend([0.002] * 10)
     ears.converse(FakeStream([LOUD] * 8 + [SILENT] * 14))
-    assert events == ["early:Two things, sir.", "answer done", "waited",
-                      "say:Econ on Sunday and English on Monday."]
+    said = [e for e in events if e.startswith(("say:", "waited", "streamed:"))]
+    assert said == ["streamed:3", "streamed:16", "say:Two things, sir.", "streamed:32",
+                    "say:Econ on Sunday.", "streamed:40", "say:English on Monday.", "waited"]
+    assert len(timings) == 1  # time to first audio was measured
+
+
+def test_reply_that_doesnt_match_the_stream_replaces_it():
+    events = []
+
+    def answer(text, on_text=None):
+        on_text("Checking, sir. ")
+        return "Sorry, I couldn't think just now (timeout)."
+
+    ears = Ears(answer=answer, transcribe=lambda a: "x", log=lambda s: None, play=lambda p: None,
+                voice=FakeVoice(events))
+    ears.reply("x", heard_at=99.0)
+    assert events[events.index("say:Checking, sir."):] == [
+        "say:Checking, sir.", "cancel", "say:Sorry, I couldn't think just now (timeout).", "waited"]
 
 
 def test_wake_with_no_speech_or_garbled_speech_pops():
-    ears, stream, played, spoken, answered = make([SILENT] * 80)
+    ears, stream, played, _, answered = make([SILENT] * 80)
     ears.converse(stream)
     assert played == [CHIME, MISS] and answered == []
 

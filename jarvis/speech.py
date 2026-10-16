@@ -1,6 +1,8 @@
-"""Speech, on-device: Whisper transcription (faster-whisper) and Daniel-voice audio for
-Telegram voice notes (macOS `say` + ffmpeg). No audio leaves the Mac for this."""
+"""Speech, on-device: Whisper transcription (faster-whisper), Daniel-voice audio for
+Telegram voice notes (macOS `say` + ffmpeg), and splitting a streaming reply into
+sentences so each can be spoken as soon as it's written. No audio leaves the Mac for this."""
 
+import re
 import subprocess
 import tempfile
 import threading
@@ -58,3 +60,66 @@ def voice_note(text: str) -> bytes:
         subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(aiff), "-c:a", "libopus",
                         "-b:a", "32k", str(ogg)], check=True, timeout=60)
         return ogg.read_bytes()
+
+
+# Words whose trailing period doesn't end a sentence ("Dr. G", "e.g. this", "5 p.m. today").
+ABBREVIATIONS = {"dr", "mr", "mrs", "ms", "prof", "st", "jr", "sr", "vs", "etc", "e.g", "i.e", "a.m",
+                 "p.m", "no", "approx", "dept", "est", "fig", "inc", "ltd", "mt", "ave", "jan", "feb",
+                 "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec", "mon", "tue",
+                 "wed", "thu", "fri", "sat", "sun", "u.s"}
+_BOUNDARY = re.compile(r"[.!?]+[\"')\]]*(?=\s)|\n")
+_WORD_BEFORE = re.compile(r"([A-Za-z][A-Za-z.]*)\.$")
+
+
+class SentenceBuffer:
+    """Feed it streaming text; get back each sentence once it's clearly finished (its end
+    mark is followed by whitespace, or the line ended). `flush()` returns the tail.
+
+    `text` is everything fed so far and `consumed` how much of it has been handed out."""
+
+    def __init__(self):
+        self.text, self.consumed = "", 0
+
+    def feed(self, delta: str) -> list[str]:
+        self.text += delta
+        return self._take()
+
+    def feed_text(self, so_far: str) -> list[str]:
+        """Same, given the whole text so far (what the reply streamer reports)."""
+        if not so_far.startswith(self.text):
+            return []  # the stream rewrote itself; the final reply sorts it out
+        return self.feed(so_far[len(self.text):])
+
+    def flush(self) -> list[str]:
+        tail = self.text[self.consumed:].strip()
+        self.consumed = len(self.text)
+        return [tail] if tail else []
+
+    def _take(self) -> list[str]:
+        out, start = [], self.consumed
+        for m in _BOUNDARY.finditer(self.text, start):
+            if m[0] != "\n" and _abbreviation(self.text[start:m.start() + 1]):
+                continue
+            sentence = self.text[start:m.end()].strip()
+            if sentence:
+                out.append(sentence)
+            start = m.end()
+        self.consumed = start
+        return out
+
+
+def _abbreviation(chunk: str) -> bool:
+    """Does `chunk` end with a period that belongs to an abbreviation or an initial?"""
+    if not chunk.endswith("."):
+        return False
+    m = _WORD_BEFORE.search(chunk)
+    if not m:
+        return False
+    word = m[1].lower()
+    return word in ABBREVIATIONS or (len(word) == 1 and m[1].isupper())
+
+
+def sentences(text: str) -> list[str]:
+    """A whole reply split the same way as a stream."""
+    buf = SentenceBuffer()
+    return buf.feed(text) + buf.flush()

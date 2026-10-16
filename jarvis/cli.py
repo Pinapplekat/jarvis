@@ -148,9 +148,13 @@ def latency_summary(lines: list[str]) -> str:
         if total:
             rows.append((float(total[1]), float(first[1]) if first else None,
                          f"{model[1]} {model[2]}" if model else "unknown"))
-    if not rows:
+    audio = [int(m[1]) for line in lines if (m := re.search(r"time_to_first_audio=(\d+)ms", line))]
+    if not rows and not audio:
         return "No timed replies yet."
     out = [f"{len(rows)} recent replies"]
+    if audio:
+        out.append(f"- desk voice     n={len(audio):<3} time to first audio median {median(audio) / 1000:.1f}s, "
+                   f"slowest {max(audio) / 1000:.1f}s (target 1s)")
     for key in sorted({r[2] for r in rows}):
         group = [r for r in rows if r[2] == key]
         totals = [r[0] for r in group]
@@ -187,9 +191,10 @@ def _runner_for(route, warm):
 
 
 def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = False, warm=None,
-            on_first=None) -> str:
+            on_first=None, on_text=None) -> str:
     """One chat turn with full context. Shared by Telegram (typed or voice) and the desk mic.
-    `on_first(sentence)` fires as soon as the reply's first sentence has streamed in."""
+    `on_first(sentence)` fires as soon as the reply's first sentence has streamed in;
+    `on_text(so_far)` gets all of the streaming reply text (the desk mic speaks it as it comes)."""
     import time
 
     from jarvis import judge, router
@@ -204,6 +209,8 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
     routed = time.time() - started
     runner, model, temp = _runner_for(route, warm)
     first = FirstSentence(on_first) if on_first else None
+    feeds = [f for f in (first.feed if first else None, on_text) if f]
+    stream = (lambda so_far: [f(so_far) for f in feeds]) if feeds else None
     deadlines_text = ""
     if "deadlines" in blocks:
         try:  # reuse tick's copy of the feed (≤10 min old) instead of fetching live
@@ -216,7 +223,7 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
     reply = respond(mem, message, now, deadlines_text, runner=runner, on_progress=on_progress,
                     inbox_text=_inbox_text(mem) if "inbox" in blocks else "",
                     activity_text=_activity(mem) if "activity" in blocks else "", blocks=blocks,
-                    on_text=first.feed if first else None, spotter=_page_spotter())
+                    on_text=stream, spotter=_page_spotter())
     total = time.time() - started
     first_at = f"{first.at - started:.1f}s" if first and first.at else "-"
     # Timings and choices only; never the message text.
@@ -278,6 +285,9 @@ def _listen(mem: Memory) -> None:
             plans.draft_plans(mem, tg)
 
     def on_button(verb, edit_id):
+        if verb.startswith("cmd_"):
+            from jarvis import terminal
+            return terminal.handle_button(mem, tg, verb, edit_id)
         if verb.startswith("plan_"):
             on_approved = (lambda i: selfedit.queue_approved(mem, tg, i)) if selfedit.enabled() else None
             return plans.handle_button(mem, verb, edit_id, on_approved)
@@ -336,6 +346,8 @@ def _tick(mem: Memory) -> int:
         step("mail-watch", lambda: check_new_mail(mem, _now_local(), fast=_judge.fast_engine()))  # before alerts
     if tg or caller:
         step("alerts", lambda: "messaged %d, called %d" % _deliver(mem, announcer, caller))
+    from jarvis.terminal import expire_commands
+    step("commands", lambda: f"expired {expire_commands(mem)}")  # before any new buttons go out
     if tg:
         # Incoming messages and button presses are handled by `jarvis listen`, not here:
         # Telegram allows only one reader of updates at a time.
@@ -430,6 +442,10 @@ def main() -> None:
     se = sub.add_parser("self-edit", help="Background worker for applying approved plans (off unless JARVIS_REPO is set)")
     se.add_argument("action", choices=["build", "deploy"])
     se.add_argument("id", nargs="?")
+    cm = sub.add_parser("cmd", help="Terminal commands JARVIS runs: audit log, or how a command would be treated")
+    cm.add_argument("action", choices=["log", "try"])
+    cm.add_argument("command", nargs="?", default="", help='for try: the command, quoted ("git log -5")')
+    cm.add_argument("-n", type=int, default=20)
     lt = sub.add_parser("latency", help="How fast recent chat replies were, by model")
     lt.add_argument("--last", type=int, default=30)
     sub.add_parser("ears", help="Listen for 'Hey Jarvis' on the Mac's mic and answer out loud (runs forever)")
@@ -612,9 +628,20 @@ def main() -> None:
     if args.cmd == "listen":
         _listen(mem)
         return
+    if args.cmd == "cmd":
+        from jarvis import terminal
+        if args.action == "try":
+            v = terminal.classify(args.command)
+            print(f"{v.kind}: {v.reason}" + (f"\nwould run: {' '.join(v.argv)}" if v.argv else ""))
+            return
+        for e in terminal.recent_audit(args.n):
+            what = e.get("outcome") or (f"exit {e.get('exit')}" if "exit" in e else "waiting for OK")
+            print(f"{e['at'][5:16]} {e.get('class', ''):<8} {str(e.get('approved_by') or '-'):<9} "
+                  f"{what:<14} $ {' '.join(e.get('argv') or [])}")
+        return
     if args.cmd == "latency":
         print(latency_summary([e["content"] for e in mem.db.execute(
-            "SELECT content FROM events WHERE kind = 'answered' ORDER BY id DESC LIMIT ?", (args.last,))]))
+            "SELECT content FROM events WHERE kind IN ('answered', 'first_audio') ORDER BY id DESC LIMIT ?", (args.last,))]))
         return
     if args.cmd == "ears":
         from jarvis import speech
@@ -622,8 +649,9 @@ def main() -> None:
         speech._whisper()  # load the model up front so the first answer isn't slow
         log = lambda s: print(s, flush=True)  # noqa: E731
         warm = _warm(mem)
-        Ears(answer=lambda text, on_first=None: _answer(mem, text, spoken=True, warm=warm, on_first=on_first),
-             transcribe=speech.transcribe, log=log).run_forever()
+        Ears(answer=lambda text, on_text=None: _answer(mem, text, spoken=True, warm=warm, on_text=on_text),
+             transcribe=speech.transcribe, log=log,
+             timing=lambda ms: mem.log("first_audio", f"time_to_first_audio={ms}ms")).run_forever()
         return
     if args.cmd == "projects":
         from jarvis import projects

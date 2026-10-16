@@ -78,6 +78,16 @@ JARVIS_REPO = os.getenv("JARVIS_REPO", "")
 SELF_EDIT_MODEL = os.getenv("SELF_EDIT_MODEL", "opus")
 IDEA_HOUR = int(os.getenv("IDEA_HOUR", "18"))
 
+# Self-inspection and terminal commands. PROJECT_DIR is the JARVIS repo (the background jobs
+# run from a copy, which records where it came from); commands stay inside it unless approved.
+_HERE = Path(__file__).resolve().parent.parent
+_SOURCE_MARK = _HERE / ".jarvis-source"
+PROJECT_DIR = Path(os.getenv("JARVIS_PROJECT_DIR") or (
+    _SOURCE_MARK.read_text().strip() if _SOURCE_MARK.is_file() else _HERE)).expanduser()
+SELF_INSPECT = os.getenv("SELF_INSPECT", "1") == "1"        # read own files, run read-only checks
+COMMANDS = os.getenv("COMMANDS", "1") == "1"                # terminal commands (risky ones need Approve)
+COMMAND_APPROVAL_MINUTES = int(os.getenv("COMMAND_APPROVAL_MINUTES", "30"))  # unanswered requests expire
+
 # Twilio is used only for urgent voice calls
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")

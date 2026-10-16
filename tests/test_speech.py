@@ -71,3 +71,24 @@ def test_voice_note_round_trip():
     assert ogg[:4] == b"OggS"
     samples = decode(ogg)
     assert samples.dtype.name == "float32" and samples.size > SAMPLE_RATE  # over a second of speech
+
+
+def test_sentence_buffer_splits_streaming_text():
+    from jarvis.speech import SentenceBuffer
+    buf, got = SentenceBuffer(), []
+    for delta in ["Two th", "ings, sir.", " Dr. G moved", " it to 5 p.m. Friday", ". It's 3.5 hours", " away!", " And"]:
+        got += buf.feed(delta)
+    assert got == ["Two things, sir.", "Dr. G moved it to 5 p.m. Friday.", "It's 3.5 hours away!"]
+    assert buf.flush() == ["And"] and buf.flush() == []
+
+
+def test_sentence_buffer_newlines_initials_and_whole_text():
+    from jarvis.speech import SentenceBuffer, sentences
+    assert sentences("Due:\n- HW 3\n- Quiz") == ["Due:", "- HW 3", "- Quiz"]
+    assert sentences("Ask J. Smith, e.g. tomorrow. Done.") == ["Ask J. Smith, e.g. tomorrow.", "Done."]
+    assert sentences("Really?! Yes.") == ["Really?!", "Yes."]
+    assert sentences("") == []
+    buf = SentenceBuffer()
+    assert buf.feed_text("One. Tw") == ["One."]
+    assert buf.feed_text("One. Two. Th") == ["Two."]
+    assert buf.feed_text("Different now.") == []  # stream rewrote itself: ignored

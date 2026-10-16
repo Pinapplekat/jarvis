@@ -56,18 +56,25 @@ class Endpointer:
 
 class Ears:
     def __init__(self, answer: Callable[..., str], transcribe: Callable[[np.ndarray], str],
-                 log=print, speak: Callable[[str], None] | None = None, play: Callable[[str], None] | None = None,
-                 speak_async: Callable[[str], object] | None = None, report: Callable | None = None):
-        """`answer(text, on_first)`; `speak` blocks until done; `speak_async` starts speaking
-        and returns something with .wait() (used to say the first sentence early). `report`
-        publishes state for the menu bar indicator."""
+                 log=print, play: Callable[[str], None] | None = None, voice=None,
+                 report: Callable | None = None, timing: Callable[[int], None] | None = None):
+        """`answer(text, on_text)` streams the reply's text so far into `on_text`; `voice` is a
+        SpeakQueue, so each sentence is spoken as soon as it's written. `report` publishes
+        state for the menu bar indicator; `timing(ms)` gets the time to first audio."""
         self.answer, self.transcribe, self.log = answer, transcribe, log
-        self.speak = speak or _say_and_wait
-        self.speak_async = speak_async or _say_async
         self.report = report or _report
         self.play = play or (lambda path: subprocess.Popen(["afplay", path]))
+        self.timing = timing or (lambda ms: None)
+        self.voice = voice
         self.noise = deque(maxlen=50)  # recent chunk levels while idle (~4 s)
         self._wake = None
+
+    def _voice(self):
+        if self.voice is None:  # started on first use, so tests and imports stay cheap
+            from jarvis.status import speech_seconds
+            from jarvis.voice import SpeakQueue
+            self.voice = SpeakQueue(on_play=lambda t: self.report("speaking", until=time.time() + speech_seconds(t)))
+        return self.voice
 
     # ----- audio plumbing (real mic) -----
     def _wake_model(self):
@@ -107,12 +114,12 @@ class Ears:
     # ----- one conversation -----
     def converse(self, stream) -> None:
         """Chime, then answer utterances until a follow-up window passes in silence."""
-        from jarvis.status import speech_seconds
         self.play(CHIME)
         self.report("listening")
         timeout = START_TIMEOUT
         while True:
             audio = self.record(lambda: stream.read(CHUNK)[0][:, 0], timeout)
+            heard_at = time.time()  # he stopped talking: the clock for time to first audio
             if audio is None:
                 if timeout == START_TIMEOUT:
                     self.play(MISS)  # woke but heard nothing
@@ -123,26 +130,38 @@ class Ears:
                 self.play(MISS)
                 return
             self.log(f"heard: {text[:120]}")
-            early = {}
-
-            def on_first(sentence):  # start talking while the rest is still being written
-                early["sentence"], early["proc"] = sentence, self.speak_async(sentence)
-                self.report("speaking", until=time.time() + speech_seconds(sentence))
-
-            reply = self.answer(text, on_first)
-            self.log(f"said: {reply[:120]}")
-            from jarvis.chat import remainder
-            rest = reply
-            if early:
-                early["proc"].wait()
-                left = remainder(reply, early["sentence"])
-                rest = reply if left is None else left
-            if rest:
-                self.report("speaking", until=time.time() + speech_seconds(rest))
-                self.speak(rest)           # blocking, so it doesn't hear itself
+            self.reply(text, heard_at)
             _drain(stream)
             self.report("listening", detail="follow-up")
             timeout = config.FOLLOW_UP_SECONDS
+
+    def reply(self, text: str, heard_at: float) -> str:
+        """Answer out loud, speaking each sentence as soon as the streaming reply finishes it,
+        and wait until it's all been said (so the mic doesn't hear JARVIS)."""
+        from jarvis.speech import SentenceBuffer, sentences
+        voice, buf = self._voice(), SentenceBuffer()
+        voice.cancel()  # nothing from an earlier answer talks over this one
+        voice.reset()
+
+        def on_text(so_far: str) -> None:
+            for sentence in buf.feed_text(so_far):
+                voice.say(sentence)
+
+        reply = self.answer(text, on_text)
+        self.log(f"said: {reply[:120]}")
+        if reply.startswith(buf.text):  # the usual case: finish what streamed
+            for sentence in buf.feed(reply[len(buf.text):]) + buf.flush():
+                voice.say(sentence)
+        else:  # streaming failed or was a "checking" round: say the real answer instead
+            voice.cancel()
+            for sentence in sentences(reply):
+                voice.say(sentence)
+        voice.wait()
+        if voice.first_audio_at:
+            ms = int((voice.first_audio_at - heard_at) * 1000)
+            self.log(f"time_to_first_audio={ms}ms")
+            self.timing(ms)
+        return reply
 
     def record(self, read_chunk: Callable[[], np.ndarray], start_timeout: float) -> np.ndarray | None:
         floor = float(np.median(self.noise)) if self.noise else 0.003
@@ -174,14 +193,3 @@ def _report(state: str, until: float | None = None, detail: str = "") -> None:
         set_state("ears", state, until=until, detail=detail)
     except OSError:
         pass  # the indicator is cosmetic; never let it break listening
-
-
-def _say_async(text: str) -> subprocess.Popen:
-    from jarvis.voice import speakable
-    return subprocess.Popen(["say", "-v", config.VOICE_NAME, "-r", str(config.VOICE_RATE), speakable(text)])
-
-
-def _say_and_wait(text: str) -> None:
-    from jarvis.voice import speakable
-    subprocess.run(["say", "-v", config.VOICE_NAME, "-r", str(config.VOICE_RATE), speakable(text)],
-                   timeout=120)
