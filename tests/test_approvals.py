@@ -28,7 +28,7 @@ class FakeTelegram:
     def edit(self, message_id, text):
         self.edits.append((message_id, text))
 
-    def updates(self, offset):
+    def updates(self, offset, wait=0):
         return [u for u in self.inbox if offset is None or u.update_id >= offset]
 
     def _at(self, at):
@@ -120,8 +120,11 @@ def test_cannot_flip_a_decided_draft():
     assert "can't be changed (rejected)" in t.answers[-1]
 
 
-def test_ordinary_chat_is_ignored():
+def test_ordinary_chat_goes_to_on_text_but_not_from_strangers():
     m, t = Memory(":memory:"), FakeTelegram()
     t.type("what's due this week?")
-    assert handle_updates(m, t, ME) == 0
+    t.type("hi, I'm not Elijah", sender=STRANGER)
+    seen = []
+    assert handle_updates(m, t, ME, on_text=lambda u: seen.append(u.text)) == 0
+    assert seen == ["what's due this week?"]
     assert t.sent == []

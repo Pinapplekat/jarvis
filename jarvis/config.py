@@ -19,6 +19,8 @@ CANVAS_ICS_URL = os.getenv("CANVAS_ICS_URL", "")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# Model for Telegram chat, run through the local Claude Code CLI (uses your Claude subscription)
+JARVIS_MODEL = os.getenv("JARVIS_MODEL", "sonnet")
 
 # Twilio is used only for urgent voice calls
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")

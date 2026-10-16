@@ -7,6 +7,7 @@ reply only counts for drafts that had already been sent when the reply was writt
 import json
 import re
 from datetime import datetime
+from typing import Callable
 
 from jarvis.memory import Memory
 from jarvis.telegram import TelegramClient, Update
@@ -79,19 +80,21 @@ def _decide(mem: Memory, approve: bool, action_id: int | None, written_at: datet
     return True, f"Cancelled #{action_id}."
 
 
-def handle_updates(mem: Memory, tg: TelegramClient, allowed_user: int) -> int:
-    """Apply button presses and typed replies. Returns how many drafts changed state."""
+def handle_updates(mem: Memory, tg: TelegramClient, allowed_user: int,
+                   on_text: Callable[[Update], None] | None = None, wait: int = 0) -> int:
+    """Apply button presses and typed replies; pass other messages to on_text.
+    Returns how many drafts changed state."""
     offset = mem.get_kv(OFFSET_KEY)
     changed = 0
-    for u in tg.updates(int(offset) if offset else None):
+    for u in tg.updates(int(offset) if offset else None, wait):
         mem.set_kv(OFFSET_KEY, str(u.update_id + 1))  # never process an update twice
         if u.sender_id != allowed_user:
             continue
-        changed += _handle(mem, tg, u)
+        changed += _handle(mem, tg, u, on_text)
     return changed
 
 
-def _handle(mem: Memory, tg: TelegramClient, u: Update) -> bool:
+def _handle(mem: Memory, tg: TelegramClient, u: Update, on_text=None) -> bool:
     if u.callback_id:
         verb, _, raw_id = (u.callback_data or "").partition(":")
         if verb not in ("approve", "reject") or not raw_id.isdigit():
@@ -106,7 +109,9 @@ def _handle(mem: Memory, tg: TelegramClient, u: Update) -> bool:
     if u.text:
         parsed = parse_reply(u.text)
         if parsed is None:
-            return False  # ordinary chat, not an approval
+            if on_text:
+                on_text(u)
+            return False
         did, msg = _decide(mem, parsed[0], parsed[1], u.sent_at)
         tg.send(msg)
         return did

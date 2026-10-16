@@ -52,6 +52,17 @@ Setup:
 uv run jarvis digest --send    # week ahead to Telegram
 ```
 
+### Chatting with JARVIS
+
+Message the bot like a person: "what's due this week?", "remember rent is due on the 1st", "add ECON module 4 due Sunday", "email prof@school.edu asking for a 2-day extension". JARVIS answers in a few seconds. `jarvis ask "..."` does the same from the terminal.
+
+- **Brain:** the Claude Code CLI on this Mac (`claude -p`), so it uses your Claude subscription, not a separate API bill. Model: `JARVIS_MODEL` (default `sonnet`; `haiku` is faster and lighter on usage limits).
+- **Locked down:** Claude runs with no tools, no MCP servers and no personal settings. It can only *propose* actions (remember/forget a fact, log a note, update a project, add or finish a deadline, draft an email). JARVIS checks each one before doing it. Email is only ever drafted, and still needs your Approve tap.
+- **Context it sees:** saved facts, projects, recent events, the next 14 days of deadlines, drafts awaiting approval, and the last 12 chat messages.
+- **Voice:** short and casual, matching how you text. Tweak the "Voice" section of `SYSTEM_PROMPT` in `jarvis/chat.py` to change it.
+- **Links:** send a link and JARVIS opens it in its own headless Chromium (JavaScript runs, so wikis and JS-heavy agendas work) before answering. It can also open links it remembers or finds on pages it read, up to 3 rounds and 6 pages per message. It has no access to your browser's logins, so pages behind Canvas or Google sign-in won't load. Local and private network addresses are blocked, and page text is treated as untrusted data. One-time setup: `uv run playwright install chromium`.
+- **Always on:** `jarvis listen` keeps a connection open to Telegram (it also handles the Approve/Reject buttons). `jarvis schedule install` runs it in the background.
+
 ## Canvas deadlines and weekly digest
 
 Seattle Colleges blocks student access tokens, so JARVIS reads your **Calendar Feed** instead:
@@ -106,7 +117,13 @@ uv run jarvis schedule run-now
 uv run jarvis schedule uninstall
 ```
 
-Each `tick` syncs Canvas, delivers alerts, sends new drafts to Telegram, applies your answers and sends approved email. Steps without config (Telegram, Twilio) are skipped, and a failing step doesn't stop the others. It runs via launchd, so only while the Mac is awake; missed runs catch up on wake. Log: `~/Library/Logs/JARVIS/tick.log`.
+Two launchd jobs:
+- `tick` every 5 minutes: syncs Canvas, delivers alerts, sends new drafts to Telegram, sends approved email. Steps without config (Telegram, Twilio) are skipped, and a failing step doesn't stop the others. One tick at a time (lock file).
+- `listen`, always on: Telegram chat and Approve/Reject buttons. Restarted automatically if it stops.
+
+Both run only while the Mac is awake; missed ticks catch up on wake. Logs: `~/Library/Logs/JARVIS/`.
+
+**The jobs run from a copy** in `~/Library/Application Support/JARVIS/app`, because iCloud offloads files from this folder and background reads of offloaded files fail intermittently. **After changing code or `.env`, run `uv run jarvis schedule install` again** to refresh the copy and restart the jobs.
 
 The memory database lives in `~/Library/Application Support/JARVIS`, not in the iCloud project folder, because syncing a live SQLite file can corrupt it.
 

@@ -62,18 +62,21 @@ def _telegram_setup() -> None:
           f"chat {chat_id}. Saved to .env. Check Telegram for a hello.")
 
 
-def _sync_canvas(mem: Memory):
-    from jarvis.canvas import (
-        CanvasClient, fetch_feed, from_feed, from_memory, merge, raise_deadline_alerts,
-    )
-    now = _now_local()
+def _deadlines(mem: Memory, now):
+    from jarvis.canvas import CanvasClient, fetch_feed, from_feed, from_memory, merge
     if config.CANVAS_TOKEN:
-        deadlines = CanvasClient().fetch_deadlines(now.tzinfo, now.date())
+        fetched = CanvasClient().fetch_deadlines(now.tzinfo, now.date())
     elif config.CANVAS_ICS_URL:
-        deadlines = from_feed(fetch_feed(config.CANVAS_ICS_URL), now.tzinfo)
+        fetched = from_feed(fetch_feed(config.CANVAS_ICS_URL), now.tzinfo)
     else:
         sys.exit("Set CANVAS_ICS_URL (Canvas → Calendar → Calendar Feed) or CANVAS_TOKEN in .env")
-    deadlines = merge(deadlines, from_memory(mem))
+    return merge(fetched, from_memory(mem))
+
+
+def _sync_canvas(mem: Memory):
+    from jarvis.canvas import raise_deadline_alerts
+    now = _now_local()
+    deadlines = _deadlines(mem, now)
     raised = raise_deadline_alerts(mem, deadlines, now)
     due = [d for d in deadlines if d.kind == "due"]
     todo = sum(1 for d in due if d.due > now and not d.done)
@@ -81,12 +84,51 @@ def _sync_canvas(mem: Memory):
     return deadlines, raised
 
 
+def _listen(mem: Memory) -> None:
+    """Stay connected to Telegram: handle Approve/Reject at once and chat with the user."""
+    import time
+
+    from jarvis.approvals import handle_updates, notify_pending
+    from jarvis.canvas import format_digest, from_memory
+    from jarvis.chat import respond
+
+    tg = _messenger()
+    if not tg:
+        sys.exit("Telegram isn't set up: add TELEGRAM_BOT_TOKEN to .env, then run jarvis telegram-setup")
+
+    def on_text(update):
+        tg.typing()
+        now = _now_local()
+        try:
+            deadlines = _deadlines(mem, now)
+        except Exception:  # feed down: answer from stored deadlines rather than not at all
+            deadlines = from_memory(mem)
+        reply = respond(mem, update.text, now, format_digest(deadlines, now, days=14),
+                        on_progress=tg.typing)
+        tg.send(reply)
+        notify_pending(mem, tg)  # drafts made in this chat get their buttons right away
+
+    from jarvis.reminders import deliver_reminders
+
+    print(f"Listening as chat {config.TELEGRAM_CHAT_ID}", flush=True)
+    while True:
+        try:
+            deliver_reminders(mem, tg, _now_local())
+            # Short long-poll so reminders go out within ~25s of their time.
+            handle_updates(mem, tg, int(config.TELEGRAM_CHAT_ID), on_text, wait=25)
+        except Exception as e:  # network blips, Telegram hiccups: wait and reconnect
+            print(f"listen error: {e}", flush=True)
+            mem.log("listen_error", str(e)[:300])
+            time.sleep(10)
+
+
 def _tick(mem: Memory) -> int:
     """One scheduled pass. Each step runs even if an earlier one fails."""
     from datetime import datetime
 
-    from jarvis.approvals import handle_updates, notify_pending
+    from jarvis.approvals import notify_pending
     from jarvis.mailrelay import process_approved
+    from jarvis.reminders import deliver_reminders
 
     tg, caller = _messenger(), _caller()
     report, errors = [], 0
@@ -105,8 +147,10 @@ def _tick(mem: Memory) -> int:
     if tg or caller:
         step("alerts", lambda: "messaged %d, called %d" % _deliver(mem, tg, caller))
     if tg:
+        # Incoming messages and button presses are handled by `jarvis listen`, not here:
+        # Telegram allows only one reader of updates at a time.
         step("drafts", lambda: f"sent {notify_pending(mem, tg)}")
-        step("replies", lambda: f"applied {handle_updates(mem, tg, int(config.TELEGRAM_CHAT_ID))}")
+        step("reminders", lambda: f"sent {deliver_reminders(mem, tg, _now_local())}")  # backup for listener
     else:
         report.append("telegram: skipped (not set up)")
 
@@ -171,6 +215,9 @@ def main() -> None:
 
     sub.add_parser("relay", help="Send all approved emails through Apple Mail")
     sub.add_parser("telegram-setup", help="Link your Telegram chat (after pressing Start on the bot)")
+    sub.add_parser("listen", help="Stay connected to Telegram: chat and approval buttons (runs forever)")
+    ask = sub.add_parser("ask", help="Ask JARVIS something from the terminal (same brain as Telegram)")
+    ask.add_argument("message")
     sub.add_parser("call-test", help="Call yourself once to check Twilio voice")
 
     al = sub.add_parser("alert", help="Raise an alert (delivered on next tick)")
@@ -217,8 +264,10 @@ def main() -> None:
     if args.cmd == "schedule":
         from jarvis import schedule
         if args.action == "install":
-            schedule.install(args.minutes * 60)
-            print(f"Scheduled every {args.minutes} min. Log: {schedule.LOG}")
+            listen = bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
+            schedule.install(args.minutes * 60, listen=listen)
+            print(f"tick: every {args.minutes} min. listen: {'always on' if listen else 'skipped (Telegram not set up)'}."
+                  f" Logs: {schedule.LOG_DIR}")
         elif args.action == "uninstall":
             print("Removed" if schedule.uninstall() else "Wasn't scheduled")
         elif args.action == "run-now":
@@ -317,6 +366,15 @@ def main() -> None:
             if not tg:
                 sys.exit("Telegram isn't set up: add TELEGRAM_BOT_TOKEN to .env, then run jarvis telegram-setup")
             tg.send(text)
+        return
+    if args.cmd == "listen":
+        _listen(mem)
+        return
+    if args.cmd == "ask":
+        from jarvis.canvas import format_digest
+        from jarvis.chat import respond
+        now = _now_local()
+        print(respond(mem, args.message, now, format_digest(_deadlines(mem, now), now, days=14)))
         return
     if args.cmd == "tick":
         import fcntl

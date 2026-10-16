@@ -63,6 +63,22 @@ CREATE TABLE IF NOT EXISTS deadlines (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS chat_log (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    text TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS reminders (
+    id INTEGER PRIMARY KEY,
+    due_at TEXT NOT NULL,            -- ISO 8601 with offset
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    sent_at TEXT,
+    cancelled INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -193,6 +209,54 @@ class Memory:
             "UPDATE pending_actions SET notified_at = ? WHERE id = ?", (_now(), action_id)
         )
         self.db.commit()
+
+    def add_reminder(self, due_at: datetime, text: str) -> int:
+        cur = self.db.execute(
+            "INSERT INTO reminders (due_at, text, created_at) VALUES (?, ?, ?)",
+            (due_at.astimezone(timezone.utc).isoformat(timespec="seconds"), text, _now()),
+        )
+        self.db.commit()
+        return cur.lastrowid
+
+    def upcoming_reminders(self) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM reminders WHERE sent_at IS NULL AND cancelled = 0 ORDER BY due_at"
+        ).fetchall()
+
+    def cancel_reminder(self, reminder_id: int) -> bool:
+        cur = self.db.execute(
+            "UPDATE reminders SET cancelled = 1 WHERE id = ? AND sent_at IS NULL AND cancelled = 0",
+            (reminder_id,),
+        )
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def claim_due_reminders(self, now: datetime) -> list[sqlite3.Row]:
+        """Mark due reminders as sent and return them. Safe if listener and tick both call it:
+        each reminder is claimed by exactly one caller."""
+        cutoff = now.astimezone(timezone.utc).isoformat(timespec="seconds")
+        due = self.db.execute(
+            "SELECT * FROM reminders WHERE sent_at IS NULL AND cancelled = 0 AND due_at <= ? ORDER BY due_at",
+            (cutoff,),
+        ).fetchall()
+        claimed = []
+        for r in due:
+            cur = self.db.execute(
+                "UPDATE reminders SET sent_at = ? WHERE id = ? AND sent_at IS NULL", (_now(), r["id"])
+            )
+            if cur.rowcount:
+                claimed.append(r)
+        self.db.commit()
+        return claimed
+
+    def add_chat(self, role: str, text: str) -> None:
+        self.db.execute("INSERT INTO chat_log (at, role, text) VALUES (?, ?, ?)", (_now(), role, text))
+        self.db.commit()
+
+    def chat_history(self, limit: int) -> list[sqlite3.Row]:
+        """The last `limit` chat messages, oldest first."""
+        rows = self.db.execute("SELECT * FROM chat_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return rows[::-1]
 
     def get_kv(self, key: str) -> str | None:
         row = self.db.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()

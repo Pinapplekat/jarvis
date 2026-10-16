@@ -32,7 +32,7 @@ class TelegramClient:
             raise SystemExit("Set TELEGRAM_BOT_TOKEN in .env")
         self._base = f"https://api.telegram.org/bot{token}"
         self.chat_id = chat_id
-        self.http = httpx.Client(timeout=30)
+        self.http = httpx.Client(timeout=httpx.Timeout(30, read=75))  # read > longest long-poll
 
     def _call(self, method: str, **payload) -> dict | list:
         # Errors are rebuilt without the request URL: it contains the bot token.
@@ -63,8 +63,12 @@ class TelegramClient:
     def answer(self, callback_id: str, text: str) -> None:
         self._call("answerCallbackQuery", callback_query_id=callback_id, text=text)
 
-    def updates(self, offset: int | None) -> list[Update]:
-        raw = self._call("getUpdates", offset=offset, timeout=0,
+    def typing(self) -> None:
+        self._call("sendChatAction", chat_id=self.chat_id, action="typing")
+
+    def updates(self, offset: int | None, wait: int = 0) -> list[Update]:
+        """wait > 0 long-polls: Telegram holds the request until a message arrives or wait seconds pass."""
+        raw = self._call("getUpdates", offset=offset, timeout=wait,
                          allowed_updates=["message", "callback_query"])
         out = []
         for u in raw:
