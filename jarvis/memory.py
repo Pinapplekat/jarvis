@@ -116,6 +116,13 @@ CREATE TABLE IF NOT EXISTS judgments (
     message TEXT
 );
 
+CREATE TABLE IF NOT EXISTS journal (
+    day TEXT PRIMARY KEY,            -- local date, YYYY-MM-DD
+    entry TEXT NOT NULL,
+    open_loops TEXT NOT NULL,        -- JSON list
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS seen_mail (
     key TEXT PRIMARY KEY,            -- account:message id
     at TEXT NOT NULL
@@ -129,11 +136,18 @@ CREATE TABLE IF NOT EXISTS kv (
 
 MIGRATIONS = [
     ("pending_actions", "notified_at", "ALTER TABLE pending_actions ADD COLUMN notified_at TEXT"),
+    ("projects", "repo", "ALTER TABLE projects ADD COLUMN repo TEXT"),
+    ("projects", "brief", "ALTER TABLE projects ADD COLUMN brief TEXT"),
+    ("projects", "brief_at", "ALTER TABLE projects ADD COLUMN brief_at TEXT"),
 ]
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
 class Memory:
@@ -194,6 +208,42 @@ class Memory:
             project_id = cur.lastrowid
         self.db.commit()
         return project_id
+
+    def link_repo(self, name: str, repo: str) -> None:
+        self.db.execute("UPDATE projects SET repo = ? WHERE name = ?", (repo, name))
+        self.db.commit()
+
+    def set_brief(self, name: str, brief: str) -> None:
+        self.db.execute("UPDATE projects SET brief = ?, brief_at = ? WHERE name = ?", (brief, _now(), name))
+        self.db.commit()
+
+    def project(self, name: str) -> sqlite3.Row | None:
+        return self.db.execute("SELECT * FROM projects WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
+
+    def save_journal(self, day: str, entry: str, open_loops: list[str], at: datetime | None = None) -> None:
+        self.db.execute(
+            """INSERT INTO journal (day, entry, open_loops, created_at) VALUES (?, ?, ?, ?)
+               ON CONFLICT(day) DO UPDATE SET entry = excluded.entry, open_loops = excluded.open_loops,
+                 created_at = excluded.created_at""",
+            (day, entry, json.dumps(open_loops), _iso(at) if at else _now()),
+        )
+        self.db.commit()
+
+    def journal(self, day: str) -> sqlite3.Row | None:
+        return self.db.execute("SELECT * FROM journal WHERE day = ?", (day,)).fetchone()
+
+    def recent_journal(self, limit: int = 3) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM journal ORDER BY day DESC LIMIT ?", (limit,)).fetchall()
+
+    def chat_between(self, start: datetime, end: datetime) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM chat_log WHERE at >= ? AND at < ? ORDER BY id", (_iso(start), _iso(end))
+        ).fetchall()
+
+    def events_between(self, start: datetime, end: datetime) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM events WHERE at >= ? AND at < ? ORDER BY id", (_iso(start), _iso(end))
+        ).fetchall()
 
     def projects(self, kind: str | None = None) -> list[sqlite3.Row]:
         if kind:

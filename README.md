@@ -152,6 +152,14 @@ The watch loop also decides when JARVIS should speak up unprompted:
 - **What it says:** Claude writes one short spoken line (said aloud) and a Telegram version with the specific fix.
 - **Accountability:** every decision is logged. `jarvis attention log` shows the log, `jarvis attention review-now` forces a review, and asking JARVIS "why did you say that?" works because chat sees its recent interjections and reasons.
 
+## Daily rhythm, journal and project briefs
+
+- **Morning brief:** after `MORNING_HOUR` (7), the first time you're at the Mac, or at `MORNING_LATEST` (10) regardless. It covers today's deadlines, reminders, important mail, yesterday's open loops, and where to start.
+- **Evening check-in:** at `EVENING_HOUR` (21). It asks how the day went and notes what you got done and what's tomorrow. Just reply; it's normal chat, so what you share is remembered.
+- Both are spoken when you're at the Mac, always sent to Telegram, never in quiet hours, and once a day. A failed attempt retries after 30 minutes rather than being lost. `jarvis rhythm morning|evening` sends one now for testing.
+- **Nightly journal:** after `JOURNAL_HOUR` (2), JARVIS writes up the previous day from chat, screen, terminal, git and events. It saves lasting facts and open loops. This is the long-term memory, since the raw timeline is pruned after 7 days. Chat sees the last 3 entries. `jarvis journal [show|write] [YYYY-MM-DD]`.
+- **Project briefs:** every repo becomes a project (`jarvis projects sync`) with a living brief built from its README, the last 15 commits, GitHub (`gh`: description, open issues and PRs) and your past week of activity in it. Briefs of projects you touched are refreshed nightly; chat gets the briefs of your recently active ones. `jarvis projects [list|show NAME|refresh [NAME]]`.
+
 ## Running automatically
 
 ```bash

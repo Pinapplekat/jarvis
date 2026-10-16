@@ -32,6 +32,13 @@ ATTENTION_STUCK_THRESHOLD = float(os.getenv("ATTENTION_STUCK_THRESHOLD", "0.5"))
 ATTENTION_DAILY_LIMIT = int(os.getenv("ATTENTION_DAILY_LIMIT", "8"))   # unprompted interjections/day
 ATTENTION_MIN_GAP_MINUTES = int(os.getenv("ATTENTION_MIN_GAP_MINUTES", "15"))
 
+# Daily rhythm (local hours) and the nightly journal
+RHYTHM = os.getenv("RHYTHM", "1") == "1"
+MORNING_HOUR = int(os.getenv("MORNING_HOUR", "7"))      # morning brief from here, once you're at the Mac
+MORNING_LATEST = int(os.getenv("MORNING_LATEST", "10")) # ...or at this hour regardless
+EVENING_HOUR = int(os.getenv("EVENING_HOUR", "21"))     # evening check-in
+JOURNAL_HOUR = int(os.getenv("JOURNAL_HOUR", "2"))      # journal yesterday after this hour
+
 # Speaking out loud on the Mac when you're at it (keyboard/mouse used in the last N seconds)
 VOICE = os.getenv("VOICE", "1") == "1"
 VOICE_NAME = os.getenv("VOICE_NAME", "Daniel")

@@ -175,8 +175,13 @@ def _tick(mem: Memory) -> int:
             report.append(f"{name}: ERROR {e}")
             mem.log("tick_error", f"{name}: {e}")
 
+    deadlines = []
     if config.CANVAS_TOKEN or config.CANVAS_ICS_URL:
-        step("canvas", lambda: f"{_sync_canvas(mem)[1]} new alerts")
+        def canvas():
+            found, raised = _sync_canvas(mem)
+            deadlines.extend(found)
+            return f"{raised} new alerts"
+        step("canvas", canvas)
     if config.MAIL_WATCH and config.MAIL_ACCOUNT:
         from jarvis.mailwatch import check_new_mail
         step("mail-watch", lambda: check_new_mail(mem, _now_local()))  # before alerts: same-tick ping
@@ -205,6 +210,18 @@ def _tick(mem: Memory) -> int:
             raise RuntimeError(f"sent {sent}, {failed} failed")
         return f"sent {sent}"
     step("mail", relay)
+
+    from jarvis import journal, rhythm
+    from jarvis.canvas import format_digest, from_memory
+    from jarvis.voice import user_present
+
+    def check_in():
+        now = _now_local()
+        upcoming = format_digest(deadlines or from_memory(mem), now, days=2)
+        return rhythm.maybe_check_in(mem, now, announcer or Announcer(None, mem), user_present(),
+                                     upcoming) or "none due"
+    step("rhythm", check_in)
+    step("journal", lambda: journal.maybe_write(mem, _now_local()) or "not due")
 
     print(f"{datetime.now():%Y-%m-%d %H:%M} " + " | ".join(report), flush=True)
     return 1 if errors else 0
@@ -268,6 +285,14 @@ def main() -> None:
     ask = sub.add_parser("ask", help="Ask JARVIS something from the terminal (same brain as Telegram)")
     ask.add_argument("message")
     sub.add_parser("call-test", help="Call yourself once to check Twilio voice")
+    pj = sub.add_parser("projects", help="Project briefs built from your repos and GitHub")
+    pj.add_argument("action", nargs="?", default="list", choices=["list", "show", "refresh", "sync"])
+    pj.add_argument("name", nargs="?")
+    jn = sub.add_parser("journal", help="JARVIS's nightly journal of your days")
+    jn.add_argument("action", nargs="?", default="show", choices=["show", "write"])
+    jn.add_argument("day", nargs="?", help="YYYY-MM-DD (default: latest / yesterday)")
+    rh = sub.add_parser("rhythm", help="Send the morning brief or evening check-in now (for testing)")
+    rh.add_argument("kind", choices=["morning", "evening"])
     at = sub.add_parser("attention", help="JARVIS deciding when to speak up: decision log, or review now")
     at.add_argument("action", nargs="?", default="log", choices=["log", "review-now"])
     wa = sub.add_parser("watch", help="JARVIS's senses: screen text, terminal, git (runs in the background)")
@@ -432,6 +457,55 @@ def main() -> None:
         return
     if args.cmd == "listen":
         _listen(mem)
+        return
+    if args.cmd == "projects":
+        from jarvis import projects
+        if args.action == "sync":
+            print(f"added {projects.sync_projects(mem)} project(s)")
+        elif args.action == "list":
+            for p in mem.projects():
+                print(f"{p['name']:<34} {p['kind']:<8} {p['status']:<8} {p['summary'] or '(no brief yet)'}")
+        elif args.action == "show":
+            p = mem.project(args.name or "")
+            if not p:
+                sys.exit(f"No project {args.name!r} (see: jarvis projects list)")
+            print(f"{p['name']} [{p['kind']}, {p['status']}] {p['repo']}\n\n{p['brief'] or '(no brief yet)'}")
+        elif args.action == "refresh":
+            projects.sync_projects(mem)
+            names = [args.name] if args.name else [p["name"] for p in mem.projects() if p["repo"]]
+            for name in names:
+                try:
+                    print(f"{name}: {projects.write_brief(mem, name)}", flush=True)
+                except Exception as e:
+                    print(f"{name}: failed ({str(e)[:150]})", flush=True)
+        return
+    if args.cmd == "journal":
+        from datetime import date, timedelta
+        from jarvis import journal
+        now = _now_local()
+        if args.action == "write":
+            day = date.fromisoformat(args.day) if args.day else now.date() - timedelta(days=1)
+            print(journal.write(mem, day, now.tzinfo))
+        else:
+            rows = [mem.journal(args.day)] if args.day else mem.recent_journal(1)
+            rows = [r for r in rows if r]
+            if not rows:
+                sys.exit("No journal entry yet (it's written after 2am for the previous day)")
+            r = rows[0]
+            print(f"{r['day']}\n\n{r['entry']}\n\nOpen loops: {json.loads(r['open_loops']) or 'none'}")
+        return
+    if args.cmd == "rhythm":
+        from jarvis import rhythm
+        from jarvis.canvas import format_digest
+        from jarvis.voice import Announcer, user_present
+        now = _now_local()
+        mem.set_kv(f"rhythm_{args.kind}", "")  # allow re-sending for testing
+        mem.set_kv(f"rhythm_{args.kind}_attempt", "")
+        hour = config.MORNING_HOUR if args.kind == "morning" else config.EVENING_HOUR
+        fake_now = now.replace(hour=hour, minute=5)
+        sent = rhythm.maybe_check_in(mem, fake_now, Announcer(_messenger(), mem), True,
+                                     format_digest(_deadlines(mem, now), now, days=2))
+        print(f"sent {sent}" if sent else "nothing sent (quiet hours or RHYTHM=0)")
         return
     if args.cmd == "attention":
         if args.action == "log":
