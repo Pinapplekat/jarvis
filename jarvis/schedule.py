@@ -18,15 +18,16 @@ PROJECT = Path.home() / "Library/Application Support/JARVIS/app"
 COPY_EXCLUDES = [".git", ".venv", ".venv.nosync", "__pycache__", ".pytest_cache", "data"]
 LOG_DIR = Path.home() / "Library/Logs/JARVIS"
 AGENTS = Path.home() / "Library/LaunchAgents"
-TICK, LISTEN = "com.jarvis.tick", "com.jarvis.listen"
+TICK, LISTEN, WATCH = "com.jarvis.tick", "com.jarvis.listen", "com.jarvis.watch"
 LOG = LOG_DIR / "tick.log"
 
 
-def _plist(label: str, uv: str, command: str, interval: int | None) -> dict:
+def _plist(label: str, uv: str, command: str, interval: int | None, launcher: str | None = None) -> dict:
     path_dirs = [str(Path(uv).parent), str(Path.home() / ".local/bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+    args = [uv, "run", "--project", str(PROJECT), "-q", "jarvis", command]
     plist = {
         "Label": label,
-        "ProgramArguments": [uv, "run", "--project", str(PROJECT), "-q", "jarvis", command],
+        "ProgramArguments": ([launcher] if launcher else []) + args,
         "WorkingDirectory": str(PROJECT),
         "EnvironmentVariables": {"PATH": ":".join(dict.fromkeys(path_dirs)), "PYTHONUNBUFFERED": "1"},
         "RunAtLoad": True,
@@ -84,7 +85,7 @@ def deploy(uv: str) -> None:
     subprocess.run([uv, "sync", "-q", "--project", str(PROJECT)], check=True)
 
 
-def install(interval: int = 300, listen: bool = True) -> None:
+def install(interval: int = 300, listen: bool = True, watch: bool = True) -> None:
     uv = shutil.which("uv")
     if not uv:
         raise SystemExit("uv not found on PATH")
@@ -95,11 +96,17 @@ def install(interval: int = 300, listen: bool = True) -> None:
     _load(TICK, _plist(TICK, uv, "tick", interval))
     if listen:
         _load(LISTEN, _plist(LISTEN, uv, "listen", None))
+    if watch:
+        from jarvis import launcher
+        launcher.build()  # the watcher runs inside "JARVIS Senses.app" for Screen Recording
+        _load(WATCH, _plist(WATCH, uv, "watch", None, launcher=str(launcher.EXECUTABLE)))
+    else:
+        _unload(WATCH)
 
 
 def uninstall() -> bool:
     removed = False
-    for label in (TICK, LISTEN):
+    for label in (TICK, LISTEN, WATCH):
         removed |= _unload(label)
         (AGENTS / f"{label}.plist").unlink(missing_ok=True)
     return removed
@@ -112,7 +119,7 @@ def run_now() -> None:
 def status(log_lines: int = 5) -> str:
     keep = ("state =", "run interval", "last exit code", "runs =", "pid =")
     out = []
-    for label, command in ((TICK, "tick"), (LISTEN, "listen")):
+    for label, command in ((TICK, "tick"), (LISTEN, "listen"), (WATCH, "watch")):
         if not is_loaded(label):
             out.append(f"{command}: not installed (jarvis schedule install)")
             continue

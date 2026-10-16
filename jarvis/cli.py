@@ -90,6 +90,11 @@ def _inbox_text() -> str:
     return inbox_for_prompt(*fetch_inbox_headers(config.MAIL_ACCOUNT, limit=15, timeout=10))
 
 
+def _activity(mem: Memory) -> str:
+    from jarvis.watch import recent_activity
+    return recent_activity(mem, 30)
+
+
 def _listen(mem: Memory) -> None:
     """Stay connected to Telegram: handle Approve/Reject at once and chat with the user."""
     import time
@@ -111,7 +116,7 @@ def _listen(mem: Memory) -> None:
         except Exception:  # feed down: answer from stored deadlines rather than not at all
             deadlines = from_memory(mem)
         reply = respond(mem, update.text, now, format_digest(deadlines, now, days=14),
-                        on_progress=tg.typing, inbox_text=_inbox_text())
+                        on_progress=tg.typing, inbox_text=_inbox_text(), activity_text=_activity(mem))
         tg.send(reply)
         notify_pending(mem, tg)  # drafts made in this chat get their buttons right away
         if mem.self_edits("drafting"):
@@ -256,6 +261,10 @@ def main() -> None:
     ask = sub.add_parser("ask", help="Ask JARVIS something from the terminal (same brain as Telegram)")
     ask.add_argument("message")
     sub.add_parser("call-test", help="Call yourself once to check Twilio voice")
+    wa = sub.add_parser("watch", help="JARVIS's senses: screen text, terminal, git (runs in the background)")
+    wa.add_argument("action", nargs="?", default="run",
+                    choices=["run", "once", "timeline", "install-shell-hook", "status"])
+    wa.add_argument("--minutes", type=int, default=30, help="for timeline")
     sy = sub.add_parser("say", help="Speak text in JARVIS's voice (ignores presence and quiet hours)")
     sy.add_argument("text")
 
@@ -310,9 +319,9 @@ def main() -> None:
         from jarvis import schedule
         if args.action == "install":
             listen = bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
-            schedule.install(args.minutes * 60, listen=listen)
+            schedule.install(args.minutes * 60, listen=listen, watch=config.WATCH)
             print(f"tick: every {args.minutes} min. listen: {'always on' if listen else 'skipped (Telegram not set up)'}."
-                  f" Logs: {schedule.LOG_DIR}")
+                  f" watch: {'on' if config.WATCH else 'off'}. Logs: {schedule.LOG_DIR}")
         elif args.action == "uninstall":
             print("Removed" if schedule.uninstall() else "Wasn't scheduled")
         elif args.action == "run-now":
@@ -415,6 +424,26 @@ def main() -> None:
     if args.cmd == "listen":
         _listen(mem)
         return
+    if args.cmd == "watch":
+        from jarvis import terminal, watch
+        if args.action == "run":
+            watch.Watcher(mem, log=lambda s: print(s, flush=True)).run_forever()
+        elif args.action == "once":
+            w = watch.Watcher(mem)
+            print("look:", w.look(__import__("time").time()))
+            print("housekeeping:", w.housekeeping(__import__("time").time()) or "nothing new")
+        elif args.action == "timeline":
+            print(watch.recent_activity(mem, args.minutes))
+        elif args.action == "install-shell-hook":
+            print(terminal.install_hook())
+        elif args.action == "status":
+            from datetime import datetime, timedelta, timezone
+            from jarvis.repos import known_repos
+            day = mem.observations(datetime.now(timezone.utc) - timedelta(hours=24))
+            counts = {s: sum(o["source"] == s for o in day) for s in ("screen", "terminal", "git")}
+            print(f"last 24h: {counts}; repos known: {len(known_repos(mem))}; "
+                  f"terminal hook: {'installed' if terminal.hook_installed() else 'not installed'}")
+        return
     if args.cmd == "plans":
         from jarvis.plans import PLANS_DIR
         if args.action == "list":
@@ -444,7 +473,7 @@ def main() -> None:
         from jarvis.chat import respond
         now = _now_local()
         print(respond(mem, args.message, now, format_digest(_deadlines(mem, now), now, days=14),
-                      inbox_text=_inbox_text()))
+                      inbox_text=_inbox_text(), activity_text=_activity(mem)))
         return
     if args.cmd == "tick":
         import fcntl

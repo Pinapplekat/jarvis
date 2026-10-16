@@ -94,6 +94,17 @@ CREATE TABLE IF NOT EXISTS self_edits (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS observations (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    source TEXT NOT NULL,            -- screen | terminal | git
+    app TEXT,
+    title TEXT,
+    project TEXT,                    -- repo name when it can be told
+    text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS observations_at ON observations(at);
+
 CREATE TABLE IF NOT EXISTS seen_mail (
     key TEXT PRIMARY KEY,            -- account:message id
     at TEXT NOT NULL
@@ -305,6 +316,29 @@ class Memory:
         cur = self.db.execute(sql, params)
         self.db.commit()
         return cur.rowcount > 0
+
+    def observe(self, source: str, text: str, app: str | None = None, title: str | None = None,
+                project: str | None = None, at: datetime | None = None) -> None:
+        stamp = (at or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(timespec="seconds")
+        self.db.execute(
+            "INSERT INTO observations (at, source, app, title, project, text) VALUES (?, ?, ?, ?, ?, ?)",
+            (stamp, source, app, title, project, text),
+        )
+        self.db.commit()
+
+    def observations(self, since: datetime, source: str | None = None) -> list[sqlite3.Row]:
+        sql, params = "SELECT * FROM observations WHERE at >= ?", [
+            since.astimezone(timezone.utc).isoformat(timespec="seconds")]
+        if source:
+            sql += " AND source = ?"
+            params.append(source)
+        return self.db.execute(sql + " ORDER BY id", params).fetchall()
+
+    def prune_observations(self, older_than: timedelta) -> int:
+        cutoff = (datetime.now(timezone.utc) - older_than).isoformat(timespec="seconds")
+        cur = self.db.execute("DELETE FROM observations WHERE at < ?", (cutoff,))
+        self.db.commit()
+        return cur.rowcount
 
     def mail_seen(self, key: str) -> bool:
         return self.db.execute("SELECT 1 FROM seen_mail WHERE key = ?", (key,)).fetchone() is not None

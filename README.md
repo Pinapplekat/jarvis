@@ -130,6 +130,18 @@ To turn it on yourself (from this folder):
 
 To turn it off: remove `JARVIS_REPO` from `.env` and run `uv run jarvis schedule install`.
 
+## Watching (senses)
+
+`jarvis watch` (a background job) builds a local timeline while you're at the Mac:
+- **Screen:** about every 30–60 s while you're active, the *front window only* is captured, its text read on-device with Apple Vision, and the image deleted at once. Only changed text is stored (max 4,000 characters).
+- **Never read:** Messages (iMessage), password managers, banking apps, and windows whose title looks like a bank, payment or sign-in page. Add more with `WATCH_EXCLUDE_APPS` / `WATCH_EXCLUDE_TITLES`.
+- **Terminal:** with the zsh hook installed (`jarvis watch install-shell-hook`, which adds one `source` line to `~/.zshrc`), each command's folder, exit code and duration is logged.
+- **Git:** repos are found under `WATCH_ROOTS` (home and iCloud Drive); new commits and branch switches are noted.
+- **Redaction:** things that look like secrets (`*_KEY=`, `password:`, long tokens) are scrubbed before storing.
+- **Storage:** observations live in the local database for `WATCH_RETENTION_DAYS` (7). Chat sees the last 30 minutes plus your current screen's text, so "what's this error?" works. That part goes to Claude when you chat.
+
+Needs **Screen Recording** permission for **JARVIS Senses** (System Settings → Privacy & Security → Screen & System Audio Recording → + → `~/Applications/JARVIS Senses.app`). That's a tiny signed launcher app that the watch job runs under, because macOS won't reliably list a bare Python. It's only rebuilt when its source changes, since a rebuild would reset the permission. `jarvis watch status` shows what's being collected, `jarvis watch timeline` shows the last 30 minutes, and `WATCH=0` plus `jarvis schedule install` turns it off.
+
 ## Running automatically
 
 ```bash

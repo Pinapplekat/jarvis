@@ -12,6 +12,16 @@ TOKEN_CACHE_PATH = DATA_DIR / "token_cache.json"
 
 MAIL_ACCOUNT = os.getenv("MAIL_ACCOUNT", "")
 
+# Watching (screen text, terminal, git). Text only, kept locally for WATCH_RETENTION_DAYS.
+WATCH = os.getenv("WATCH", "1") == "1"
+WATCH_INTERVAL = int(os.getenv("WATCH_INTERVAL", "30"))        # seconds between looks
+WATCH_RECAPTURE = int(os.getenv("WATCH_RECAPTURE", "60"))      # re-read same window at most this often
+WATCH_MAX_CHARS = int(os.getenv("WATCH_MAX_CHARS", "4000"))
+WATCH_RETENTION_DAYS = int(os.getenv("WATCH_RETENTION_DAYS", "7"))
+WATCH_EXCLUDE_APPS = os.getenv("WATCH_EXCLUDE_APPS", "")       # extra, comma-separated
+WATCH_EXCLUDE_TITLES = os.getenv("WATCH_EXCLUDE_TITLES", "")   # extra title words, comma-separated
+WATCH_ROOTS = os.getenv("WATCH_ROOTS", "~,~/Library/Mobile Documents/com~apple~CloudDocs")
+
 # Speaking out loud on the Mac when you're at it (keyboard/mouse used in the last N seconds)
 VOICE = os.getenv("VOICE", "1") == "1"
 VOICE_NAME = os.getenv("VOICE_NAME", "Daniel")
