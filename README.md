@@ -146,7 +146,8 @@ Needs **Screen Recording** permission for **JARVIS Senses** (System Settings →
 
 The watch loop also decides when JARVIS should speak up unprompted:
 - **Stuck triggers** (cheap rules, no AI): the same terminal command failing 3+ times in 10 min, 4+ failing commands, or error output on screen 3+ times in 10 min. These cause an immediate review (at most every 10 min).
-- **Periodic reviews:** every `ATTENTION_REVIEW_MINUTES` (10) of new activity.
+- **Quick checks (with Jev):** whenever new screen, terminal or git activity was observed, at most every `ATTENTION_QUICK_SECONDS` (45), Jev answers the speak/kind/urgency questions about the last 10 minutes in about 0.2 s. Quiet answers are only counted, not logged; a yes goes through the full rules below. They're skipped during quiet hours or once the daily limit is reached. Cost is a few dollars a month at most. `ATTENTION_QUICK=0` turns them off.
+- **Periodic reviews** (without Jev): every `ATTENTION_REVIEW_MINUTES` (10) of new activity.
 - **Decision layer** (`jarvis/judge.py`): a situation plus typed questions (speak? stuck_help / heads_up / none? urgency 0–1), answered with confidence. The engine is `JUDGE_ENGINE` (`claude` with `JUDGE_MODEL=haiku` now; Jev or a local Mac mini model later, same interface).
 - **Rules:** speak if confidence ≥ `ATTENTION_THRESHOLD` (0.75), or ≥ `ATTENTION_STUCK_THRESHOLD` (0.5) when stuck rules fired. At most `ATTENTION_DAILY_LIMIT` (8) per day, `ATTENTION_MIN_GAP_MINUTES` (15) apart unless urgency ≥ 0.9, never in quiet hours, only while you're active.
 - **What it says:** Claude writes one short spoken line (said aloud) and a Telegram version with the specific fix.
@@ -167,9 +168,13 @@ Speech is handled on-device: Whisper (`faster-whisper`, model `WHISPER_MODEL`, d
 - **On walks (Telegram voice notes):** hold the mic in the bot chat and talk. JARVIS transcribes the note, answers with full context, and replies with a voice note in Daniel's voice, with the text as the caption. Spoken "yes 3" approvals work too. Voice notes from anyone else are never downloaded.
 - **At the desk ("Hey Jarvis"):** `jarvis ears` (a background job under the tiny **JARVIS Ears** app, which holds Microphone permission) listens for the wake word with openWakeWord. After a chime, speak; it stops when you pause, then JARVIS answers out loud. For `FOLLOW_UP_SECONDS` (6) afterwards you can just keep talking. A "pop" means it didn't catch you. The mic is ignored while JARVIS speaks. If it wakes by mistake, raise `WAKE_THRESHOLD` (0.6). `EARS=0` turns it off. The startup log line "mic check" shows whether macOS is allowing the mic.
 
-### Warm Claude session (faster replies)
+### Fast replies (models, warm session, streaming)
 
-Starting `claude -p` for each message cost about 2–3.5 s before Claude even began thinking. The Telegram listener and the "Hey Jarvis" listener each keep one **persistent session** instead (stream-json mode), so replies typically take 2–5 s instead of 5–8; what's left is Claude generating the answer. Each message still carries its own fresh context. A session retires after 12 messages or 2 hours idle, and the next one warms up just before the swap. Only one runs per listener at a time, about 170 MB each, because RAM is tight. If a session dies or stalls, that message falls back to a normal one-off call (logged as `warm_fallback`). Turn it off with `WARM_CLAUDE=0`.
+- **Two models:** quick replies use `JARVIS_MODEL` (default `haiku`), kept warm in a persistent session, typically **~2 s**. Heavier requests use `JARVIS_HEAVY_MODEL` (default `sonnet`) as a streamed one-off call, ~5–6 s: drafting email, planning, debugging, multi-step reasoning, long answers. Jev decides which, in the same call as context routing (or a keyword check without Jev). `JARVIS_MODEL_ROUTING=fast|heavy` forces one. Background writing (journal, briefs, plans, check-ins, interjections) stays on the heavy model.
+- **First sentence early:** replies stream. At the desk JARVIS starts speaking the first sentence while the rest is written. In Telegram the first sentence is sent right away and the message is then edited into the full reply. Actions are only checked and carried out once the full reply has arrived.
+- **Warm session:** saves the 2–3.5 s it takes to start `claude -p`. It retires after 12 messages or 2 hours idle, and a spare warms up just before. One per listener (about 170 MB each) to keep RAM in check. On failure a message falls back to a one-off call (`warm_fallback`). `WARM_CLAUDE=0` turns it off.
+- **Cached inputs:** chat uses tick's copies of the inbox snapshot and the Canvas feed (up to 10 min old), so no reply waits on Mail or the network.
+- **Measure it:** `jarvis latency` shows median and slowest reply times and time to first sentence, per model. Only timings and choices are logged, never your message text.
 
 ## Jev (fast decisions)
 

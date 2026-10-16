@@ -30,6 +30,40 @@ def fake_claude(tmp_path):
     return lambda *extra: (lambda: [sys.executable, str(script), *extra])
 
 
+def test_partial_reply_decodes_streaming_json():
+    from jarvis.warm import partial_reply
+    assert partial_reply('{"rep') == ""
+    assert partial_reply('{"reply": "Two thi') == "Two thi"
+    assert partial_reply('{"reply": "Line one.\\nLine \\"two\\"') == 'Line one.\nLine "two"'
+    assert partial_reply('{"reply": "Cut \\') == "Cut "          # escape split across chunks
+    assert partial_reply('{"reply": "Caf\\u00e9 done", "act') == "Café done"
+
+
+STREAMING_FAKE = textwrap.dedent("""
+    import json, sys
+    for line in sys.stdin:
+        reply = {"reply": "Two things, sir. Econ Sunday.", "actions": []}
+        text = json.dumps(reply)
+        for i in range(0, len(text), 7):
+            delta = {"type": "input_json_delta", "partial_json": text[i:i + 7]}
+            print(json.dumps({"type": "stream_event", "event": {"type": "content_block_delta", "delta": delta}}), flush=True)
+        print(json.dumps({"type": "result", "is_error": False, "structured_output": reply}), flush=True)
+""")
+
+
+def test_streaming_text_reaches_callback(tmp_path):
+    script = tmp_path / "stream_claude.py"
+    script.write_text(STREAMING_FAKE)
+    w = WarmClaude("sys", {}, argv_for=lambda: [sys.executable, str(script)])
+    seen = []
+    try:
+        out = w.run("s", "hi", on_text=seen.append)
+    finally:
+        w.close()
+    assert out["reply"] == "Two things, sir. Econ Sunday."
+    assert seen[-1] == "Two things, sir. Econ Sunday." and len(seen) > 2 and seen[0] != seen[-1]
+
+
 def test_session_answers_and_counts_turns(fake_claude):
     w = WarmClaude("sys", {}, argv_for=fake_claude())
     try:

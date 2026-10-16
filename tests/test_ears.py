@@ -46,7 +46,7 @@ class FakeStream:
 
 def make(chunks, heard="what's due this week", monkeypatch=None):
     played, spoken, answered = [], [], []
-    ears = Ears(answer=lambda t: answered.append(t) or "Econ on Sunday, sir.",
+    ears = Ears(answer=lambda t, on_first=None: answered.append(t) or "Econ on Sunday, sir.",
                 transcribe=lambda audio: heard, log=lambda s: None,
                 speak=spoken.append, play=played.append)
     ears.noise.extend([0.002] * 10)
@@ -68,6 +68,32 @@ def test_follow_up_without_wake_word(monkeypatch):
     ears, stream, played, spoken, answered = make(turn + [SILENT] * 3 + turn)
     ears.converse(stream)
     assert len(answered) == 2 and len(spoken) == 2
+
+
+class FakeSpeech:
+    def __init__(self, log):
+        self.log = log
+
+    def wait(self):
+        self.log.append("waited")
+
+
+def test_first_sentence_spoken_early_then_the_rest(monkeypatch):
+    monkeypatch.setattr(config, "FOLLOW_UP_SECONDS", 1)
+    events = []
+
+    def answer(text, on_first=None):
+        on_first("Two things, sir.")
+        events.append("answer done")
+        return "Two things, sir. Econ on Sunday and English on Monday."
+
+    ears = Ears(answer=answer, transcribe=lambda a: "what's due", log=lambda s: None,
+                speak=lambda t: events.append(f"say:{t}"), play=lambda p: None,
+                speak_async=lambda t: events.append(f"early:{t}") or FakeSpeech(events))
+    ears.noise.extend([0.002] * 10)
+    ears.converse(FakeStream([LOUD] * 8 + [SILENT] * 14))
+    assert events == ["early:Two things, sir.", "answer done", "waited",
+                      "say:Econ on Sunday and English on Monday."]
 
 
 def test_wake_with_no_speech_or_garbled_speech_pops():

@@ -141,6 +141,34 @@ def test_inbox_block_is_in_prompt():
     assert "(not checked)" in build_prompt(m, "hi", NOW, "")
 
 
+def test_first_sentence_and_remainder():
+    from jarvis.chat import FirstSentence, remainder
+    got = []
+    fs = FirstSentence(got.append)
+    for partial in ["Two", "Two things, sir", "Two things, sir.", "Two things, sir. Econ", "Two things, sir. Econ Sunday."]:
+        fs.feed(partial)
+    assert got == ["Two things, sir."]  # fired once, only after the sentence was clearly over
+    fs2 = FirstSentence(got.append)
+    fs2.feed("It's 3.5 hours away. Then")  # a decimal point isn't a sentence end
+    assert got[-1] == "It's 3.5 hours away."
+    assert remainder("Two things, sir. Econ Sunday.", "Two things, sir.") == "Econ Sunday."
+    assert remainder("Done, sir.", "Done, sir.") == ""
+    assert remainder("Checked the page: nothing new.", "Checking, sir.") is None
+    assert remainder("anything", None) is None
+
+
+def test_streaming_only_on_first_round():
+    m, seen = Memory(":memory:"), []
+
+    def run(system, prompt, on_text=None):
+        seen.append(on_text is not None)
+        if len(seen) == 1:
+            return {"reply": "checking", "actions": [{"type": "open_url", "url": "https://a.test"}]}
+        return {"reply": "Done.", "actions": []}
+    respond(m, "look", NOW, "", runner=run, fetcher=lambda u: Page(u, text="x"), on_text=lambda t: None)
+    assert seen == [True, False]
+
+
 def test_find_urls():
     assert find_urls("see https://a.test/x, and (http://b.test/y). https://a.test/x") == [
         "https://a.test/x", "http://b.test/y"]

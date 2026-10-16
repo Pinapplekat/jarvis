@@ -143,6 +143,70 @@ def test_quiet_hours_block(monkeypatch):
     assert a.announcer.sent == []
 
 
+def make_quick(m, clock, fast_answer):
+    calls = []
+
+    def fast(state, questions):
+        calls.append(state)
+        return fast_answer
+    a = Attention(m, engine(), FakeAnnouncer(), mind=mind, now=lambda: clock[0], fast=fast)
+    return a, calls
+
+
+QUIET = {"speak": Answer(False, 0.9), "kind": Answer("none", 0.9), "urgency": Answer(0.0, 0.9)}
+HELP = {"speak": Answer(True, 0.85), "kind": Answer("heads_up", 0.8), "urgency": Answer(0.4, 0.8)}
+
+
+def test_quick_checks_follow_new_activity_at_most_every_interval(monkeypatch):
+    monkeypatch.setattr(config, "ATTENTION_QUICK", True)
+    monkeypatch.setattr(config, "ATTENTION_QUICK_SECONDS", 45)
+    m, clock = Memory(":memory:"), [NOON]
+    a, calls = make_quick(m, clock, QUIET)
+    assert a.maybe_review(active=True) is None and calls == []      # nothing observed yet
+    m.observe("screen", "editing cart.py", app="Code", at=NOON)
+    assert a.maybe_review(active=True) is None and len(calls) == 1  # looked, stayed quiet
+    clock[0] = NOON + timedelta(seconds=20)
+    m.observe("screen", "more edits", app="Code", at=clock[0])
+    assert a.maybe_review(active=True) is None and len(calls) == 1  # too soon
+    clock[0] = NOON + timedelta(seconds=50)
+    assert a.maybe_review(active=True) is None and len(calls) == 2
+    clock[0] = NOON + timedelta(seconds=100)
+    assert a.maybe_review(active=True) is None and len(calls) == 2  # nothing new since last look
+    assert m.recent_judgments() == []                                 # quiet glances aren't logged
+    assert m.get_kv(f"attention_quick_{NOON.astimezone().date().isoformat()}") == "2"
+
+
+def test_quick_yes_speaks_through_the_normal_rules(monkeypatch):
+    monkeypatch.setattr(config, "ATTENTION_QUICK", True)
+    m, clock = Memory(":memory:"), [NOON]
+    a, calls = make_quick(m, clock, HELP)
+    m.observe("screen", "deploy failed: missing env var STRIPE_KEY", app="Terminal", at=NOON)
+    assert a.maybe_review(active=True) == "spoke (heads_up, 0.85)"
+    assert a.announcer.sent and m.recent_judgments()[0]["trigger"] == "quick"
+    clock[0] = NOON + timedelta(minutes=2)
+    m.observe("screen", "still failing", app="Terminal", at=clock[0])
+    assert a.maybe_review(active=True).startswith("stayed quiet (spoke too recently")
+
+
+def test_quick_checks_skipped_when_speaking_is_impossible(monkeypatch):
+    monkeypatch.setattr(config, "ATTENTION_QUICK", True)
+    monkeypatch.setattr(config, "ATTENTION_DAILY_LIMIT", 0)
+    m, clock = Memory(":memory:"), [NOON]
+    a, calls = make_quick(m, clock, HELP)
+    m.observe("screen", "x", app="Code", at=NOON)
+    assert a.maybe_review(active=True) is None and calls == []
+
+
+def test_stuck_still_reviews_immediately_with_quick_mode(monkeypatch):
+    monkeypatch.setattr(config, "ATTENTION_QUICK", True)
+    m, clock = Memory(":memory:"), [NOON]
+    a, calls = make_quick(m, clock, QUIET)
+    for t in (8, 5, 2):
+        fail(m, "pytest", t)
+    assert a.maybe_review(active=True).startswith("spoke (stuck_help")
+    assert calls == []  # stuck path used the full review, not a glance
+
+
 def test_claude_engine_parses_typed_answers():
     seen = {}
 

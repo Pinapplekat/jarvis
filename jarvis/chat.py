@@ -6,9 +6,11 @@ actions itself, and email is only ever queued as a draft for the user to approve
 """
 
 import json
+import re
 import shutil
 import sqlite3
 import subprocess
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
@@ -141,7 +143,8 @@ def run_claude(system: str, prompt: str, schema: dict = REPLY_SCHEMA, model: str
     """One locked-down Claude call: no tools, no MCP servers, no user settings, JSON out."""
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     r = subprocess.run(
-        [find_claude(), "-p", "--model", model or config.JARVIS_MODEL,
+        # Background writing (journal, briefs, plans, check-ins) defaults to the heavy model.
+        [find_claude(), "-p", "--model", model or config.JARVIS_HEAVY_MODEL,
          "--tools", "", "--strict-mcp-config", "--setting-sources", "",
          "--no-session-persistence", "--system-prompt", system,
          "--json-schema", json.dumps(schema), "--output-format", "json"],
@@ -265,10 +268,37 @@ def apply_actions(mem: Memory, actions: list[dict], tz) -> list[str]:
     return problems
 
 
+class FirstSentence:
+    """Feed it the streaming reply text; it calls on_first once, as soon as the first full
+    sentence is available (so JARVIS can start speaking or sending while it writes the rest)."""
+    END = re.compile(r"^(.{8,}?[.!?])(?=\s)", re.S)
+
+    def __init__(self, on_first: Callable[[str], None]):
+        self.on_first, self.sentence, self.at = on_first, None, None
+
+    def feed(self, text_so_far: str) -> None:
+        if self.sentence is None and (m := self.END.match(text_so_far)):
+            self.sentence, self.at = m[1].strip(), time.time()
+            self.on_first(self.sentence)
+
+
+def remainder(reply: str, first: str | None) -> str | None:
+    """What's left to deliver after `first` went out early: the rest of the reply, '' if
+    nothing's left, or None if the final reply doesn't start with it (deliver it all)."""
+    if not first:
+        return None
+    if reply.startswith(first):
+        return reply[len(first):].strip()
+    return None
+
+
 def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             runner: Runner = run_claude, fetcher: Callable[[str], Page] = fetch_page,
             on_progress: Callable[[], None] = lambda: None, inbox_text: str = "(not checked)",
-            activity_text: str = "(not observed)", blocks: frozenset[str] | None = None) -> str:
+            activity_text: str = "(not observed)", blocks: frozenset[str] | None = None,
+            on_text: Callable[[str], None] | None = None) -> str:
+    """`on_text` (optional) receives the reply text as it streams, first round only; actions
+    are still only applied once the complete reply has arrived."""
     """Answer one message: open any links, ask Claude (letting it open more pages for a
     few rounds), apply its final actions, and record the exchange."""
     mem.add_chat("user", message)
@@ -285,8 +315,9 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
     try:
         open_urls(find_urls(message))
         for round_ in range(MAX_ROUNDS):
+            stream = {"on_text": on_text} if on_text and round_ == 0 else {}
             out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
-                                                          activity_text, blocks))
+                                                          activity_text, blocks), **stream)
             wanted = [str(a.get("url", "")) for a in out.get("actions") or [] if a.get("type") == "open_url"]
             before = len(requested)
             if wanted and round_ < MAX_ROUNDS - 1:

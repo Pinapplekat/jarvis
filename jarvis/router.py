@@ -1,8 +1,13 @@
-"""Decide which context a chat message needs, so JARVIS doesn't gather (or send Claude)
-everything every time. One fast Jev call with yes/no questions; it leans toward including
-a block, since a missing block hurts more than an extra one. Without a fast engine, or if
-it fails, every block is included (the old behavior)."""
+"""Before each chat message, decide (1) which context it needs, so JARVIS doesn't gather or
+send everything every time, and (2) whether it needs the heavy model (Sonnet) or the quick
+one (Haiku). One fast Jev call answers both; it leans toward including context, since a
+missing block hurts more than an extra one. Without Jev, every block is included and a
+keyword check picks the model."""
 
+import re
+from dataclasses import dataclass
+
+from jarvis import config
 from jarvis.judge import Engine, Question
 
 BLOCKS = {
@@ -14,24 +19,48 @@ BLOCKS = {
     "journal": "Does this refer to earlier days, his week so far, or things that happened before "
                "this conversation?",
 }
+HEAVY_ASK = ("Does this need careful, substantial work: drafting or rewriting an email or document, "
+             "planning, debugging code or an error, multi-step reasoning, or a long detailed answer? "
+             "(Small talk, quick facts, confirmations, reminders and short questions do not.)")
+HEAVY_WORDS = re.compile(
+    r"\b(email|e-mail|draft|write|rewrite|plan|planning|debug|error|traceback|exception|fix|why|explain|"
+    r"essay|outline|compare|research|analy[sz]e|code|bug|stack ?trace)\b|https?://", re.IGNORECASE)
 INCLUDE_AT = 0.3   # probability of "yes" above which a block is included
+HEAVY_AT = 0.5
 ALL = frozenset(BLOCKS)
 
 
-def route(message: str, recent: list[str], fast: Engine | None, on_error=None) -> frozenset[str]:
-    """Return the names of the context blocks to include for this message."""
+@dataclass(frozen=True)
+class Route:
+    blocks: frozenset[str]
+    heavy: bool
+    how: str  # "jev" | "keywords" (no Jev, or it failed)
+
+
+def _p_yes(answer) -> float:
+    return answer.confidence if answer.value else 1 - answer.confidence
+
+
+def heavy_by_keywords(message: str) -> bool:
+    return len(message) > 280 or bool(HEAVY_WORDS.search(message))
+
+
+def route(message: str, recent: list[str], fast: Engine | None, on_error=None) -> Route:
+    forced = config.JARVIS_MODEL_ROUTING
+    def finish(blocks, heavy, how):
+        if forced in ("fast", "heavy"):
+            heavy = forced == "heavy"
+        return Route(frozenset(blocks), heavy, how)
+
     if fast is None:
-        return ALL
+        return finish(ALL, heavy_by_keywords(message), "keywords")
     state = "Recent conversation:\n" + ("\n".join(recent[-4:]) or "(none)") + f"\n\nNew message from Elijah:\n{message}"
+    questions = [Question(k, ask) for k, ask in BLOCKS.items()] + [Question("heavy", HEAVY_ASK)]
     try:
-        answers = fast(state, [Question(k, ask) for k, ask in BLOCKS.items()])
+        answers = fast(state, questions)
     except Exception as e:
         if on_error:
             on_error(e)
-        return ALL
-    picked = set()
-    for key, answer in answers.items():
-        p_yes = answer.confidence if answer.value else 1 - answer.confidence
-        if p_yes >= INCLUDE_AT:
-            picked.add(key)
-    return frozenset(picked)
+        return finish(ALL, heavy_by_keywords(message), "keywords")
+    blocks = {k for k in BLOCKS if _p_yes(answers[k]) >= INCLUDE_AT}
+    return finish(blocks, _p_yes(answers["heavy"]) >= HEAVY_AT, "jev")

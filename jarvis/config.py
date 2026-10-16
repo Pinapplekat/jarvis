@@ -28,6 +28,8 @@ JUDGE_ENGINE = os.getenv("JUDGE_ENGINE", "auto")              # auto (Jev if key
 TYPESAFE_API_KEY = os.getenv("TYPESAFE_API_KEY", "")
 JEV_MODEL = os.getenv("JEV_MODEL", "jev-latest")
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "haiku")
+ATTENTION_QUICK = os.getenv("ATTENTION_QUICK", "1") == "1"          # Jev glance on each change
+ATTENTION_QUICK_SECONDS = int(os.getenv("ATTENTION_QUICK_SECONDS", "45"))
 ATTENTION_REVIEW_MINUTES = int(os.getenv("ATTENTION_REVIEW_MINUTES", "10"))
 ATTENTION_THRESHOLD = float(os.getenv("ATTENTION_THRESHOLD", "0.75"))  # confidence needed to speak
 ATTENTION_STUCK_THRESHOLD = float(os.getenv("ATTENTION_STUCK_THRESHOLD", "0.5"))  # when stuck rules fired
@@ -64,7 +66,9 @@ CANVAS_ICS_URL = os.getenv("CANVAS_ICS_URL", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # Model for Telegram chat, run through the local Claude Code CLI (uses your Claude subscription)
-JARVIS_MODEL = os.getenv("JARVIS_MODEL", "sonnet")
+JARVIS_MODEL = os.getenv("JARVIS_MODEL", "haiku")              # quick chat replies (kept warm)
+JARVIS_HEAVY_MODEL = os.getenv("JARVIS_HEAVY_MODEL", "sonnet")  # drafting, planning, debugging; background writing
+JARVIS_MODEL_ROUTING = os.getenv("JARVIS_MODEL_ROUTING", "auto")  # auto | fast | heavy
 WARM_CLAUDE = os.getenv("WARM_CLAUDE", "1") == "1"  # keep a persistent chat session (≈3x faster replies)
 
 # Self-editing: the git repo JARVIS improves (your project folder), the model that writes

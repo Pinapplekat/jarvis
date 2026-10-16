@@ -92,15 +92,31 @@ def routed(yes: set[str]):
 
 
 def test_router_picks_blocks_and_falls_back_to_all():
-    assert router.route("what's due?", [], None) == router.ALL
-    assert router.route("what's due?", [], routed({"deadlines"})) == {"deadlines"}
+    assert router.route("what's due?", [], None).blocks == router.ALL
+    r = router.route("what's due?", [], routed({"deadlines"}))
+    assert r.blocks == {"deadlines"} and not r.heavy and r.how == "jev"
     unsure = lambda s, qs: {q.key: Answer(False, 0.6) for q in qs}  # noqa: E731  (40% yes: include)
-    assert router.route("hmm", [], unsure) == router.ALL
+    assert router.route("hmm", [], unsure).blocks == router.ALL
 
     def broken(s, qs):
         raise JevError("down")
     errors = []
-    assert router.route("x", [], broken, errors.append) == router.ALL and errors
+    r = router.route("x", [], broken, errors.append)
+    assert r.blocks == router.ALL and r.how == "keywords" and errors
+
+
+def test_model_choice(monkeypatch):
+    monkeypatch.setattr(config, "JARVIS_MODEL_ROUTING", "auto")
+    assert router.route("draft an email to prof", [], routed({"heavy"})).heavy
+    assert not router.route("thanks", [], routed(set())).heavy
+    # without Jev: keywords and length
+    assert router.route("why does this traceback happen?", [], None).heavy
+    assert router.route("x" * 400, [], None).heavy
+    assert not router.route("remind me at 9 to call mom", [], None).heavy
+    monkeypatch.setattr(config, "JARVIS_MODEL_ROUTING", "heavy")
+    assert router.route("thanks", [], routed(set())).heavy
+    monkeypatch.setattr(config, "JARVIS_MODEL_ROUTING", "fast")
+    assert not router.route("draft an email", [], routed({"heavy"})).heavy
 
 
 def test_prompt_skips_unrouted_blocks():
@@ -113,3 +129,15 @@ def test_prompt_skips_unrouted_blocks():
                         blocks=frozenset({"deadlines"}))
     assert "Sun: Econ" in slim and "INBOX-HEADERS" not in slim and "SCREEN-TEXT" not in slim
     assert "Built voice." not in slim and slim.count(SKIPPED) >= 4
+
+
+def test_latency_summary():
+    from jarvis.cli import latency_summary
+    lines = ["2.1s total, first sentence 1.0s, route 0.20s (jev), context 0.01s, model haiku warm, blocks: journal",
+             "3.1s total, first sentence 1.4s, route 0.20s (jev), context 0.50s, model haiku warm, blocks: deadlines",
+             "7.0s total, first sentence -, route 0.20s (jev), context 0.10s, model sonnet cold, blocks: inbox"]
+    out = latency_summary(lines)
+    assert "3 recent replies" in out
+    assert "haiku warm     n=2   median 2.6s, slowest 3.1s, first sentence median 1.2s" in out
+    assert "sonnet cold    n=1   median 7.0s" in out
+    assert latency_summary([]) == "No timed replies yet."

@@ -9,6 +9,7 @@ lost to the warm path.
 
 import json
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -23,6 +24,60 @@ REPLY_TIMEOUT = 180
 
 class SessionDied(RuntimeError):
     pass
+
+
+_REPLY_START = re.compile(r'"reply"\s*:\s*"')
+_ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
+
+
+def partial_reply(partial_json: str) -> str:
+    """The (decoded) "reply" string so far from a structured output that's still streaming."""
+    m = _REPLY_START.search(partial_json)
+    if not m:
+        return ""
+    out, i, s = [], m.end(), partial_json
+    while i < len(s):
+        c = s[i]
+        if c == '"':
+            break
+        if c == "\\":
+            if i + 1 >= len(s):
+                break  # escape cut off mid-stream; wait for more
+            nxt = s[i + 1]
+            if nxt == "u":
+                if i + 6 > len(s):
+                    break
+                try:
+                    out.append(chr(int(s[i + 2:i + 6], 16)))
+                except ValueError:
+                    pass
+                i += 6
+                continue
+            out.append(_ESCAPES.get(nxt, nxt))
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def one_off(model: str, system: str, schema: dict, prompt: str,
+            on_text: Callable[[str], None] | None = None) -> dict:
+    """A single streamed call on a fresh process (used for the heavy model, which isn't kept
+    warm to save RAM)."""
+    from jarvis.chat import find_claude
+    session = Session(_argv(find_claude(), model, system, schema), cwd=config.DATA_DIR)
+    try:
+        return session.ask(prompt, on_text=on_text)
+    finally:
+        session.close()
+
+
+def _argv(claude: str, model: str, system: str, schema: dict) -> list[str]:
+    return [claude, "-p", "--model", model, "--tools", "", "--strict-mcp-config",
+            "--setting-sources", "", "--no-session-persistence", "--system-prompt", system,
+            "--json-schema", json.dumps(schema), "--input-format", "stream-json",
+            "--output-format", "stream-json", "--verbose", "--include-partial-messages"]
 
 
 class Session:
@@ -44,7 +99,9 @@ class Session:
     def alive(self) -> bool:
         return self.proc.poll() is None
 
-    def ask(self, text: str, timeout: float = REPLY_TIMEOUT) -> dict:
+    def ask(self, text: str, timeout: float = REPLY_TIMEOUT, on_text: Callable[[str], None] | None = None) -> dict:
+        """Send one message; return the structured reply. `on_text` gets the "reply" text so
+        far as it streams (needs --include-partial-messages); actions only come at the end."""
         if not self.alive():
             raise SessionDied("session process has exited")
         try:
@@ -53,6 +110,7 @@ class Session:
         except (BrokenPipeError, OSError):
             raise SessionDied("session stdin closed") from None
         deadline = time.time() + timeout
+        partial, shown = "", ""
         while True:
             try:
                 line = self.lines.get(timeout=max(0.1, deadline - time.time()))
@@ -64,6 +122,15 @@ class Session:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if on_text and event.get("type") == "stream_event":
+                delta = (event.get("event") or {}).get("delta") or {}
+                if delta.get("type") == "input_json_delta":
+                    partial += delta.get("partial_json", "")
+                    so_far = partial_reply(partial)
+                    if so_far != shown:
+                        shown = so_far
+                        on_text(so_far)
                 continue
             if event.get("type") != "result":
                 continue
@@ -101,10 +168,7 @@ class WarmClaude:
 
     def _default_argv(self) -> list[str]:
         from jarvis.chat import find_claude
-        return [find_claude(), "-p", "--model", self.model, "--tools", "", "--strict-mcp-config",
-                "--setting-sources", "", "--no-session-persistence", "--system-prompt", self.system,
-                "--json-schema", json.dumps(self.schema), "--input-format", "stream-json",
-                "--output-format", "stream-json", "--verbose"]
+        return _argv(find_claude(), self.model, self.system, self.schema)
 
     def _spawn_next(self) -> None:
         config.DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -121,11 +185,11 @@ class WarmClaude:
             self._current, self._next = self._next, None
         return self._current
 
-    def run(self, system: str, prompt: str) -> dict:
+    def run(self, system: str, prompt: str, on_text: Callable[[str], None] | None = None) -> dict:
         with self._lock:
             try:
                 session = self._session()
-                out = session.ask(prompt)
+                out = session.ask(prompt, on_text=on_text)
                 # RAM is tight (8 GB), so a spare only warms up when this one is about to retire.
                 if session.turns >= MAX_TURNS - 1 and self._next is None:
                     threading.Thread(target=self._spawn_next, daemon=True).start()

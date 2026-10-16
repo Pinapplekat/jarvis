@@ -62,12 +62,29 @@ def _telegram_setup() -> None:
           f"chat {chat_id}. Saved to .env. Check Telegram for a hello.")
 
 
-def _deadlines(mem: Memory, now):
-    from jarvis.canvas import CanvasClient, fetch_feed, from_feed, from_memory, merge
+FEED_CACHE_SECONDS = 600
+
+
+def _feed(max_age: float | None = None) -> bytes:
+    """The Canvas calendar feed. tick refreshes it every 5 min; chat passes max_age to reuse
+    that copy instead of waiting ~1 s on the network."""
+    import time
+    from jarvis.canvas import fetch_feed
+    cache = config.DATA_DIR / "canvas_feed.ics"
+    if max_age is not None and cache.exists() and time.time() - cache.stat().st_mtime < max_age:
+        return cache.read_bytes()
+    data = fetch_feed(config.CANVAS_ICS_URL)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_bytes(data)
+    return data
+
+
+def _deadlines(mem: Memory, now, max_age: float | None = None):
+    from jarvis.canvas import CanvasClient, from_feed, from_memory, merge
     if config.CANVAS_TOKEN:
         fetched = CanvasClient().fetch_deadlines(now.tzinfo, now.date())
     elif config.CANVAS_ICS_URL:
-        fetched = from_feed(fetch_feed(config.CANVAS_ICS_URL), now.tzinfo)
+        fetched = from_feed(_feed(max_age), now.tzinfo)
     else:
         sys.exit("Set CANVAS_ICS_URL (Canvas → Calendar → Calendar Feed) or CANVAS_TOKEN in .env")
     return merge(fetched, from_memory(mem))
@@ -96,7 +113,7 @@ def _attention(mem: Memory):
     from jarvis.attention import Attention
     from jarvis.voice import Announcer
     return Attention(mem, judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])),
-                     Announcer(_messenger(), mem))
+                     Announcer(_messenger(), mem), fast=judge.fast_engine())
 
 
 def _activity(mem: Memory) -> str:
@@ -119,33 +136,84 @@ def _warm(mem: Memory):
                       log=lambda s: mem.log("warm_fallback", s[:200]))
 
 
-def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = False, warm=None) -> str:
-    """One chat turn with full context. Shared by Telegram (typed or voice) and the desk mic."""
+def latency_summary(lines: list[str]) -> str:
+    """Summarize 'answered' log lines: median/slowest total and time to first sentence, per model."""
+    import re
+    from statistics import median
+    rows = []
+    for line in lines:
+        total = re.search(r"([\d.]+)s total", line)
+        first = re.search(r"first sentence ([\d.]+)s", line)
+        model = re.search(r"model (\S+) (warm|cold)", line)
+        if total:
+            rows.append((float(total[1]), float(first[1]) if first else None,
+                         f"{model[1]} {model[2]}" if model else "unknown"))
+    if not rows:
+        return "No timed replies yet."
+    out = [f"{len(rows)} recent replies"]
+    for key in sorted({r[2] for r in rows}):
+        group = [r for r in rows if r[2] == key]
+        totals = [r[0] for r in group]
+        firsts = [r[1] for r in group if r[1] is not None]
+        out.append(f"- {key:<14} n={len(group):<3} median {median(totals):.1f}s, slowest {max(totals):.1f}s"
+                   + (f", first sentence median {median(firsts):.1f}s" if firsts else ""))
+    return "\n".join(out)
+
+
+def _runner_for(route, warm):
+    """Quick replies: the warm Haiku session. Heavy ones: a streamed one-off Sonnet call (not
+    kept warm, to save RAM). Either falls back to a plain call if streaming fails."""
+    from jarvis.chat import REPLY_SCHEMA, run_claude
+    from jarvis.warm import SessionDied, one_off
+    if not route.heavy and warm:
+        return warm.run, config.JARVIS_MODEL, "warm"
+    model = config.JARVIS_HEAVY_MODEL if route.heavy else config.JARVIS_MODEL
+
+    def run(system, prompt, on_text=None):
+        try:
+            return one_off(model, system, REPLY_SCHEMA, prompt, on_text)
+        except SessionDied:
+            return run_claude(system, prompt, model=model)
+    return run, model, "cold"
+
+
+def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = False, warm=None,
+            on_first=None) -> str:
+    """One chat turn with full context. Shared by Telegram (typed or voice) and the desk mic.
+    `on_first(sentence)` fires as soon as the reply's first sentence has streamed in."""
     import time
 
     from jarvis import judge, router
     from jarvis.canvas import format_digest, from_memory
-    from jarvis.chat import respond
+    from jarvis.chat import FirstSentence, respond
     now = _now_local()
     started = time.time()
     recent = [f"{'Elijah' if h['role'] == 'user' else 'JARVIS'}: {h['text'][:300]}" for h in mem.chat_history(4)]
-    blocks = router.route(text, recent, judge.fast_engine(),
-                          on_error=lambda e: mem.log("route_failed", str(e)[:200]))
+    route = router.route(text, recent, judge.fast_engine(),
+                         on_error=lambda e: mem.log("route_failed", str(e)[:200]))
+    blocks = route.blocks
     routed = time.time() - started
+    runner, model, temp = _runner_for(route, warm)
+    first = FirstSentence(on_first) if on_first else None
     deadlines_text = ""
-    if "deadlines" in blocks:  # the Canvas fetch is the slow part; skip it when not needed
-        try:
-            deadlines = _deadlines(mem, now)
+    if "deadlines" in blocks:
+        try:  # reuse tick's copy of the feed (≤10 min old) instead of fetching live
+            deadlines = _deadlines(mem, now, max_age=FEED_CACHE_SECONDS)
         except Exception:  # feed down: answer from stored deadlines rather than not at all
             deadlines = from_memory(mem)
         deadlines_text = format_digest(deadlines, now, days=14)
     message = f"(said out loud, transcribed) {text}" if spoken else text
-    extra = {"runner": warm.run} if warm else {}
-    reply = respond(mem, message, now, deadlines_text, on_progress=on_progress,
+    asked = time.time()
+    reply = respond(mem, message, now, deadlines_text, runner=runner, on_progress=on_progress,
                     inbox_text=_inbox_text(mem) if "inbox" in blocks else "",
-                    activity_text=_activity(mem) if "activity" in blocks else "", blocks=blocks, **extra)
-    mem.log("answered", f"{time.time() - started:.1f}s total, route {routed:.2f}s, "
-                        f"context: {', '.join(sorted(blocks)) or 'minimal'}")
+                    activity_text=_activity(mem) if "activity" in blocks else "", blocks=blocks,
+                    on_text=first.feed if first else None)
+    total = time.time() - started
+    first_at = f"{first.at - started:.1f}s" if first and first.at else "-"
+    # Timings and choices only; never the message text.
+    mem.log("answered", f"{total:.1f}s total, first sentence {first_at}, route {routed:.2f}s ({route.how}), "
+                        f"context {asked - started - routed:.2f}s, model {model} {temp}, "
+                        f"blocks: {', '.join(sorted(blocks)) or 'minimal'}")
     return reply
 
 
@@ -163,7 +231,18 @@ def _listen(mem: Memory) -> None:
 
     def on_text(update):
         tg.typing()
-        reply = _answer(mem, update.text, on_progress=tg.typing, spoken=update.via_voice, warm=warm)
+        sent = {}
+
+        def first_out(sentence):  # typed chat: send the first sentence now, fill in the rest after
+            if not update.via_voice:
+                sent["id"], sent["text"] = tg.send(sentence), sentence
+
+        reply = _answer(mem, update.text, on_progress=tg.typing, spoken=update.via_voice, warm=warm,
+                        on_first=first_out)
+        if sent:
+            if reply.strip() != sent["text"]:
+                tg.edit(sent["id"], reply)
+            return
         if update.via_voice:  # answer a voice note with a voice note (walks, AirPods)
             from jarvis.speech import voice_note
             tg.action("record_voice")
@@ -333,6 +412,8 @@ def main() -> None:
     se = sub.add_parser("self-edit", help="Background worker for applying approved plans (off unless JARVIS_REPO is set)")
     se.add_argument("action", choices=["build", "deploy"])
     se.add_argument("id", nargs="?")
+    lt = sub.add_parser("latency", help="How fast recent chat replies were, by model")
+    lt.add_argument("--last", type=int, default=30)
     sub.add_parser("ears", help="Listen for 'Hey Jarvis' on the Mac's mic and answer out loud (runs forever)")
     sub.add_parser("listen", help="Stay connected to Telegram: chat and approval buttons (runs forever)")
     ask = sub.add_parser("ask", help="Ask JARVIS something from the terminal (same brain as Telegram)")
@@ -512,14 +593,18 @@ def main() -> None:
     if args.cmd == "listen":
         _listen(mem)
         return
+    if args.cmd == "latency":
+        print(latency_summary([e["content"] for e in mem.db.execute(
+            "SELECT content FROM events WHERE kind = 'answered' ORDER BY id DESC LIMIT ?", (args.last,))]))
+        return
     if args.cmd == "ears":
         from jarvis import speech
         from jarvis.ears import Ears
         speech._whisper()  # load the model up front so the first answer isn't slow
         log = lambda s: print(s, flush=True)  # noqa: E731
         warm = _warm(mem)
-        Ears(answer=lambda text: _answer(mem, text, spoken=True, warm=warm), transcribe=speech.transcribe,
-             log=log).run_forever()
+        Ears(answer=lambda text, on_first=None: _answer(mem, text, spoken=True, warm=warm, on_first=on_first),
+             transcribe=speech.transcribe, log=log).run_forever()
         return
     if args.cmd == "projects":
         from jarvis import projects
@@ -572,6 +657,10 @@ def main() -> None:
         return
     if args.cmd == "attention":
         if args.action == "log":
+            now = _now_local()
+            quick = mem.get_kv(f"attention_quick_{now.date().isoformat()}") or "0"
+            spoke = mem.judgments_spoken_since(now.replace(hour=0, minute=0, second=0, microsecond=0))
+            print(f"today: {quick} quick Jev checks, spoke {spoke}/{config.ATTENTION_DAILY_LIMIT} times\n")
             for j in mem.recent_judgments(limit=15):
                 answers = json.loads(j["answers"])
                 verdict = "SPOKE" if j["spoke"] else f"quiet ({j['blocked']})"

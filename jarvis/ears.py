@@ -54,10 +54,14 @@ class Endpointer:
 
 
 class Ears:
-    def __init__(self, answer: Callable[[str], str], transcribe: Callable[[np.ndarray], str],
-                 log=print, speak: Callable[[str], None] | None = None, play: Callable[[str], None] | None = None):
+    def __init__(self, answer: Callable[..., str], transcribe: Callable[[np.ndarray], str],
+                 log=print, speak: Callable[[str], None] | None = None, play: Callable[[str], None] | None = None,
+                 speak_async: Callable[[str], object] | None = None):
+        """`answer(text, on_first)`; `speak` blocks until done; `speak_async` starts speaking
+        and returns something with .wait() (used to say the first sentence early)."""
         self.answer, self.transcribe, self.log = answer, transcribe, log
         self.speak = speak or _say_and_wait
+        self.speak_async = speak_async or _say_async
         self.play = play or (lambda path: subprocess.Popen(["afplay", path]))
         self.noise = deque(maxlen=50)  # recent chunk levels while idle (~4 s)
         self._wake = None
@@ -110,9 +114,21 @@ class Ears:
                 self.play(MISS)
                 return
             self.log(f"heard: {text[:120]}")
-            reply = self.answer(text)
+            early = {}
+
+            def on_first(sentence):  # start talking while the rest is still being written
+                early["sentence"], early["proc"] = sentence, self.speak_async(sentence)
+
+            reply = self.answer(text, on_first)
             self.log(f"said: {reply[:120]}")
-            self.speak(reply)              # blocking, so it doesn't hear itself
+            from jarvis.chat import remainder
+            rest = reply
+            if early:
+                early["proc"].wait()
+                left = remainder(reply, early["sentence"])
+                rest = reply if left is None else left
+            if rest:
+                self.speak(rest)           # blocking, so it doesn't hear itself
             _drain(stream)
             timeout = config.FOLLOW_UP_SECONDS
 
@@ -138,6 +154,11 @@ def _drain(stream) -> None:
             stream.read(available)
     except Exception:
         pass
+
+
+def _say_async(text: str) -> subprocess.Popen:
+    from jarvis.voice import speakable
+    return subprocess.Popen(["say", "-v", config.VOICE_NAME, "-r", str(config.VOICE_RATE), speakable(text)])
 
 
 def _say_and_wait(text: str) -> None:

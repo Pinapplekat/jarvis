@@ -70,8 +70,12 @@ def _ts(mem: Memory, key: str) -> datetime | None:
 
 
 class Attention:
-    def __init__(self, mem: Memory, decide: Engine, announcer=None, mind=None, now=None):
-        self.mem, self.decide, self.announcer = mem, decide, announcer
+    """`decide` answers full reviews (Jev with Claude fallback, or Claude). `fast` (Jev only)
+    enables quick checks on every new bit of activity instead of 10-minute reviews."""
+
+    def __init__(self, mem: Memory, decide: Engine, announcer=None, mind=None, now=None,
+                 fast: Engine | None = None):
+        self.mem, self.decide, self.announcer, self.fast = mem, decide, announcer, fast
         self._mind = mind
         self._now = now or (lambda: datetime.now(timezone.utc))
 
@@ -104,32 +108,61 @@ class Attention:
         signals = stuck_signals(self.mem, now)
         last_stuck = _ts(self.mem, "attention_last_stuck")
         stuck_now = bool(signals) and (last_stuck is None or now - last_stuck >= STUCK_COOLDOWN)
-        if not (stuck_now or self._due(now)):
-            return None
-        trigger = "stuck" if stuck_now else "periodic"
-        self.mem.set_kv("attention_last_review", now.isoformat())
         if stuck_now:
+            self.mem.set_kv("attention_last_review", now.isoformat())
             self.mem.set_kv("attention_last_stuck", now.isoformat())
-        return self.review(now, trigger, signals)
+            return self.review(now, "stuck", signals)
+        if self.fast and config.ATTENTION_QUICK:
+            return self.quick_check(now, signals)
+        if self._due(now):
+            self.mem.set_kv("attention_last_review", now.isoformat())
+            return self.review(now, "periodic", signals)
+        return None
 
-    def review(self, now: datetime, trigger: str, signals: list[str]) -> str:
+    def quick_check(self, now: datetime, signals: list[str]) -> str | None:
+        """A Jev glance at what just changed. Quiet answers aren't logged (only counted)."""
+        last = _ts(self.mem, "attention_last_quick")
+        if last and now - last < timedelta(seconds=config.ATTENTION_QUICK_SECONDS):
+            return None
+        if not self.mem.observations(last or now - timedelta(minutes=2)):
+            return None  # nothing new to look at
+        if self._gates(now, urgency=1.0) in ("quiet hours", "daily limit reached"):
+            return None  # couldn't speak anyway: don't spend the call
+        self.mem.set_kv("attention_last_quick", now.isoformat())
+        count_key = f"attention_quick_{now.astimezone().date().isoformat()}"
+        self.mem.set_kv(count_key, str(int(self.mem.get_kv(count_key) or 0) + 1))
+        state = self._state(now, "quick", signals, minutes=10)
+        answers = self.fast(state, QUESTIONS)
+        if not self._wants(answers, signals)[0]:
+            return None
+        return self.review(now, "quick", signals, answers=answers, state=state)
+
+    def _state(self, now: datetime, trigger: str, signals: list[str], minutes: int = 20) -> str:
         from jarvis.watch import recent_activity
-        activity = recent_activity(self.mem, 20, now)
+        activity = recent_activity(self.mem, minutes, now)
         said = [f"- {j['at'][11:16]} {j['message'][:150]}" for j in self.mem.recent_judgments(spoke_only=True, limit=3)]
         presence = ("Elijah is at the Mac, actively working, and has asked you to chime in when "
                     "you can genuinely help (e.g. he's stuck)." if trigger != "manual" else "Manual review.")
-        state = "\n\n".join([
+        return "\n\n".join([
             f"Now: {now.astimezone():%A %-I:%M %p}. Trigger: {trigger}. {presence}",
             "Stuck signals:\n" + ("\n".join(f"- {s}" for s in signals) or "(none)"),
             "What you already said unprompted recently (don't repeat):\n" + ("\n".join(said) or "(nothing)"),
             "Recent activity:\n" + activity,
         ])
-        answers = self.decide(state, QUESTIONS)
-        speak, kind, urgency = answers["speak"], answers["kind"], answers["urgency"]
+
+    def _wants(self, answers: dict, signals: list[str]) -> tuple[bool, float]:
+        speak, kind = answers["speak"], answers["kind"]
         # Stuck rules already filtered for a real problem, and Elijah asked JARVIS to chime in
         # when it can help, so a stuck review needs less confidence than a routine one.
         threshold = config.ATTENTION_STUCK_THRESHOLD if signals else config.ATTENTION_THRESHOLD
-        wants = bool(speak.value) and speak.confidence >= threshold and kind.value != "none"
+        return bool(speak.value) and speak.confidence >= threshold and kind.value != "none", threshold
+
+    def review(self, now: datetime, trigger: str, signals: list[str], answers: dict | None = None,
+               state: str | None = None) -> str:
+        state = state or self._state(now, trigger, signals)
+        answers = answers or self.decide(state, QUESTIONS)
+        speak, kind, urgency = answers["speak"], answers["kind"], answers["urgency"]
+        wants, threshold = self._wants(answers, signals)
         blocked = self._gates(now, float(urgency.value)) if wants else None
         if not wants:
             blocked = ("judge said no" if not speak.value or kind.value == "none"
