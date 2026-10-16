@@ -158,6 +158,10 @@ class Worker:
             if not t or t["status"] != "running":
                 return  # stopped (or finished) from elsewhere
             steps = steps_of(t)
+            if steps and "check" not in steps[-1]:  # a step that ran after Elijah's Run tap
+                steps[-1]["check"], verdict = self._check(t["goal"], steps)
+                stuck = stuck + 1 if verdict == "stuck" else 0
+                _save(mem, task_id, steps=steps)
             if len(steps) >= MAX_STEPS or t["active_seconds"] >= MAX_ACTIVE_SECONDS:
                 why = f"{len(steps)} steps" if len(steps) >= MAX_STEPS else f"{int(t['active_seconds'] // 60)} minutes"
                 return self._end(mem, task_id, "failed", self._wrap_up(t, steps, f"ran out of budget ({why})"))

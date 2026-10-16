@@ -103,6 +103,7 @@ def test_risky_step_pauses_for_approval_then_resumes_with_the_output(project):
     t = tasks.get(m, t["id"])
     assert t["status"] == "done" and not target.exists()
     assert "exit 0" in tasks.steps_of(t)[0]["result"]
+    assert tasks.steps_of(t)[0]["check"].startswith("last step worked")  # checked after the Run tap too
     assert "old.log" not in tasks.steps_of(t)[1]["result"]
     assert not any(": $ rm" in text for text, _ in tg.sent)  # output lives in the task, not a separate message
 
