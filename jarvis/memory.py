@@ -79,6 +79,20 @@ CREATE TABLE IF NOT EXISTS reminders (
     cancelled INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY,
+    goal TEXT NOT NULL,
+    -- queued -> running <-> waiting (for Elijah's Run/Reject) -> done | failed | stopped
+    status TEXT NOT NULL DEFAULT 'queued',
+    steps TEXT NOT NULL DEFAULT '[]',  -- JSON: [{n, update, action, result, check}]
+    message_id INTEGER,                -- the Telegram progress message
+    waiting_on INTEGER,                -- pending_actions id while waiting
+    summary TEXT,
+    active_seconds REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS self_edits (
     id INTEGER PRIMARY KEY,
     origin TEXT NOT NULL CHECK (origin IN ('request', 'idea')),

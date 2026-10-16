@@ -233,6 +233,14 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
     return reply
 
 
+def _task_worker(mem: Memory, tg):
+    """Task mode: Claude picks each step; Jev (or Haiku) checks between steps."""
+    from jarvis import judge
+    from jarvis.tasks import Worker
+    return Worker(tg, judge=judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])),
+                  log=lambda s: print(s, flush=True))
+
+
 def _listen(mem: Memory) -> None:
     """Stay connected to Telegram: handle Approve/Reject at once and chat with the user."""
     import time
@@ -244,6 +252,10 @@ def _listen(mem: Memory) -> None:
     if not tg:
         sys.exit("Telegram isn't set up: add TELEGRAM_BOT_TOKEN to .env, then run jarvis telegram-setup")
     warm = _warm(mem)
+    from jarvis import tasks
+    worker = _task_worker(mem, tg)
+    if (n := tasks.recover(mem)):
+        print(f"requeued {n} task(s) cut off by a restart", flush=True)
 
     def on_text(update):
         from jarvis.status import set_state
@@ -254,6 +266,17 @@ def _listen(mem: Memory) -> None:
             set_state("telegram", "idle")
 
     def _on_text(update):
+        is_stop, stop_id = tasks.parse_stop(update.text)
+        if is_stop and mem.db.execute("SELECT 1 FROM tasks WHERE status IN ('queued','running','waiting')").fetchone():
+            tg.send(tasks.stop(mem, stop_id))
+            for t in tasks.recent(mem, 3):  # show it as stopped in its progress message too
+                if t["status"] == "stopped" and t["message_id"]:
+                    try:
+                        tg.edit(t["message_id"], tasks.progress_text(t))
+                    except Exception:
+                        pass
+                    break
+            return
         tg.typing()
         sent = {}
 
@@ -279,6 +302,7 @@ def _listen(mem: Memory) -> None:
         else:
             tg.send(reply)
         notify_pending(mem, tg)  # drafts made in this chat get their buttons right away
+        tasks.start_queued(mem, worker)  # a task started in this chat begins at once
         if mem.self_edits("drafting"):
             tg.typing()
             plans.draft_plans(mem, tg)
@@ -286,7 +310,11 @@ def _listen(mem: Memory) -> None:
     def on_button(verb, edit_id):
         if verb.startswith("cmd_"):
             from jarvis import terminal
-            return terminal.handle_button(mem, tg, verb, edit_id)
+
+            def carry_on(db, payload, action_id, outcome):  # a task waiting on this command resumes
+                if tasks.requeue(db, payload, action_id, outcome):
+                    tasks.start_queued(db, worker)
+            return terminal.handle_button(mem, tg, verb, edit_id, on_done=carry_on)
         if verb.startswith("plan_"):
             on_approved = (lambda i: selfedit.queue_approved(mem, tg, i)) if selfedit.enabled() else None
             return plans.handle_button(mem, verb, edit_id, on_approved)
@@ -300,6 +328,7 @@ def _listen(mem: Memory) -> None:
     while True:
         try:
             deliver_reminders(mem, announcer, _now_local())
+            tasks.start_queued(mem, worker)  # tasks from the desk mic, or resumed after an expiry
             # Short long-poll so reminders go out within ~25s of their time.
             handle_updates(mem, tg, int(config.TELEGRAM_CHAT_ID), on_text, wait=25, on_button=on_button,
                            transcribe=_transcribe)
@@ -345,8 +374,12 @@ def _tick(mem: Memory) -> int:
         step("mail-watch", lambda: check_new_mail(mem, _now_local(), fast=_judge.fast_engine()))  # before alerts
     if tg or caller:
         step("alerts", lambda: "messaged %d, called %d" % _deliver(mem, announcer, caller))
+    from jarvis.tasks import requeue
     from jarvis.terminal import expire_commands
-    step("commands", lambda: f"expired {expire_commands(mem)}")  # before any new buttons go out
+
+    def lapse(action_id, payload):  # a task waiting on it carries on (the listener picks it up)
+        requeue(mem, payload, action_id, "(the approval request expired before Elijah answered)")
+    step("commands", lambda: f"expired {expire_commands(mem, on_expired=lapse)}")  # before any new buttons go out
     if tg:
         # Incoming messages and button presses are handled by `jarvis listen`, not here:
         # Telegram allows only one reader of updates at a time.

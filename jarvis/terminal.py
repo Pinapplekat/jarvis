@@ -96,7 +96,9 @@ def ingest(mem: Memory, log: Path = LOG) -> int:
 AUDIT = config.DATA_DIR / "commands.jsonl"
 SHELL_CHARS = set("|&;<>`$\n")  # there's no shell, so these could only mislead
 AUTO_TIMEOUT, TEST_TIMEOUT, APPROVED_TIMEOUT = 30, 120, 120
-READERS = {"ls", "cat", "head", "tail", "wc", "grep"}
+READERS = {"ls", "cat", "head", "tail", "wc", "grep", "file", "stat", "du"}
+LOOKUPS = {"which", "pgrep", "ps", "pwd", "date", "whoami", "uname", "sw_vers"}  # no file arguments
+HELP_FLAGS = {"--help", "-h", "help", "--version", "-V", "version"}
 GIT_READ = {"status", "log", "diff", "show"}
 # Flags that make an otherwise read-only command write, run programs, follow forever or reach out.
 # (git's global options like -c or --git-dir can't appear: the subcommand must come first.)
@@ -105,6 +107,8 @@ BLOCKED_FLAGS = {
             "--open-files-in-pager"),
     "tail": ("-f", "-F", "--follow", "--retry"),
     "grep": ("-f", "--file", "--exclude-from", "--include-from"),
+    "find": ("-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"),
+    "date": ("-s", "--set"),
     "pytest": ("-p", "-c", "--rootdir", "--basetemp", "--confcutdir", "--pdb", "--trace", "--pyargs",
                "--override-ini", "-o"),
 }
@@ -176,6 +180,11 @@ def classify(command, cwd: Path | None = None) -> Verdict:
     if argv[0] != tool:  # an explicit path to a program: let Elijah look at it
         return Verdict("approval", "runs a program by path", argv)
 
+    if len(args) in (1, 2) and args[-1] in HELP_FLAGS and all(not a.startswith("/") for a in args):
+        import shutil
+        if shutil.which(tool):  # an installed tool explaining itself, sandboxed (no writes, no network)
+            return Verdict("auto", f"{tool} help/version", argv)
+
     if tool == "git":
         if not args or args[0] not in GIT_READ:
             return Verdict("approval", f"git {args[0] if args else ''} isn't read-only".strip(), argv)
@@ -201,6 +210,19 @@ def classify(command, cwd: Path | None = None) -> Verdict:
             return Verdict("approval", why, argv)
         return Verdict("auto", "running the tests",
                        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *rest])
+
+    if tool in LOOKUPS:
+        if (bad := _blocked_flag(tool, args)):
+            return Verdict("approval", f"{tool} {bad} isn't allowed automatically", argv)
+        return Verdict("auto", f"read-only {tool}", argv)
+
+    if tool == "find":
+        if (bad := _blocked_flag("find", args)):
+            return Verdict("approval", f"find {bad} can change or run things", argv)
+        starts = [a for a in args if not a.startswith(("-", "(", ")", "!"))][:1]  # the folder to search
+        if (why := _check_paths(starts or ["."], where, root)):
+            return Verdict("approval", why, argv)
+        return Verdict("auto", "read-only find", argv)
 
     if tool in READERS:
         if (bad := _blocked_flag(tool, args)):
@@ -257,10 +279,11 @@ def describe(result) -> str:
 
 
 # ----- approval over Telegram -----
-def request_approval(mem: Memory, verdict: Verdict, cwd: str | None, why: str) -> int:
+def request_approval(mem: Memory, verdict: Verdict, cwd: str | None, why: str, extra: dict | None = None) -> int:
+    """Queue a command for Elijah's Run/Reject. `extra` can link it to a task and carry a risk label."""
     from jarvis.introspect import project_dir
     payload = {"argv": verdict.argv, "cwd": str(Path(cwd).expanduser()) if cwd else str(project_dir()),
-               "why": why[:300], "reason": verdict.reason}
+               "why": why[:300], "reason": verdict.reason, **(extra or {})}
     aid = mem.queue_action("run_command", payload)
     audit({"argv": verdict.argv, "cwd": payload["cwd"], "class": "approval", "reason": verdict.reason,
            "approved_by": None, "pending_id": aid})
@@ -268,7 +291,9 @@ def request_approval(mem: Memory, verdict: Verdict, cwd: str | None, why: str) -
 
 
 def format_request(action_id: int, payload: dict) -> str:
-    return (f"Command #{action_id} needs your OK ({payload.get('reason', 'not read-only')})\n\n"
+    task = f" for task #{payload['task_id']}" if payload.get("task_id") else ""
+    risk = f"\n{payload['risk']}" if payload.get("risk") else ""
+    return (f"Command #{action_id}{task} needs your OK ({payload.get('reason', 'not read-only')}){risk}\n\n"
             f"$ {shlex.join(payload['argv'])}\nin {payload['cwd']}"
             + (f"\n\nWhy: {payload['why']}" if payload.get("why") else ""))
 
@@ -293,20 +318,27 @@ def _expired(action, now: datetime) -> bool:
     return now - created > timedelta(minutes=config.COMMAND_APPROVAL_MINUTES)
 
 
-def expire_commands(mem: Memory, now: datetime | None = None) -> int:
-    """Unanswered requests lapse, so an old one can never be run by a late tap."""
+def expire_commands(mem: Memory, now: datetime | None = None, on_expired=None) -> int:
+    """Unanswered requests lapse, so an old one can never be run by a late tap.
+    `on_expired(action_id, payload)` lets a task that was waiting on it wrap up."""
     now = now or datetime.now(timezone.utc)
     stale = [a for a in mem.pending_actions(kind="run_command") if _expired(a, now)]
     for a in stale:
+        payload = json.loads(a["payload"])
         mem.resolve_action(a["id"], "rejected")
-        audit({"argv": json.loads(a["payload"])["argv"], "class": "approval", "approved_by": None,
+        audit({"argv": payload["argv"], "class": "approval", "approved_by": None,
                "pending_id": a["id"], "outcome": "expired"})
+        if on_expired:
+            on_expired(a["id"], payload)
     return len(stale)
 
 
 def handle_button(mem: Memory, tg, verb: str, action_id: int, background: bool = True,
-                  now: datetime | None = None) -> str:
-    """Run/Reject tapped in Elijah's chat. Returns the toast text."""
+                  now: datetime | None = None, on_done=None) -> str:
+    """Run/Reject tapped in Elijah's chat. Returns the toast text. `on_done(mem, payload,
+    action_id, result_text)` gets the outcome (so a task waiting on this command can carry on);
+    `mem` is a connection usable on the calling thread."""
+    on_done = on_done or (lambda db, payload, aid, text: None)
     action = mem.get_action(action_id)
     if not action or action["kind"] != "run_command" or action["status"] != "pending":
         return "Already handled"
@@ -314,11 +346,13 @@ def handle_button(mem: Memory, tg, verb: str, action_id: int, background: bool =
     if _expired(action, now or datetime.now(timezone.utc)):
         mem.resolve_action(action_id, "rejected")
         audit({"argv": payload["argv"], "class": "approval", "pending_id": action_id, "outcome": "expired"})
+        on_done(mem, payload, action_id, "(the approval request expired before Elijah answered)")
         return "Expired; ask again"
     if verb == "cmd_reject":
         mem.resolve_action(action_id, "rejected")
         audit({"argv": payload["argv"], "class": "approval", "approved_by": "rejected", "pending_id": action_id})
         mem.log("command", f"#{action_id} rejected")
+        on_done(mem, payload, action_id, "(Elijah rejected this command; find another way or finish and explain)")
         return f"Rejected #{action_id}"
     if verb != "cmd_run":
         return "Unknown button"
@@ -332,13 +366,18 @@ def handle_button(mem: Memory, tg, verb: str, action_id: int, background: bool =
         try:
             verdict = Verdict("approval", payload.get("reason", ""), payload["argv"])
             result = run_command(verdict, payload["cwd"], approved_by="telegram")
-            tg.send(f"Command #{action_id}: $ {shlex.join(payload['argv'])}\n{describe(result)}"[:3900])
+            if not payload.get("task_id"):  # a task shows it in its progress message instead
+                tg.send(f"Command #{action_id}: $ {shlex.join(payload['argv'])}\n{describe(result)}"[:3900])
             own.resolve_action(action_id, "done" if result.code == 0 else "failed")
             own.log("command", f"#{action_id} ran: {'timed out' if result.timed_out else f'exit {result.code}'}")
+            outcome = describe(result)
         except Exception as e:  # never leave him waiting in silence
             own.resolve_action(action_id, "failed")
             own.log("command", f"#{action_id} failed: {str(e)[:200]}")
             tg.send(f"Command #{action_id} failed: {e}"[:3900])
+            outcome = f"(couldn't run it: {e})"
+        try:
+            on_done(own, payload, action_id, outcome)
         finally:
             if own is not mem:
                 own.db.close()

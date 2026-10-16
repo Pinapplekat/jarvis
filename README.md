@@ -135,6 +135,17 @@ JARVIS can also run commands in chat ("show me the last 5 commits", "delete the 
 - **Never:** a shell. Pipes, redirects, `$`, `;` and `&&` are refused outright.
 - **Log:** every command (auto, approved, rejected, expired, timed out) is appended to `~/Library/Application Support/JARVIS/commands.jsonl` with the time, command, folder, who approved it and the exit code, never the output. `jarvis cmd log` shows it. `COMMANDS=0` turns commands off.
 
+### Task mode (working a problem step by step)
+
+For anything that takes several steps ("figure out why the ears log is noisy", "get the tests passing", "find out how X works on my Mac"), JARVIS starts a task instead of answering in one go, or saying it doesn't know how. It works like a Claude Code session: Claude picks one action (inspect the project, run a command, open a page, or finish), sees the result, and decides the next step. It's told to investigate (search the code, read docs, run `--help`, check what's running) and to change approach when something fails.
+
+- **Checks between steps:** Jev (Haiku without a Jev key) answers three quick questions after each step: did it work, is the goal met, is it going in circles. Notes go back to Claude. Two "stuck" answers in a row get a nudge to try something different; four end the task with what it tried.
+- **Approval pauses, doesn't end:** a command that needs your OK shows Run / Reject (with Jev's risk label, e.g. "⚠️ risk: high") and the task waits. Run feeds the output back and the task carries on; Reject tells Claude to find another way. An expired request does the same. Jev can label risk but never approves anything.
+- **Progress:** one Telegram message per task, updated each step (✓ / ✗), then a short summary. Say "stop" (or "stop task 3") to end it; a command it was waiting on is cancelled.
+- **Budget:** 15 steps or 10 minutes of work (time waiting for you doesn't count). Tasks run inside `jarvis listen`; one cut off by a restart is picked up again with a note.
+- **Extra lookups that run at once** (sandboxed, so they can't write or reach the network): any installed tool's `--help`/`--version`, `which`, `ps`, `pgrep`, `pwd`, `date`, `file`, `stat`, `du`, and `find` inside the project (not `-exec`/`-delete`).
+- JARVIS's chat sees its recent tasks and commands (waiting, ran, rejected, expired), so "did that go through?" gets a real answer.
+
 ### Self-editing (off unless you turn it on)
 
 With it on, approving a plan makes JARVIS build it: Claude Code edits a private clone (`~/Library/Application Support/JARVIS/src`) on its own branch, allowed only to edit files and run the tests. The build must pass all tests, can't reduce the test count, and can't touch `.env`. You get a summary, the patch file, and **Deploy / Discard**. Changes to safety-critical files (approvals, chat lockdown, Telegram, web, mail, scheduling, self-edit) are flagged ⚠️. Deploy merges, redeploys the background jobs, and fast-forwards this repo; if that sync fails, JARVIS sends the `git pull` command to run.
