@@ -84,10 +84,17 @@ def _sync_canvas(mem: Memory):
     return deadlines, raised
 
 
+def _inbox_text() -> str:
+    from jarvis.mailrelay import fetch_inbox_headers
+    from jarvis.mailwatch import inbox_for_prompt
+    return inbox_for_prompt(*fetch_inbox_headers(config.MAIL_ACCOUNT, limit=15, timeout=10))
+
+
 def _listen(mem: Memory) -> None:
     """Stay connected to Telegram: handle Approve/Reject at once and chat with the user."""
     import time
 
+    from jarvis import plans, selfedit
     from jarvis.approvals import handle_updates, notify_pending
     from jarvis.canvas import format_digest, from_memory
     from jarvis.chat import respond
@@ -104,9 +111,18 @@ def _listen(mem: Memory) -> None:
         except Exception:  # feed down: answer from stored deadlines rather than not at all
             deadlines = from_memory(mem)
         reply = respond(mem, update.text, now, format_digest(deadlines, now, days=14),
-                        on_progress=tg.typing)
+                        on_progress=tg.typing, inbox_text=_inbox_text())
         tg.send(reply)
         notify_pending(mem, tg)  # drafts made in this chat get their buttons right away
+        if mem.self_edits("drafting"):
+            tg.typing()
+            plans.draft_plans(mem, tg)
+
+    def on_button(verb, edit_id):
+        if verb.startswith("plan_"):
+            on_approved = (lambda i: selfedit.queue_approved(mem, tg, i)) if selfedit.enabled() else None
+            return plans.handle_button(mem, verb, edit_id, on_approved)
+        return selfedit.handle_button(mem, tg, verb, edit_id)
 
     from jarvis.reminders import deliver_reminders
 
@@ -115,7 +131,7 @@ def _listen(mem: Memory) -> None:
         try:
             deliver_reminders(mem, tg, _now_local())
             # Short long-poll so reminders go out within ~25s of their time.
-            handle_updates(mem, tg, int(config.TELEGRAM_CHAT_ID), on_text, wait=25)
+            handle_updates(mem, tg, int(config.TELEGRAM_CHAT_ID), on_text, wait=25, on_button=on_button)
         except Exception as e:  # network blips, Telegram hiccups: wait and reconnect
             print(f"listen error: {e}", flush=True)
             mem.log("listen_error", str(e)[:300])
@@ -144,6 +160,9 @@ def _tick(mem: Memory) -> int:
 
     if config.CANVAS_TOKEN or config.CANVAS_ICS_URL:
         step("canvas", lambda: f"{_sync_canvas(mem)[1]} new alerts")
+    if config.MAIL_WATCH and config.MAIL_ACCOUNT:
+        from jarvis.mailwatch import check_new_mail
+        step("mail-watch", lambda: check_new_mail(mem, _now_local()))  # before alerts: same-tick ping
     if tg or caller:
         step("alerts", lambda: "messaged %d, called %d" % _deliver(mem, tg, caller))
     if tg:
@@ -151,6 +170,13 @@ def _tick(mem: Memory) -> int:
         # Telegram allows only one reader of updates at a time.
         step("drafts", lambda: f"sent {notify_pending(mem, tg)}")
         step("reminders", lambda: f"sent {deliver_reminders(mem, tg, _now_local())}")  # backup for listener
+        from jarvis import plans
+
+        def ideas():
+            new = plans.maybe_propose_idea(mem, _now_local())
+            plans.draft_plans(mem, tg)
+            return f"new idea #{new}" if new else "none"
+        step("ideas", ideas)
     else:
         report.append("telegram: skipped (not set up)")
 
@@ -215,6 +241,12 @@ def main() -> None:
 
     sub.add_parser("relay", help="Send all approved emails through Apple Mail")
     sub.add_parser("telegram-setup", help="Link your Telegram chat (after pressing Start on the bot)")
+    pl = sub.add_parser("plans", help="Improvement plans JARVIS proposed (approved ones are built in Claude Code)")
+    pl.add_argument("action", nargs="?", choices=["list", "show", "done"], default="list")
+    pl.add_argument("id", nargs="?")
+    se = sub.add_parser("self-edit", help="Background worker for applying approved plans (off unless JARVIS_REPO is set)")
+    se.add_argument("action", choices=["build", "deploy"])
+    se.add_argument("id", nargs="?")
     sub.add_parser("listen", help="Stay connected to Telegram: chat and approval buttons (runs forever)")
     ask = sub.add_parser("ask", help="Ask JARVIS something from the terminal (same brain as Telegram)")
     ask.add_argument("message")
@@ -370,11 +402,36 @@ def main() -> None:
     if args.cmd == "listen":
         _listen(mem)
         return
+    if args.cmd == "plans":
+        from jarvis.plans import PLANS_DIR
+        if args.action == "list":
+            for s in mem.self_edits():
+                print(f"#{s['id']:<3} {s['status']:<10} {s['origin']:<8} {s['title']}")
+            print(f"\nApproved plan files: {PLANS_DIR}")
+        elif args.action == "show":
+            job = mem.get_self_edit(int(args.id or 0))
+            if not job:
+                sys.exit(f"No plan #{args.id}")
+            print(f"#{job['id']} {job['title']} [{job['status']}]\n\nRequest:\n{job['request']}\n\n"
+                  f"Plan:\n{job['plan'] or '(not drafted yet)'}")
+        elif args.action == "done":
+            if not mem.set_self_edit(int(args.id or 0), expect=("approved",), status="deployed",
+                                     summary="built in a Claude Code session"):
+                sys.exit(f"No approved plan #{args.id}")
+            print(f"Marked #{args.id} as built")
+        return
+    if args.cmd == "self-edit":
+        from jarvis import selfedit
+        if not selfedit.enabled():
+            sys.exit("Self-editing is off. To turn it on, set JARVIS_REPO in .env to this project folder.")
+        selfedit.main([args.action, *([args.id] if args.id else [])])
+        return
     if args.cmd == "ask":
         from jarvis.canvas import format_digest
         from jarvis.chat import respond
         now = _now_local()
-        print(respond(mem, args.message, now, format_digest(_deadlines(mem, now), now, days=14)))
+        print(respond(mem, args.message, now, format_digest(_deadlines(mem, now), now, days=14),
+                      inbox_text=_inbox_text()))
         return
     if args.cmd == "tick":
         import fcntl

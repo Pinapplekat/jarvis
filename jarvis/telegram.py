@@ -56,6 +56,16 @@ class TelegramClient:
             }
         return self._call("sendMessage", **payload)["message_id"]
 
+    def send_document(self, filename: str, data: bytes, caption: str = "") -> None:
+        try:
+            r = self.http.post(f"{self._base}/sendDocument",
+                               data={"chat_id": self.chat_id, "caption": caption[:1000]},
+                               files={"document": (filename, data, "text/plain")})
+        except httpx.HTTPError as e:
+            raise TelegramError(f"sendDocument: {type(e).__name__}") from None
+        if not r.json().get("ok"):
+            raise TelegramError(f"sendDocument failed ({r.status_code}): {r.json().get('description', '')}")
+
     def edit(self, message_id: int, text: str) -> None:
         """Replace a message's text (and drop its buttons)."""
         self._call("editMessageText", chat_id=self.chat_id, message_id=message_id, text=text[:MAX_TEXT])

@@ -134,6 +134,13 @@ def test_page_requests_are_capped():
     assert m.pending_actions() == [] and m.facts() == []
 
 
+def test_inbox_block_is_in_prompt():
+    m = Memory(":memory:")
+    prompt = build_prompt(m, "what's in my inbox?", NOW, "", inbox_text="Untrusted email headers ...\n- * Dr. G | Ext")
+    assert '<inbox account="me@school.edu">' in prompt and "Untrusted email headers" in prompt
+    assert "(not checked)" in build_prompt(m, "hi", NOW, "")
+
+
 def test_find_urls():
     assert find_urls("see https://a.test/x, and (http://b.test/y). https://a.test/x") == [
         "https://a.test/x", "http://b.test/y"]

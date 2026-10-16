@@ -79,6 +79,26 @@ CREATE TABLE IF NOT EXISTS reminders (
     cancelled INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS self_edits (
+    id INTEGER PRIMARY KEY,
+    origin TEXT NOT NULL CHECK (origin IN ('request', 'idea')),
+    title TEXT NOT NULL,
+    request TEXT NOT NULL,           -- what to change, in plain words
+    plan TEXT,                       -- JARVIS's plan, shown to Elijah for approval
+    -- drafting -> proposed -> approved | declined; approved -> queued -> building -> ready
+    -- -> deploying -> deployed (only when self-editing is enabled), or failed | discarded
+    status TEXT NOT NULL,
+    notified INTEGER NOT NULL DEFAULT 0,
+    summary TEXT,                    -- what the build did / why it failed
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS seen_mail (
+    key TEXT PRIMARY KEY,            -- account:message id
+    at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -248,6 +268,50 @@ class Memory:
                 claimed.append(r)
         self.db.commit()
         return claimed
+
+    def add_self_edit(self, origin: str, title: str, request: str) -> int:
+        """A new improvement starts as 'drafting': JARVIS writes a plan before anything else."""
+        cur = self.db.execute(
+            """INSERT INTO self_edits (origin, title, request, status, created_at, updated_at)
+               VALUES (?, ?, ?, 'drafting', ?, ?)""",
+            (origin, title, request, _now(), _now()),
+        )
+        self.db.commit()
+        return cur.lastrowid
+
+    def get_self_edit(self, edit_id: int) -> sqlite3.Row | None:
+        return self.db.execute("SELECT * FROM self_edits WHERE id = ?", (edit_id,)).fetchone()
+
+    def self_edits(self, *statuses: str) -> list[sqlite3.Row]:
+        if not statuses:
+            return self.db.execute("SELECT * FROM self_edits ORDER BY id").fetchall()
+        marks = ",".join("?" * len(statuses))
+        return self.db.execute(
+            f"SELECT * FROM self_edits WHERE status IN ({marks}) ORDER BY id", statuses
+        ).fetchall()
+
+    def set_self_edit(self, edit_id: int, expect: tuple[str, ...] | None = None, **fields) -> bool:
+        """Update fields; with `expect`, only if the current status is one of those (so two
+        button taps or processes can't both act on the same job)."""
+        allowed = {"status", "notified", "summary", "plan", "request", "title"}
+        if set(fields) - allowed:
+            raise ValueError(f"bad fields {set(fields) - allowed}")
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        sql = f"UPDATE self_edits SET {sets}, updated_at = ? WHERE id = ?"
+        params = [*fields.values(), _now(), edit_id]
+        if expect:
+            sql += f" AND status IN ({','.join('?' * len(expect))})"
+            params += list(expect)
+        cur = self.db.execute(sql, params)
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def mail_seen(self, key: str) -> bool:
+        return self.db.execute("SELECT 1 FROM seen_mail WHERE key = ?", (key,)).fetchone() is not None
+
+    def mark_mail_seen(self, key: str) -> None:
+        self.db.execute("INSERT OR IGNORE INTO seen_mail (key, at) VALUES (?, ?)", (key, _now()))
+        self.db.commit()
 
     def add_chat(self, role: str, text: str) -> None:
         self.db.execute("INSERT INTO chat_log (at, role, text) VALUES (?, ?, ?)", (_now(), role, text))

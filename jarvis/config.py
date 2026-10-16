@@ -11,6 +11,9 @@ DB_PATH = DATA_DIR / "jarvis.db"
 TOKEN_CACHE_PATH = DATA_DIR / "token_cache.json"
 
 MAIL_ACCOUNT = os.getenv("MAIL_ACCOUNT", "")
+# Ping on Telegram for important new mail (school domains, saved professor addresses, keywords)
+MAIL_WATCH = os.getenv("MAIL_WATCH", "1") == "1"
+SCHOOL_EMAIL_DOMAINS = os.getenv("SCHOOL_EMAIL_DOMAINS", "seattlecolleges.edu")
 TIMEZONE = os.getenv("TIMEZONE", "America/Los_Angeles")
 
 CANVAS_BASE_URL = os.getenv("CANVAS_BASE_URL", "https://canvas.seattlecolleges.edu")
@@ -21,6 +24,12 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # Model for Telegram chat, run through the local Claude Code CLI (uses your Claude subscription)
 JARVIS_MODEL = os.getenv("JARVIS_MODEL", "sonnet")
+
+# Self-editing: the git repo JARVIS improves (your project folder), the model that writes
+# the code, and the local hour after which JARVIS may suggest one improvement a day.
+JARVIS_REPO = os.getenv("JARVIS_REPO", "")
+SELF_EDIT_MODEL = os.getenv("SELF_EDIT_MODEL", "opus")
+IDEA_HOUR = int(os.getenv("IDEA_HOUR", "18"))
 
 # Twilio is used only for urgent voice calls
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")

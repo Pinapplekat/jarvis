@@ -83,9 +83,9 @@ def _parse_stamp(stamp: str) -> datetime:
     return datetime(y, mo, d) + timedelta(seconds=secs)
 
 
-def _osascript(script: str, *args: str) -> str:
+def _osascript(script: str, *args: str, timeout: int = 60) -> str:
     r = subprocess.run(
-        ["osascript", "-", *args], input=script, capture_output=True, text=True, timeout=60
+        ["osascript", "-", *args], input=script, capture_output=True, text=True, timeout=timeout
     )
     if r.returncode != 0:
         raise MailError(r.stderr.strip())
@@ -98,13 +98,29 @@ def send_email(sender: str, to: list[str], subject: str, body: str) -> None:
     _osascript(SEND_SCRIPT, sender, subject, body, *to)
 
 
-def read_inbox(account: str, limit: int = 20) -> list[InboxMessage]:
-    raw = _osascript(READ_SCRIPT, account, str(limit))
+def read_inbox(account: str, limit: int = 20, timeout: int = 60) -> list[InboxMessage]:
+    raw = _osascript(READ_SCRIPT, account, str(limit), timeout=timeout)
     messages = []
     for rec in filter(None, raw.split(RECORD)):
         mid, sender, subject, stamp, read = rec.split(FIELD)
         messages.append(InboxMessage(mid, sender, subject, _parse_stamp(stamp), read == "true"))
     return sorted(messages, key=lambda m: m.received, reverse=True)
+
+
+def fetch_inbox_headers(account: str, limit: int = 20, unread_only: bool = False,
+                        timeout: int = 20) -> tuple[list[InboxMessage], str | None]:
+    """Read-only inbox headers (no bodies). Never raises: returns ([], reason) when Mail
+    isn't reachable, so chat and tick keep working without it."""
+    if not account:
+        return [], "no MAIL_ACCOUNT set"
+    try:
+        messages = read_inbox(account, limit, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Usually macOS waiting on the "allow to control Mail" prompt for background jobs.
+        return [], "Mail didn't answer in time (macOS may be waiting for permission to control Mail)"
+    except (MailError, ValueError) as e:
+        return [], f"couldn't read Mail ({str(e)[:150]})"
+    return ([m for m in messages if not m.read] if unread_only else messages), None
 
 
 def list_accounts() -> list[str]:

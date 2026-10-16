@@ -81,8 +81,10 @@ def _decide(mem: Memory, approve: bool, action_id: int | None, written_at: datet
 
 
 def handle_updates(mem: Memory, tg: TelegramClient, allowed_user: int,
-                   on_text: Callable[[Update], None] | None = None, wait: int = 0) -> int:
-    """Apply button presses and typed replies; pass other messages to on_text.
+                   on_text: Callable[[Update], None] | None = None, wait: int = 0,
+                   on_button: Callable[[str, int], str] | None = None) -> int:
+    """Apply button presses and typed replies; pass other messages to on_text and other
+    buttons ("verb:id") to on_button, which returns the toast text.
     Returns how many drafts changed state."""
     offset = mem.get_kv(OFFSET_KEY)
     changed = 0
@@ -90,15 +92,21 @@ def handle_updates(mem: Memory, tg: TelegramClient, allowed_user: int,
         mem.set_kv(OFFSET_KEY, str(u.update_id + 1))  # never process an update twice
         if u.sender_id != allowed_user:
             continue
-        changed += _handle(mem, tg, u, on_text)
+        changed += _handle(mem, tg, u, on_text, on_button)
     return changed
 
 
-def _handle(mem: Memory, tg: TelegramClient, u: Update, on_text=None) -> bool:
+def _handle(mem: Memory, tg: TelegramClient, u: Update, on_text=None, on_button=None) -> bool:
     if u.callback_id:
         verb, _, raw_id = (u.callback_data or "").partition(":")
-        if verb not in ("approve", "reject") or not raw_id.isdigit():
+        if not raw_id.isdigit():
             tg.answer(u.callback_id, "Unknown button")
+            return False
+        if verb not in ("approve", "reject"):
+            toast = on_button(verb, int(raw_id)) if on_button else "Unknown button"
+            tg.answer(u.callback_id, toast)
+            if u.message_id and toast not in ("Unknown button", "Already handled"):
+                tg.edit(u.message_id, f"{u.message_text or ''}\n\n— {toast}")
             return False
         # A button can only exist on a draft that was already sent, so any time works.
         did, msg = _decide(mem, verb == "approve", int(raw_id), datetime.max.replace(tzinfo=u.sent_at.tzinfo))
