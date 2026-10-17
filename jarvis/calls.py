@@ -1,4 +1,5 @@
-"""Urgent phone calls through Twilio (voice only, so no A2P 10DLC registration)."""
+"""Phone calls through Twilio (voice only, so no A2P 10DLC registration): urgent calls to
+Elijah, and pointing the number at the webhook he calls JARVIS on (jarvis/phone.py)."""
 
 from xml.sax.saxutils import escape
 
@@ -36,6 +37,19 @@ class TwilioCaller:
         })
         if not r.is_success:
             raise RuntimeError(f"Twilio call failed ({r.status_code}): {r.text[:300]}")
+
+    def point_number_at(self, base_url: str) -> None:
+        """Send calls to the Twilio number to JARVIS's webhook (and tell it when they end)."""
+        r = self.http.get("/IncomingPhoneNumbers.json", params={"PhoneNumber": config.TWILIO_FROM_NUMBER})
+        found = r.json().get("incoming_phone_numbers", []) if r.is_success else []
+        if not found:
+            raise RuntimeError(f"couldn't find {config.TWILIO_FROM_NUMBER} in this Twilio account ({r.status_code})")
+        r = self.http.post(f"/IncomingPhoneNumbers/{found[0]['sid']}.json", data={
+            "VoiceUrl": f"{base_url}/voice/incoming", "VoiceMethod": "POST",
+            "StatusCallback": f"{base_url}/voice/status", "StatusCallbackMethod": "POST",
+        })
+        if not r.is_success:
+            raise RuntimeError(f"Twilio update failed ({r.status_code}): {r.text[:300]}")
 
 
 def twilio_configured() -> bool:

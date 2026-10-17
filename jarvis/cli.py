@@ -191,8 +191,9 @@ def _runner_for(route, warm):
 
 
 def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = False, warm=None,
-            on_first=None, on_text=None) -> str:
-    """One chat turn with full context. Shared by Telegram (typed or voice) and the desk mic.
+            on_first=None, on_text=None, phone: bool = False) -> str:
+    """One chat turn with full context. Shared by Telegram (typed or voice), the desk mic and
+    phone calls.
     `on_first(sentence)` fires as soon as the reply's first sentence has streamed in;
     `on_text(so_far)` gets all of the streaming reply text (the desk mic speaks it as it comes)."""
     import time
@@ -218,7 +219,8 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
         except Exception:  # feed down: answer from stored deadlines rather than not at all
             deadlines = from_memory(mem)
         deadlines_text = format_digest(deadlines, now, days=14)
-    message = f"(said out loud, transcribed) {text}" if spoken else text
+    message = (f"(on the phone, transcribed) {text}" if phone
+               else f"(said out loud, transcribed) {text}" if spoken else text)
     asked = time.time()
     reply = respond(mem, message, now, deadlines_text, runner=runner, on_progress=on_progress,
                     inbox_text=_inbox_text(mem) if "inbox" in blocks else "",
@@ -336,6 +338,50 @@ def _listen(mem: Memory) -> None:
             print(f"listen error: {e}", flush=True)
             mem.log("listen_error", str(e)[:300])
             time.sleep(10)
+
+
+def _phone_ready() -> bool:
+    from jarvis.calls import twilio_configured
+    return bool(config.PHONE_PUBLIC_URL) and twilio_configured()
+
+
+def _phone() -> None:
+    """Answer Elijah's calls to the Twilio number: the webhook the tunnel forwards to."""
+    from jarvis import phone
+    from jarvis.approvals import notify_pending
+    from jarvis.speech import phone_audio
+
+    if not _phone_ready():
+        sys.exit("Set PHONE_PUBLIC_URL and the TWILIO_* / MY_PHONE_NUMBER settings in .env (README: Calling JARVIS)")
+    if not config.PHONE_PUBLIC_URL.startswith("https://"):
+        sys.exit("PHONE_PUBLIC_URL must be the tunnel's https:// address")
+    tg = _messenger()
+    log = lambda s: print(f"phone: {s}", flush=True)  # noqa: E731
+
+    def answer(text, warm):
+        mem = Memory(config.DB_PATH)  # SQLite connections stay on the thread that opened them
+        try:
+            reply = _answer(mem, text, spoken=True, phone=True, warm=warm)
+            if tg:
+                notify_pending(mem, tg)  # drafts and commands asked for on the call get their buttons
+            return reply
+        finally:
+            mem.db.close()
+
+    def start_call():  # one warm Claude session per call, closed when it ends (RAM is tight)
+        if not config.WARM_CLAUDE:
+            return None
+        from jarvis.chat import REPLY_SCHEMA, SYSTEM_PROMPT, run_claude
+        from jarvis.warm import WarmClaude
+        return WarmClaude(SYSTEM_PROMPT, REPLY_SCHEMA, fallback=run_claude, log=log)
+
+    line = phone.PhoneLine(answer, phone_audio, config.PHONE_PUBLIC_URL, config.TWILIO_AUTH_TOKEN,
+                           config.MY_PHONE_NUMBER, pin=config.PHONE_PIN,
+                           send_text=tg.send if tg else None, start_call=start_call,
+                           end_call=lambda warm: warm.close(), log=log)
+    print(f"Answering calls from {phone.masked(config.MY_PHONE_NUMBER)} on 127.0.0.1:{config.PHONE_PORT} "
+          f"(public: {config.PHONE_PUBLIC_URL}/voice/incoming, PIN {'on' if config.PHONE_PIN else 'off'})", flush=True)
+    phone.serve(line, config.PHONE_PORT)
 
 
 def _tick(mem: Memory) -> int:
@@ -485,6 +531,8 @@ def main() -> None:
     ask = sub.add_parser("ask", help="Ask JARVIS something from the terminal (same brain as Telegram)")
     ask.add_argument("message")
     sub.add_parser("call-test", help="Call yourself once to check Twilio voice")
+    ph = sub.add_parser("phone", help="Answer your calls to the Twilio number (runs forever), or point the number here")
+    ph.add_argument("action", nargs="?", default="serve", choices=["serve", "setup"])
     pj = sub.add_parser("projects", help="Project briefs built from your repos and GitHub")
     pj.add_argument("action", nargs="?", default="list", choices=["list", "show", "refresh", "sync"])
     pj.add_argument("name", nargs="?")
@@ -553,11 +601,12 @@ def main() -> None:
         from jarvis import schedule
         if args.action == "install":
             listen = bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
+            phone = _phone_ready()
             schedule.install(args.minutes * 60, listen=listen, watch=config.WATCH, ears=config.EARS,
-                             menubar=config.MENUBAR)
+                             menubar=config.MENUBAR, phone=phone)
             print(f"tick: every {args.minutes} min. listen: {'always on' if listen else 'skipped (Telegram not set up)'}."
                   f" watch: {'on' if config.WATCH else 'off'}. ears: {'on' if config.EARS else 'off'}."
-                  f" Logs: {schedule.LOG_DIR}")
+                  f" phone: {'on' if phone else 'off'}. Logs: {schedule.LOG_DIR}")
         elif args.action == "uninstall":
             print("Removed" if schedule.uninstall() else "Wasn't scheduled")
         elif args.action == "run-now":
@@ -565,6 +614,17 @@ def main() -> None:
             print(f"Started. Check: jarvis schedule status")
         else:
             print(schedule.status())
+        return
+
+    if args.cmd == "phone":
+        if args.action == "setup":
+            from jarvis.calls import TwilioCaller
+            if not _phone_ready() or not config.PHONE_PUBLIC_URL.startswith("https://"):
+                sys.exit("Set PHONE_PUBLIC_URL (the tunnel's https:// address) and the TWILIO_* settings first")
+            TwilioCaller().point_number_at(config.PHONE_PUBLIC_URL)
+            print(f"Calls to {config.TWILIO_FROM_NUMBER} now go to {config.PHONE_PUBLIC_URL}/voice/incoming")
+            return
+        _phone()
         return
 
     if args.cmd == "mail-accounts":

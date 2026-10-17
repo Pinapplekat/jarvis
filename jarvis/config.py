@@ -88,12 +88,16 @@ SELF_INSPECT = os.getenv("SELF_INSPECT", "1") == "1"        # read own files, ru
 COMMANDS = os.getenv("COMMANDS", "1") == "1"                # terminal commands (risky ones need Approve)
 COMMAND_APPROVAL_MINUTES = int(os.getenv("COMMAND_APPROVAL_MINUTES", "30"))  # unanswered requests expire
 
-# Twilio is used only for urgent voice calls
+# Twilio is used only for voice: urgent calls to you, and you calling JARVIS
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "")
 MY_PHONE_NUMBER = os.getenv("MY_PHONE_NUMBER", "")
 QUIET_HOURS = os.getenv("QUIET_HOURS", "23-7")
+# Calling JARVIS from your cell: a Twilio voice webhook on this Mac, reached through a tunnel.
+PHONE_PUBLIC_URL = os.getenv("PHONE_PUBLIC_URL", "").rstrip("/")  # the tunnel's https address
+PHONE_PORT = int(os.getenv("PHONE_PORT", "8787"))                 # local port (localhost only)
+PHONE_PIN = os.getenv("PHONE_PIN", "")  # digits keyed in after pickup; guards against caller-ID spoofing
 
 GRAPH_CLIENT_ID =os.getenv("GRAPH_CLIENT_ID", "")
 GRAPH_TENANT = os.getenv("GRAPH_TENANT", "organizations")

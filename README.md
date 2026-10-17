@@ -118,6 +118,32 @@ uv run jarvis alert "Exam moved to today" --level urgent --key exam-moved --now
 
 `--key` makes an alert one-time, so a source that checks every few minutes can't call you twice about the same thing.
 
+### Calling JARVIS from your phone
+
+Call the Twilio number from your cell and talk to JARVIS anywhere. It picks up with "Good evening, sir.", you talk, and it answers in the same Daniel voice as at the desk. Keep going as long as you like; say "goodbye" or "that's all" to hang up (or just hang up).
+
+- **How it works:** Twilio answers and transcribes what you say (its speech recognition, a few cents per call). The text goes through the normal chat pipeline with full context, marked as a phone call, so replies are one or two short sentences. JARVIS renders the reply with macOS `say` and Twilio plays it down the line. You can talk over it to interrupt.
+- **Long answers:** anything that doesn't fit in about 20 seconds aloud, or has links, is sent to Telegram in full ("The rest is in Telegram, sir."). If an answer takes over 9 seconds you hear "One moment, sir."; after 2 minutes JARVIS stops waiting and sends the answer to Telegram.
+- **Actions work as in chat:** "remind me at 9", "add ECON module 4 due Sunday" and "start a task to..." all work. Email drafts and commands still only happen after you tap Approve / Run in Telegram, and their buttons are sent during the call. Nothing on the phone approves anything.
+- **Only you:** calls from any number other than `MY_PHONE_NUMBER` are rejected before they're answered, so they cost nothing. A call whose caller ID the carrier marked as forged (STIR/SHAKEN) is rejected too. Caller ID can still be faked, so **set `PHONE_PIN`**: JARVIS then asks for a passcode before saying anything, and hangs up after two wrong tries.
+- **Only Twilio:** every webhook request must carry a valid `X-Twilio-Signature` (signed with your auth token), so nobody can talk to the webhook directly. The server listens on `127.0.0.1` only and answers just its `/voice/...` paths. The reply audio lives at random addresses that expire after 10 minutes.
+- **Cost:** about 1¢ a minute for incoming calls, plus Twilio's speech recognition. On a trial account, Twilio plays its trial notice first and you press a key to continue.
+- **Needs the Mac awake and online,** like the other background jobs. Each call gets its own warm Claude session (about 170 MB), closed when you hang up.
+
+Setup:
+1. **Expose the webhook through a tunnel.** Twilio has to reach port `PHONE_PORT` (8787) on this Mac over HTTPS, without opening your router. Pick one:
+   - **Tailscale Funnel** (free, stable address, recommended): install Tailscale, then `tailscale funnel --bg 8787`. Your address is `https://<this-mac>.<tailnet>.ts.net`. Funnel publishes only that one port.
+   - **Cloudflare named tunnel** (free, needs a domain on Cloudflare): `cloudflared tunnel create jarvis`, route a hostname such as `jarvis.yourdomain.com` to `http://localhost:8787`, and run it as a service (`cloudflared service install`).
+   - A quick tunnel (`cloudflared tunnel --url http://localhost:8787`, or ngrok) works for a test, but its address changes every time it restarts, so you'd redo steps 2–3 each time.
+
+   Only this webhook goes through the tunnel. Don't point the tunnel at anything else on the Mac.
+2. Add to `.env`: `PHONE_PUBLIC_URL=https://...` (the tunnel address, no trailing slash) and `PHONE_PIN=` with a few digits. The `TWILIO_*` and `MY_PHONE_NUMBER` settings from above are needed too.
+3. `uv run jarvis phone setup` points your Twilio number's "A call comes in" webhook at `PHONE_PUBLIC_URL/voice/incoming` and its status callback at `/voice/status`. You can also set these yourself in the Twilio console (Phone Numbers → your number → Voice, HTTP POST). The address must match `PHONE_PUBLIC_URL` exactly, or every signature check fails (the log says "no valid Twilio signature").
+4. `uv run jarvis schedule install` starts the `phone` background job (log: `~/Library/Logs/JARVIS/phone.log`). `uv run jarvis phone` runs it in the foreground instead, for testing.
+5. Optional: in the Twilio console, set the number's **Primary handler fails** URL to a TwiML Bin that says "JARVIS is offline, sir." so calls while the Mac is asleep don't just fail.
+
+To turn it off: remove `PHONE_PUBLIC_URL` from `.env`, run `uv run jarvis schedule install`, and stop the tunnel (`tailscale funnel --bg off`, or stop cloudflared).
+
 ### Looking at its own code (read-only)
 
 Ask "how do you decide when to speak up?" or "do the tests pass?" and JARVIS reads its own project instead of guessing. The chat model still has no tools: it proposes an `inspect` action, and JARVIS checks and runs it, then asks again with the result (a few rounds per message, like opening web pages).
@@ -236,7 +262,7 @@ uv run jarvis schedule run-now
 uv run jarvis schedule uninstall
 ```
 
-Two launchd jobs:
+The main launchd jobs (`watch`, `ears`, `menubar` and `phone` are covered in their own sections):
 - `tick` every 5 minutes: syncs Canvas, delivers alerts, sends new drafts to Telegram, sends approved email. Steps without config (Telegram, Twilio) are skipped, and a failing step doesn't stop the others. One tick at a time (lock file).
 - `listen`, always on: Telegram chat and Approve/Reject buttons. Restarted automatically if it stops.
 

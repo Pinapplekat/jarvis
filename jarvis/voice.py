@@ -38,13 +38,13 @@ def user_present(idle: float | None = None) -> bool:
     return idle is not None and idle <= config.VOICE_IDLE_SECONDS
 
 
-def speakable(text: str) -> str:
+def speakable(text: str, limit: int = MAX_SPOKEN) -> str:
     """Make text sound right aloud: no emoji or links, one line, not too long."""
     text = URL.sub("the link", EMOJI.sub("", text))
     text = re.sub(r"(?m)^\s*-\s+", "", text)  # list dashes
     text = " ".join(text.split())
-    if len(text) > MAX_SPOKEN:
-        cut = text[:MAX_SPOKEN]
+    if len(text) > limit:
+        cut = text[:limit]
         text = cut[: cut.rfind(". ") + 1] or cut  # end on a sentence when possible
     return text
 

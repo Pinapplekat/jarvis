@@ -2,6 +2,7 @@
 
 - com.jarvis.tick:   `jarvis tick` every few minutes (Canvas, alerts, drafts, sending mail)
 - com.jarvis.listen: `jarvis listen`, always running (Telegram chat and approval buttons)
+- com.jarvis.phone:  `jarvis phone`, always running once set up (answers your calls to the Twilio number)
 """
 
 import os
@@ -19,7 +20,7 @@ COPY_EXCLUDES = [".git", ".venv", ".venv.nosync", "__pycache__", ".pytest_cache"
 LOG_DIR = Path.home() / "Library/Logs/JARVIS"
 AGENTS = Path.home() / "Library/LaunchAgents"
 TICK, LISTEN, WATCH, EARS = "com.jarvis.tick", "com.jarvis.listen", "com.jarvis.watch", "com.jarvis.ears"
-MENUBAR = "com.jarvis.menubar"
+MENUBAR, PHONE = "com.jarvis.menubar", "com.jarvis.phone"
 LOG = LOG_DIR / "tick.log"
 
 
@@ -88,7 +89,7 @@ def deploy(uv: str) -> None:
 
 
 def install(interval: int = 300, listen: bool = True, watch: bool = True, ears: bool = True,
-            menubar: bool = True) -> None:
+            menubar: bool = True, phone: bool = False) -> None:
     uv = shutil.which("uv")
     if not uv:
         raise SystemExit("uv not found on PATH")
@@ -111,6 +112,10 @@ def install(interval: int = 300, listen: bool = True, watch: bool = True, ears: 
         _load(EARS, _plist(EARS, uv, "ears", None, launcher=str(launcher.EARS_EXECUTABLE)))
     else:
         _unload(EARS)
+    if phone:
+        _load(PHONE, _plist(PHONE, uv, "phone", None))
+    else:
+        _unload(PHONE)
     if menubar:
         from jarvis import config, menubar as indicator
         indicator.build()
@@ -129,7 +134,7 @@ def install(interval: int = 300, listen: bool = True, watch: bool = True, ears: 
 
 def uninstall() -> bool:
     removed = False
-    for label in (TICK, LISTEN, WATCH, EARS, MENUBAR):
+    for label in (TICK, LISTEN, WATCH, EARS, MENUBAR, PHONE):
         removed |= _unload(label)
         (AGENTS / f"{label}.plist").unlink(missing_ok=True)
     return removed
@@ -142,7 +147,7 @@ def run_now() -> None:
 def status(log_lines: int = 5) -> str:
     keep = ("state =", "run interval", "last exit code", "runs =", "pid =")
     out = []
-    for label, command in ((TICK, "tick"), (LISTEN, "listen"), (WATCH, "watch"), (EARS, "ears")):
+    for label, command in ((TICK, "tick"), (LISTEN, "listen"), (WATCH, "watch"), (EARS, "ears"), (PHONE, "phone")):
         if not is_loaded(label):
             out.append(f"{command}: not installed (jarvis schedule install)")
             continue

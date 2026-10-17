@@ -1,5 +1,5 @@
 """Speech, on-device: Whisper transcription (faster-whisper), Daniel-voice audio for
-Telegram voice notes (macOS `say` + ffmpeg), and splitting a streaming reply into
+Telegram voice notes and phone calls (macOS `say` + ffmpeg), and splitting a streaming reply into
 sentences so each can be spoken as soon as it's written. No audio leaves the Mac for this."""
 
 import re
@@ -60,6 +60,17 @@ def voice_note(text: str) -> bytes:
         subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(aiff), "-c:a", "libopus",
                         "-b:a", "32k", str(ogg)], check=True, timeout=60)
         return ogg.read_bytes()
+
+
+def phone_audio(text: str) -> bytes:
+    """Text -> 8 kHz mono WAV in JARVIS's voice, what a phone line carries (Twilio's <Play>)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        aiff, wav = Path(tmp) / "say.aiff", Path(tmp) / "call.wav"
+        subprocess.run(["say", "-v", config.VOICE_NAME, "-r", str(config.VOICE_RATE), "-o", str(aiff),
+                        speakable(text)], check=True, timeout=60)
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(aiff), "-ar", "8000", "-ac", "1",
+                        "-c:a", "pcm_s16le", str(wav)], check=True, timeout=60)
+        return wav.read_bytes()
 
 
 # Words whose trailing period doesn't end a sentence ("Dr. G", "e.g. this", "5 p.m. today").

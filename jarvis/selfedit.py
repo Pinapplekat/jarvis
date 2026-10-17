@@ -30,7 +30,7 @@ LOCK = config.DATA_DIR / "selfedit.lock"
 GIT_ENV = {"GIT_AUTHOR_NAME": "JARVIS", "GIT_AUTHOR_EMAIL": "jarvis@localhost",
            "GIT_COMMITTER_NAME": "JARVIS", "GIT_COMMITTER_EMAIL": "jarvis@localhost"}
 SAFETY_FILES = ["jarvis/approvals.py", "jarvis/chat.py", "jarvis/selfedit.py", "jarvis/telegram.py",
-                "jarvis/web.py", "jarvis/mailrelay.py", "jarvis/schedule.py"]
+                "jarvis/web.py", "jarvis/mailrelay.py", "jarvis/schedule.py", "jarvis/phone.py"]
 FORBIDDEN = re.compile(r"(^|/)\.env($|\.(?!example$))")  # .env, .env.local... but not .env.example
 TEST_CMD = ["uv", "run", "--extra", "dev", "pytest", "-q"]
 
