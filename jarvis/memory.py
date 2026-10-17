@@ -142,6 +142,36 @@ CREATE TABLE IF NOT EXISTS seen_mail (
     at TEXT NOT NULL
 );
 
+-- Elijah's phone location from Telegram shares (jarvis.location). Kept on this Mac only.
+CREATE TABLE IF NOT EXISTS location_points (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,                -- first seen here
+    last_seen TEXT NOT NULL,         -- still here as of (nearby updates extend the point)
+    lat REAL NOT NULL,
+    lon REAL NOT NULL,
+    accuracy REAL,                   -- metres, when Telegram gives it
+    source TEXT NOT NULL,            -- static | live
+    live_until TEXT                  -- when a live share ends (NULL: static, or until turned off)
+);
+CREATE INDEX IF NOT EXISTS location_points_at ON location_points(at);
+
+CREATE TABLE IF NOT EXISTS places (
+    id INTEGER PRIMARY KEY,
+    name TEXT,                       -- 'school', 'work'...; NULL until Elijah labels it
+    lat REAL NOT NULL,
+    lon REAL NOT NULL,
+    asked_at TEXT,                   -- when JARVIS asked what this place is
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS place_visits (
+    day TEXT NOT NULL,               -- local date
+    place_id INTEGER NOT NULL,       -- 0 = "there was location data this day"
+    first TEXT NOT NULL,             -- local HH:MM
+    last TEXT NOT NULL,
+    PRIMARY KEY (day, place_id)
+);
+
 CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL

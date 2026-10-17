@@ -322,6 +322,23 @@ def _listen(mem: Memory) -> None:
             return plans.handle_button(mem, verb, edit_id, on_approved)
         return selfedit.handle_button(mem, tg, verb, edit_id)
 
+    def on_location(update):
+        """Stored quietly; only a fresh share (not each live update) gets a short reply."""
+        if not config.LOCATION:
+            return
+        from jarvis import location
+        p = update.location
+        if location.record_point(mem, p["lat"], p["lon"], p["at"], p["accuracy"], p["source"],
+                                 p["live_until"]) is None:
+            return
+        location.place_name(mem, p["lat"], p["lon"])  # name it now, while it's fresh (cached)
+        if p["first"]:
+            where = location.describe_spot(mem, p["lat"], p["lon"])
+            until = (f" until {p['live_until'].astimezone(_now_local().tzinfo):%-I:%M %p}"
+                     if p["live_until"] else " until you turn it off" if p["source"] == "live" else "")
+            tg.send(f"Following along{until}, sir ({where})." if p["source"] == "live"
+                    else f"Noted, sir: {where}.")
+
     from jarvis.reminders import deliver_reminders
     from jarvis.voice import Announcer
     announcer = Announcer(tg, mem)
@@ -333,7 +350,7 @@ def _listen(mem: Memory) -> None:
             tasks.start_queued(mem, worker)  # tasks from the desk mic, or resumed after an expiry
             # Short long-poll so reminders go out within ~25s of their time.
             handle_updates(mem, tg, int(config.TELEGRAM_CHAT_ID), on_text, wait=25, on_button=on_button,
-                           transcribe=_transcribe)
+                           transcribe=_transcribe, on_location=on_location)
         except Exception as e:  # network blips, Telegram hiccups: wait and reconnect
             print(f"listen error: {e}", flush=True)
             mem.log("listen_error", str(e)[:300])
@@ -414,6 +431,28 @@ def _tick(mem: Memory) -> int:
             deadlines.extend(found)
             return f"{raised} new alerts"
         step("canvas", canvas)
+    from jarvis import jobs
+
+    def watch_jobs():
+        raised, pruned = jobs.check_jobs(mem), jobs.prune()
+        return f"{raised} pings" + (f", pruned {pruned}" if pruned else "")
+    step("jobs", watch_jobs)  # before alerts, so a finished job's ping goes out this tick
+    if config.LOCATION:
+        from jarvis import location
+        from jarvis.alerts import in_quiet_hours, parse_quiet_hours
+
+        def where():
+            now = _now_local()
+            quiet = in_quiet_hours(now.time().replace(tzinfo=None), parse_quiet_hours(config.QUIET_HOURS))
+            ask = (lambda text: (tg.send(text), mem.add_chat("assistant", text))) if tg and not quiet else None
+            learned = location.learn(mem, now, ask=ask)
+            lapse = location.check_sharing(mem, now, quiet)
+            if lapse and tg:
+                tg.send(lapse)
+                mem.add_chat("assistant", lapse)
+            pruned = location.prune(mem)
+            return learned + (", sharing lapsed" if lapse else "") + (f", pruned {pruned}" if pruned else "")
+        step("location", where)
     if config.MAIL_WATCH and config.MAIL_ACCOUNT:
         from jarvis.mailwatch import check_new_mail
         from jarvis import judge as _judge
@@ -524,6 +563,15 @@ def main() -> None:
     cm.add_argument("action", choices=["log", "try"])
     cm.add_argument("command", nargs="?", default="", help='for try: the command, quoted ("git log -5")')
     cm.add_argument("-n", type=int, default=20)
+    jb = sub.add_parser("jobs", help="Background jobs (approved long commands): list, show one's log, or kill one")
+    jb.add_argument("action", nargs="?", default="list", choices=["list", "show", "kill"])
+    jb.add_argument("id", nargs="?", type=int)
+    jb.add_argument("-n", type=int, default=40, help="for show: log lines")
+    lo = sub.add_parser("location", help="Where your phone was last seen (Telegram location shares)")
+    lo.add_argument("action", nargs="?", default="show", choices=["show", "history", "places", "label", "forget"])
+    lo.add_argument("id", nargs="?", type=int, help="for label: the place number")
+    lo.add_argument("name", nargs="?", help="for label: what it is (school, work, home...)")
+    lo.add_argument("--hours", type=int, default=24, help="for history")
     lt = sub.add_parser("latency", help="How fast recent chat replies were, by model")
     lt.add_argument("--last", type=int, default=30)
     sub.add_parser("ears", help="Listen for 'Hey Jarvis' on the Mac's mic and answer out loud (runs forever)")
@@ -730,6 +778,44 @@ def main() -> None:
             what = e.get("outcome") or (f"exit {e.get('exit')}" if "exit" in e else "waiting for OK")
             print(f"{e['at'][5:16]} {e.get('class', ''):<8} {str(e.get('approved_by') or '-'):<9} "
                   f"{what:<14} $ {' '.join(e.get('argv') or [])}")
+        return
+    if args.cmd == "jobs":
+        from jarvis import jobs
+        if args.action == "list":
+            for s in jobs.list_jobs(20):
+                print(f"#{s['id']:<4} {jobs.describe_state(s):<34} $ {' '.join(s['argv'])[:100]}")
+            print(f"\nJob folders: {jobs.JOBS_DIR}")
+        elif args.action == "show":
+            s = jobs.job_status(args.id or 0, lines=args.n)
+            if not s:
+                sys.exit(f"No job #{args.id} (see: jarvis jobs)")
+            print(f"#{s['id']} {jobs.describe_state(s)}\n$ {' '.join(s['argv'])}\nin {s['cwd']}\n\n{s['tail']}")
+        else:
+            print(f"Stopped #{args.id}" if jobs.kill_job(args.id or 0) else f"Job #{args.id} isn't running")
+        return
+    if args.cmd == "location":
+        from datetime import timedelta
+        from jarvis import location
+        now = _now_local()
+        if args.action == "show":
+            print(location.for_prompt(mem, now))
+        elif args.action == "history":
+            for p in location.recent(mem, now - timedelta(hours=args.hours)):
+                start = location._dt(p["at"]).astimezone(now.tzinfo)
+                end = location._dt(p["last_seen"]).astimezone(now.tzinfo)
+                print(f"{start:%a %-I:%M %p}-{end:%-I:%M %p}  {p['source']:<6} "
+                      f"{location.describe_spot(mem, p['lat'], p['lon'])}")
+        elif args.action == "places":
+            for p in location.places(mem):
+                near = location.place_name(mem, p["lat"], p["lon"], lookup=False) or "(no name looked up)"
+                print(f"#{p['id']:<3} {p['name'] or '(unlabelled)':<14} {near}")
+        elif args.action == "label":
+            if not args.id or not args.name or not location.label_place(mem, args.id, args.name):
+                sys.exit("Usage: jarvis location label <place #> <name>  (see: jarvis location places)")
+            print(f"Place #{args.id} is now {args.name.lower()}")
+        else:
+            location.forget_all(mem)
+            print("Forgot all location points, places and visits")
         return
     if args.cmd == "latency":
         print(latency_summary([e["content"] for e in mem.db.execute(

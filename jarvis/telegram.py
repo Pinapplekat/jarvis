@@ -22,6 +22,7 @@ class Update:
     message_text: str | None = None
     voice_file_id: str | None = None   # a voice note (transcribed into `text` before handling)
     via_voice: bool = False
+    location: dict | None = None       # a shared location or live-location update (jarvis.location point)
 
 
 class TelegramError(RuntimeError):
@@ -105,10 +106,20 @@ class TelegramClient:
     def updates(self, offset: int | None, wait: int = 0) -> list[Update]:
         """wait > 0 long-polls: Telegram holds the request until a message arrives or wait seconds pass."""
         raw = self._call("getUpdates", offset=offset, timeout=wait,
-                         allowed_updates=["message", "callback_query"])
+                         allowed_updates=["message", "edited_message", "callback_query"])
         out = []
         for u in raw:
-            if "message" in u and "text" in u["message"]:
+            edited = "edited_message" in u
+            m = u.get("message") or u.get("edited_message") or {}
+            if "location" in m:  # a share, or (edited) each update of a live share
+                from jarvis.location import from_message
+                if (point := from_message(m, edited)):
+                    out.append(Update(u["update_id"], (m.get("from") or {}).get("id", 0), _ts(m["date"]),
+                                      location=point))
+                    continue
+            if edited:
+                out.append(Update(u["update_id"], 0, _ts(0)))  # edited text isn't re-answered
+            elif "message" in u and "text" in u["message"]:
                 m = u["message"]
                 out.append(Update(u["update_id"], m["from"]["id"], _ts(m["date"]), text=m["text"]))
             elif "message" in u and "voice" in u["message"]:

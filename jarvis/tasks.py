@@ -132,6 +132,8 @@ def for_prompt(mem: Memory) -> str:
         state = {"pending": "waiting for his Run/Reject" if a["notified_at"] else "about to be sent for OK",
                  "approved": "approved, running", "done": "ran OK", "failed": "ran, failed",
                  "rejected": "rejected or expired"}.get(a["status"], a["status"])
+        if p.get("job") and a["status"] == "done":
+            state = "started as a background job"
         lines.append(f"- command #{a['id']} [{state}] $ {' '.join(p['argv'])[:120]}")
     return "\n".join(lines) or "(none)"
 

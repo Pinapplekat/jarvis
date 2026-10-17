@@ -161,6 +161,16 @@ JARVIS can also run commands in chat ("show me the last 5 commits", "delete the 
 - **Never:** a shell. Pipes, redirects, `$`, `;` and `&&` are refused outright.
 - **Log:** every command (auto, approved, rejected, expired, timed out) is appended to `~/Library/Application Support/JARVIS/commands.jsonl` with the time, command, folder, who approved it and the exit code, never the output. `jarvis cmd log` shows it. `COMMANDS=0` turns commands off.
 
+### Background jobs (long commands, with pings)
+
+Commands that take longer than two minutes or keep running (long builds, installs, servers, launching Claude Code) run as background jobs instead of hitting the 120 s cutoff.
+
+- **Still your call:** JARVIS asks with the usual Run / Reject card, marked "runs in the background as a job". This always needs your tap, even for a read-only command, because a job runs outside the sandbox with no time limit.
+- **How it runs:** detached in its own session, with no shell and the same scrubbed environment. Output goes to `~/Library/Application Support/JARVIS/jobs/<id>/job.log`, and a small wrapper records the exit code, so JARVIS can tell whether a job finished, failed or died.
+- **"How's it going?":** JARVIS can read a job's state, runtime and last log lines without asking (redacted, treated as untrusted data). Chat always sees its five newest jobs.
+- **Pings:** each tick (every 5 min), JARVIS sends one Telegram message when a job finishes, fails or is lost, and one if it prints nothing for `JOB_STALL_MINUTES` (10).
+- **CLI:** `jarvis jobs` lists them, `jarvis jobs show 3` shows one's log, `jarvis jobs kill 3` stops one. Finished jobs are removed after 14 days.
+
 ### Task mode (working a problem step by step)
 
 For anything that takes several steps ("figure out why the ears log is noisy", "get the tests passing", "find out how X works on my Mac"), JARVIS starts a task instead of answering in one go, or saying it doesn't know how. It works like a Claude Code session: Claude picks one action (inspect the project, run a command, open a page, or finish), sees the result, and decides the next step. It's told to investigate (search the code, read docs, run `--help`, check what's running) and to change approach when something fails.
@@ -183,6 +193,17 @@ To turn it on yourself (from this folder):
 4. `uv run jarvis schedule install`
 
 To turn it off: remove `JARVIS_REPO` from `.env` and run `uv run jarvis schedule install`.
+
+## Location (from Telegram)
+
+Share your location with the JARVIS bot in Telegram (📎 → Location). A **live** share updates on its own, so JARVIS always roughly knows where you are, the same way it knows what's on your screen.
+
+- **What it keeps:** points on this Mac only (latitude, longitude, accuracy, time). If you haven't moved, an update extends the last point instead of adding one. It keeps at most `LOCATION_KEEP_POINTS` (300) points from the last `LOCATION_KEEP_DAYS` (14) days. A location counts as stale after `LOCATION_STALE_MINUTES` (30). Locations from anyone but you are ignored.
+- **Place names:** OpenStreetMap Nominatim turns a point into a street or building name. It gets coordinates rounded to about 100 m, at most one lookup a second, and the answers are cached. This is the only place your coordinates are sent. `LOCATION_GEOCODE=0` turns it off and keeps everything local.
+- **Places and routine:** after 20 minutes in one spot, JARVIS asks once what the place is ("school", "work"). Reply in chat, or run `jarvis location label 3 school`. It then learns which weekdays and hours you're usually at each place, so chat and the morning brief can make a guess like "not at school; usually is by now on Mondays". These are guesses from your own history; class times in facts aren't read yet.
+- **What chat sees:** your last known place and how old it is, whether live sharing is on, the last few hours of movement, and the routine guess. Coordinates only appear when a place has no name, rounded to about 1 km.
+- **Live sharing lapses:** Telegram ends a live share after at most 8 hours, unless you pick "until I turn it off". JARVIS reminds you once when a share ends, outside quiet hours. A background reporter on the phone (OwnTracks, or a Shortcuts automation posting to an authenticated endpoint) would avoid the gaps. It isn't built; it would be a later plan.
+- **CLI:** `jarvis location` (what JARVIS sees), `jarvis location history --hours 24`, `jarvis location places`, and `jarvis location forget` (wipes all points, places and visits). `LOCATION=0` turns it off.
 
 ## Watching (senses)
 

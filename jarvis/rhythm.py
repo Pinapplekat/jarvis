@@ -71,7 +71,17 @@ def context(mem: Memory, now: datetime, deadlines_text: str) -> str:
         "Screen time today by activity: " + time_split,
         "Commits today:\n" + ("\n".join(commits) or "(none)"),
         "Recent journal (yesterday and before):\n" + journal_for_prompt(mem, 2),
+        "Where his phone is (from Telegram location shares; guesses):\n" + _location(mem, now),
     ])
+
+
+def _location(mem: Memory, now: datetime) -> str:
+    """The location block, including the routine guess (e.g. 'not at school; usually is by now')."""
+    from jarvis.location import for_prompt
+    try:
+        return for_prompt(mem, now)
+    except Exception:
+        return "(unavailable)"
 
 
 def _compose(system: str, ctx: str, runner: Runner | None) -> dict:

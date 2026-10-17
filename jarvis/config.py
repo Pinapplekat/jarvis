@@ -87,6 +87,15 @@ PROJECT_DIR = Path(os.getenv("JARVIS_PROJECT_DIR") or (
 SELF_INSPECT = os.getenv("SELF_INSPECT", "1") == "1"        # read own files, run read-only checks
 COMMANDS = os.getenv("COMMANDS", "1") == "1"                # terminal commands (risky ones need Approve)
 COMMAND_APPROVAL_MINUTES = int(os.getenv("COMMAND_APPROVAL_MINUTES", "30"))  # unanswered requests expire
+JOB_STALL_MINUTES = int(os.getenv("JOB_STALL_MINUTES", "10"))  # ping once if a background job prints nothing this long
+
+# Location: points from locations you share in Telegram, kept on this Mac; place names come
+# from OpenStreetMap Nominatim (rounded, cached coordinates are the only thing sent).
+LOCATION = os.getenv("LOCATION", "1") == "1"
+LOCATION_GEOCODE = os.getenv("LOCATION_GEOCODE", "1") == "1"
+LOCATION_STALE_MINUTES = int(os.getenv("LOCATION_STALE_MINUTES", "30"))
+LOCATION_KEEP_POINTS = int(os.getenv("LOCATION_KEEP_POINTS", "300"))
+LOCATION_KEEP_DAYS = int(os.getenv("LOCATION_KEEP_DAYS", "14"))
 
 # Twilio is used only for voice: urgent calls to you, and you calling JARVIS
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")

@@ -282,7 +282,8 @@ def describe(result) -> str:
 
 # ----- approval over Telegram -----
 def request_approval(mem: Memory, verdict: Verdict, cwd: str | None, why: str, extra: dict | None = None) -> int:
-    """Queue a command for Elijah's Run/Reject. `extra` can link it to a task and carry a risk label."""
+    """Queue a command for Elijah's Run/Reject. `extra` can link it to a task, carry a risk label,
+    or say {"job": True} to run it as a background job (jarvis.jobs) once approved."""
     from jarvis.introspect import project_dir
     payload = {"argv": verdict.argv, "cwd": str(Path(cwd).expanduser()) if cwd else str(project_dir()),
                "why": why[:300], "reason": verdict.reason, **(extra or {})}
@@ -295,7 +296,8 @@ def request_approval(mem: Memory, verdict: Verdict, cwd: str | None, why: str, e
 def format_request(action_id: int, payload: dict) -> str:
     task = f" for task #{payload['task_id']}" if payload.get("task_id") else ""
     risk = f"\n{payload['risk']}" if payload.get("risk") else ""
-    return (f"Command #{action_id}{task} needs your OK ({payload.get('reason', 'not read-only')}){risk}\n\n"
+    job = "\nRuns in the background as a job (no time limit); I'll ping you when it ends." if payload.get("job") else ""
+    return (f"Command #{action_id}{task} needs your OK ({payload.get('reason', 'not read-only')}){risk}{job}\n\n"
             f"$ {shlex.join(payload['argv'])}\nin {payload['cwd']}"
             + (f"\n\nWhy: {payload['why']}" if payload.get("why") else ""))
 
@@ -366,13 +368,25 @@ def handle_button(mem: Memory, tg, verb: str, action_id: int, background: bool =
         # SQLite connections can't cross threads, so a background run opens its own.
         own = Memory(db_file) if background and db_file else mem
         try:
-            verdict = Verdict("approval", payload.get("reason", ""), payload["argv"])
-            result = run_command(verdict, payload["cwd"], approved_by="telegram")
-            if not payload.get("task_id"):  # a task shows it in its progress message instead
-                tg.send(f"Command #{action_id}: $ {shlex.join(payload['argv'])}\n{describe(result)}"[:3900])
-            own.resolve_action(action_id, "done" if result.code == 0 else "failed")
-            own.log("command", f"#{action_id} ran: {'timed out' if result.timed_out else f'exit {result.code}'}")
-            outcome = describe(result)
+            if payload.get("job"):
+                from jarvis import jobs
+                job_id = jobs.start_job(payload["argv"], payload["cwd"], action_id, payload.get("why", ""))
+                audit({"argv": payload["argv"], "cwd": payload["cwd"], "class": "approval",
+                       "approved_by": "telegram", "pending_id": action_id, "outcome": f"job {job_id}"})
+                own.resolve_action(action_id, "done")
+                own.log("command", f"#{action_id} started as job #{job_id}")
+                outcome = f"(started as background job #{job_id}; check it with job_status)"
+                if not payload.get("task_id"):
+                    tg.send(f"Command #{action_id} is running as job #{job_id}: $ {shlex.join(payload['argv'])}\n"
+                            "I'll ping you when it finishes, fails or stalls.")
+            else:
+                verdict = Verdict("approval", payload.get("reason", ""), payload["argv"])
+                result = run_command(verdict, payload["cwd"], approved_by="telegram")
+                if not payload.get("task_id"):  # a task shows it in its progress message instead
+                    tg.send(f"Command #{action_id}: $ {shlex.join(payload['argv'])}\n{describe(result)}"[:3900])
+                own.resolve_action(action_id, "done" if result.code == 0 else "failed")
+                own.log("command", f"#{action_id} ran: {'timed out' if result.timed_out else f'exit {result.code}'}")
+                outcome = describe(result)
         except Exception as e:  # never leave him waiting in silence
             own.resolve_action(action_id, "failed")
             own.log("command", f"#{action_id} failed: {str(e)[:200]}")

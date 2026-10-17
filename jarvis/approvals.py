@@ -85,7 +85,8 @@ def _decide(mem: Memory, approve: bool, action_id: int | None, written_at: datet
 def handle_updates(mem: Memory, tg: TelegramClient, allowed_user: int,
                    on_text: Callable[[Update], None] | None = None, wait: int = 0,
                    on_button: Callable[[str, int], str] | None = None,
-                   transcribe: Callable[[bytes], str] | None = None) -> int:
+                   transcribe: Callable[[bytes], str] | None = None,
+                   on_location: Callable[[Update], None] | None = None) -> int:
     """Apply button presses and typed (or spoken) replies; pass other messages to on_text and
     other buttons ("verb:id") to on_button, which returns the toast text. Voice notes are
     transcribed first, so "yes 3" works spoken too. Returns how many drafts changed state."""
@@ -95,6 +96,10 @@ def handle_updates(mem: Memory, tg: TelegramClient, allowed_user: int,
         mem.set_kv(OFFSET_KEY, str(u.update_id + 1))  # never process an update twice
         if u.sender_id != allowed_user:
             continue  # strangers' voice notes are never even downloaded
+        if u.location:
+            if on_location:
+                on_location(u)
+            continue
         if u.voice_file_id:
             if not transcribe:
                 continue
