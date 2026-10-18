@@ -77,6 +77,7 @@ Message the bot like a person: "what's due this week?", "remember rent is due on
   - **self-editing off (default):** in Claude Code, say "build the approved JARVIS plans" (`jarvis plans` lists them, `jarvis plans done <id>` marks one built); or
   - **self-editing on:** JARVIS builds it itself (see below) and sends you the result with **Deploy / Discard**.
   - In short, JARVIS can propose and build changes to its own code once you approve a plan and self-editing is on.
+  - Self-edit pipeline last re-tested: 2026-10-17.
 - **Always on:** `jarvis listen` keeps a connection open to Telegram (it also handles the Approve/Reject buttons). `jarvis schedule install` runs it in the background.
 
 ## Canvas deadlines and weekly digest
