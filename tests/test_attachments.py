@@ -32,7 +32,8 @@ def test_traversal_and_symlink_escapes_are_refused(shots, tmp_path):
 
 @pytest.mark.parametrize("name,data,reason", [("notes.txt", b"hi", "isn't an image"),
                                               ("huge.png", b"0" * (attachments.MAX_BYTES + 1), "too big"),
-                                              ("missing.png", None, "no file")])
+                                              ("missing.png", None, "no file")],
+                         ids=["not-an-image", "oversized", "missing"])  # short ids: the data is 10 MB
 def test_wrong_type_oversized_or_missing(shots, name, data, reason):
     if data is not None:
         (shots / name).write_bytes(data)

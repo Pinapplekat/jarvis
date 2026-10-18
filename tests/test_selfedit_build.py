@@ -138,3 +138,16 @@ def test_tick_restarts_a_dead_builder_twice_then_gives_up(build, monkeypatch):
     assert selfedit.check_health(m, tg) == "gave up" and m.get_self_edit(eid)["status"] == "failed"
     from jarvis import reports
     assert len(spawned) == selfedit.MAX_RESTARTS and reports.recent(m)[0]["kind"] == "failed"
+
+
+def test_a_silent_builder_is_reported_once(build, monkeypatch):
+    import os
+    import time
+    from jarvis import reports
+    m, tg = Memory(":memory:"), FakeTG()
+    eid = m.add_self_edit("request", "README note", "add it")
+    m.set_self_edit(eid, status="building")
+    selfedit._status(pid=os.getpid(), started=time.time() - 3600, phase="building")
+    assert selfedit.check_health(m, tg) == "stalled (reported)"
+    assert "no progress for 60 minutes" in reports.recent(m)[0]["text"]
+    assert selfedit.check_health(m, tg) == "ok"  # once per build

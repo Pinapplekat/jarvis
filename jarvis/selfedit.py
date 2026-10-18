@@ -176,7 +176,8 @@ def prepare_clone() -> str:
 
 def count_tests(cwd: Path) -> int:
     r = _run([*TEST_CMD, "--collect-only"], cwd=cwd, timeout=300)
-    m = re.search(r"(\d+) tests? collected", r.stdout)
+    # Only the summary line matters; a huge test id elsewhere once made this search run for ever.
+    m = re.search(r"(\d+) tests? collected", r.stdout[-2000:])
     return int(m[1]) if m else 0
 
 
@@ -507,7 +508,17 @@ def check_health(mem: Memory, tg) -> str:
     """From the tick: a plan stuck 'building' with no builder alive gets restarted (twice at
     most, then it's marked failed and Elijah is told)."""
     stuck = mem.self_edits("building")
-    if not stuck or builder_alive():
+    if stuck and builder_alive():  # alive but silent (stuck before or inside the session): say so once
+        st = read_status()
+        quiet = time.time() - max(st.get("started") or 0, st.get("last_output") or 0)
+        if quiet > config.BUILD_HANG_MINUTES * 60 and st.get("stall_reported") != st.get("started"):
+            _status(stall_reported=st.get("started"))
+            reports.add(mem, "build", stuck[0]["id"], "note", f"building {stuck[0]['title']}",
+                        f"the build has shown no progress for {int(quiet // 60)} minutes ({st.get('phase', '?')}); "
+                        "it may be stuck. `jarvis build stop` ends it, `jarvis build start` retries.")
+            return "stalled (reported)"
+        return "ok"
+    if not stuck:
         return "ok"
     job = stuck[0]
     tries = int(mem.get_kv(f"build_restarts:{job['id']}") or 0)
