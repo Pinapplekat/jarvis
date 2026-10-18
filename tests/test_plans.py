@@ -115,6 +115,21 @@ def test_daily_idea_once_in_evening_and_not_piling_up():
     assert len(run.calls) == 1
 
 
+def test_combined_plan_is_marked_built_once_its_host_deploys(monkeypatch):
+    m = Memory(":memory:")
+    absorbed = m.add_self_edit("request", "finish sentences", "x")
+    host = m.add_self_edit("request", "barge-in", "y")
+    monkeypatch.setattr(plans, "COMBINED", {absorbed: host})
+    m.set_self_edit(absorbed, status="approved")
+    m.set_self_edit(host, status="ready")
+    assert plans.settle_combined(m) == []  # not deployed yet: leave it
+    m.set_self_edit(host, status="deployed")
+    assert plans.settle_combined(m) == [absorbed]
+    job = m.get_self_edit(absorbed)
+    assert job["status"] == "deployed" and "barge-in" in job["summary"]
+    assert plans.settle_combined(m) == []
+
+
 def test_no_idea_is_fine():
     m = Memory(":memory:")
     assert plans.maybe_propose_idea(m, EVENING, runner_returning({"idea": None})) is None

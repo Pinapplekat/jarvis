@@ -115,6 +115,40 @@ def test_speak_queue_cancel_stops_playback_and_drops_the_rest():
     assert not any(t.startswith("Stale") for t, _ in played)
 
 
+def test_stop_speaking_cuts_off_say(monkeypatch):
+    from jarvis import voice
+
+    class FakeSay:
+        def __init__(self, argv, **kw):
+            self.argv, self.done = argv, False
+
+        def poll(self):
+            return 0 if self.done else None
+
+        def terminate(self):
+            self.done = True
+
+    monkeypatch.setattr(voice.subprocess, "Popen", FakeSay)
+    assert voice.speak("Three things, sir.")
+    proc = voice._speaking
+    assert voice.stop_speaking() and proc.done
+    assert not voice.stop_speaking()  # nothing left talking
+
+
+def test_speak_queue_reports_playing_and_cancel_stops_it():
+    log, gate = [], threading.Event()
+    q = SpeakQueue(synth=lambda t: t, play=lambda clip: FakeClip(clip, log, gate))
+    assert not q.playing
+    q.say("Long one.")
+    for _ in range(100):
+        if q.playing:
+            break
+        time.sleep(0.01)
+    assert q.playing
+    q.cancel()  # what a barge-in does
+    assert q.wait(5) and not q.playing and log == [("played", "Long one.", True)]
+
+
 def test_speak_queue_survives_a_failed_render():
     log = []
 

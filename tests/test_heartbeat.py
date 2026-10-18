@@ -253,12 +253,13 @@ def test_jev_decides_whether_a_reply_closes_it():
     import time
     m = Memory(":memory:")
     now = datetime.now(TZ)
-    heartbeat.run_heartbeat(m, now, [essay(20)], think=thinker(say_about("deadline:canvas:1")))
+    due = essay((now - NOW) / timedelta(hours=1) + 20)  # 20 h from the real clock, which this test uses
+    heartbeat.run_heartbeat(m, now, [due], think=thinker(say_about("deadline:canvas:1")))
     time.sleep(1.1)
     m.add_chat("user", "what's the weather like")
     fast = lambda state, qs: {q.key: Answer(False, 0.9) for q in qs}  # noqa: E731  (not a dismissal)
     heartbeat.notice_dismissals(m, datetime.now(TZ) + timedelta(minutes=5), fast)
-    assert heartbeat.open_items(m, datetime.now(TZ), [essay(20)])  # still open
+    assert heartbeat.open_items(m, datetime.now(TZ), [due])  # still open
 
 
 def test_chat_dont_remind_closes_matching_items():

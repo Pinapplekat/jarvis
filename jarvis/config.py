@@ -58,6 +58,11 @@ EARS = os.getenv("EARS", "1") == "1"
 MENUBAR = os.getenv("MENUBAR", "1") == "1"                    # status indicator in the menu bar
 WAKE_THRESHOLD = float(os.getenv("WAKE_THRESHOLD", "0.6"))    # raise if it wakes by mistake
 FOLLOW_UP_SECONDS = int(os.getenv("FOLLOW_UP_SECONDS", "6"))  # listen for a follow-up without the wake word
+EAR_END_SILENCE_SECONDS = float(os.getenv("EAR_END_SILENCE_SECONDS", "1.2"))  # quiet that ends a turn
+EAR_MAX_SILENCE_SECONDS = float(os.getenv("EAR_MAX_SILENCE_SECONDS", "1.5"))  # ...once he's paused mid-thought
+BARGE_IN = os.getenv("BARGE_IN", "1") == "1"                  # talk over JARVIS to stop it and be heard
+BARGE_IN_MIN_MS = int(os.getenv("BARGE_IN_MIN_MS", "300"))    # sustained speech that counts as interrupting
+BARGE_IN_LEVEL = float(os.getenv("BARGE_IN_LEVEL", "3.0"))    # x the speech level; raise if it interrupts itself
 # Ping on Telegram for important new mail (school domains, saved professor addresses, keywords)
 MAIL_WATCH = os.getenv("MAIL_WATCH", "1") == "1"
 SCHOOL_EMAIL_DOMAINS = os.getenv("SCHOOL_EMAIL_DOMAINS", "seattlecolleges.edu")

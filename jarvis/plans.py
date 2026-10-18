@@ -20,6 +20,9 @@ CODE_DIR = Path(__file__).resolve().parent
 
 Runner = Callable[[str, str], dict]
 
+# Plans built as part of a later one: {absorbed plan id: the plan that built it}.
+COMBINED = {21: 22}  # finish-sentence listening went in with barge-in
+
 PLAN_SCHEMA = {
     "type": "object",
     "properties": {
@@ -146,6 +149,19 @@ def handle_button(mem: Memory, verb: str, edit_id: int,
             return on_approved(edit_id)
         return "Approved, saved for Claude Code"
     return "Unknown button"
+
+
+def settle_combined(mem: Memory) -> list[int]:
+    """Once a plan that absorbed another is deployed, mark the absorbed one built too, so it
+    isn't built twice. A plan that's mid-build or waiting on Deploy is left alone."""
+    settled = []
+    for absorbed, host in COMBINED.items():
+        job = mem.get_self_edit(host)
+        if job and job["status"] == "deployed" and mem.set_self_edit(
+                absorbed, expect=("approved", "queued", "failed"), status="deployed",
+                summary=f"combined into plan #{host} ({job['title']})"):
+            settled.append(absorbed)
+    return settled
 
 
 def maybe_propose_idea(mem: Memory, now: datetime, runner: Runner | None = None) -> int | None:

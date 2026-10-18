@@ -6,7 +6,9 @@ Runs as the `jarvis ears` background job under the "JARVIS Ears" app, which hold
 Microphone permission.
 """
 
+import math
 import subprocess
+import threading
 import time
 from collections import deque
 from typing import Callable
@@ -20,9 +22,12 @@ CHUNK = 1280                 # 80 ms, what openWakeWord expects
 CHIME = "/System/Library/Sounds/Tink.aiff"
 MISS = "/System/Library/Sounds/Pop.aiff"
 MAX_UTTERANCE = 15.0         # seconds
-END_SILENCE = 1.0            # seconds of quiet that end an utterance
 START_TIMEOUT = 4.0          # seconds to start talking after the chime
+RESUME_GAP = 0.25            # a pause this long that he talks through marks him as mid-thought
+ECHO_WINDOW = 12             # recent mic levels (~1 s) while JARVIS talks: how loud its own voice is
+ECHO_WARMUP = 0.3            # seconds of JARVIS's voice heard before barge-in can trigger
 HEARTBEAT_TTL = 30.0         # indicator shows "off" if the listener hasn't checked in this long
+SPEAKING, LISTENING = "speaking", "listening"
 
 
 def rms(chunk: np.ndarray) -> float:
@@ -31,27 +36,61 @@ def rms(chunk: np.ndarray) -> float:
 
 
 class Endpointer:
-    """Decides when an utterance has started and ended, from chunk loudness relative to the
-    room's noise floor (measured while waiting for the wake word)."""
+    """One state machine for a turn, from chunk loudness relative to the room's noise floor
+    (measured while waiting for the wake word). Two phases:
 
-    def __init__(self, noise_floor: float, start_timeout: float = START_TIMEOUT):
+    SPEAKING (JARVIS is answering): only sustained speech well above the room and above
+    JARVIS's own echo counts, and it barges in: the phase switches to LISTENING with that
+    speech already counted. LISTENING: the turn ends after a trailing quiet window, which
+    grows once he has paused and carried on (mid-thought). Barging in never shortens it."""
+
+    def __init__(self, noise_floor: float, start_timeout: float = START_TIMEOUT, phase: str = LISTENING):
         self.threshold = max(noise_floor * 3.0, 0.008)
-        self.start_timeout = start_timeout
-        self.started = False
-        self.elapsed = self.quiet = 0.0
+        self.hold = max(noise_floor * 2.0, 0.006)  # quieter trailing words still count as speech
+        self.barge = self.threshold * config.BARGE_IN_LEVEL
+        self.start_timeout, self.phase = start_timeout, phase
+        self.started = self.resumed = False
+        self.elapsed = self.quiet = self.loud = self.played = 0.0
+        self.echo: deque = deque(maxlen=ECHO_WINDOW)
 
-    def feed(self, level: float, seconds: float) -> str:
-        """Returns 'waiting', 'speaking', 'done' or 'nothing' (never started)."""
+    def feed(self, level: float, seconds: float, playing: bool = False) -> str:
+        """LISTENING: 'waiting', 'speaking', 'done' or 'nothing' (never started).
+        SPEAKING: 'talking', or 'barge_in' once he has talked over JARVIS. `playing` says
+        JARVIS's voice is coming out of the speakers right now."""
+        if self.phase == SPEAKING:
+            return self._feed_speaking(level, seconds, playing)
         self.elapsed += seconds
-        if level >= self.threshold:
+        if level >= (self.hold if self.started else self.threshold):
+            if self.started and self.quiet >= RESUME_GAP:
+                self.resumed = True
             self.started, self.quiet = True, 0.0
         elif self.started:
             self.quiet += seconds
         if not self.started:
             return "nothing" if self.elapsed >= self.start_timeout else "waiting"
-        if self.quiet >= END_SILENCE or self.elapsed >= MAX_UTTERANCE:
+        if self.quiet >= self.window() or self.elapsed >= MAX_UTTERANCE:
             return "done"
         return "speaking"
+
+    def window(self) -> float:
+        return config.EAR_MAX_SILENCE_SECONDS if self.resumed else config.EAR_END_SILENCE_SECONDS
+
+    def _feed_speaking(self, level: float, seconds: float, playing: bool) -> str:
+        echo = float(np.median(self.echo)) if self.echo else 0.0
+        if playing:  # learn how loud JARVIS's own voice is at the mic
+            self.echo.append(level)
+            self.played += seconds
+            if self.played < ECHO_WARMUP:
+                self.loud = 0.0
+                return "talking"
+        if level >= max(self.barge, echo * 2.0):
+            self.loud += seconds
+        else:
+            self.loud = 0.0
+        if self.loud * 1000 < config.BARGE_IN_MIN_MS:
+            return "talking"
+        self.phase, self.started, self.quiet, self.elapsed = LISTENING, True, 0.0, self.loud
+        return "barge_in"
 
 
 class Ears:
@@ -68,6 +107,7 @@ class Ears:
         self.voice = voice
         self.noise = deque(maxlen=50)  # recent chunk levels while idle (~4 s)
         self._wake = None
+        self.barged: tuple[np.ndarray, float] | None = None
 
     def _voice(self):
         if self.voice is None:  # started on first use, so tests and imports stay cheap
@@ -116,10 +156,14 @@ class Ears:
         """Chime, then answer utterances until a follow-up window passes in silence."""
         self.play(CHIME)
         self.report("listening")
-        timeout = START_TIMEOUT
+        timeout, barged = START_TIMEOUT, None
+        read = lambda: stream.read(CHUNK)[0][:, 0]
         while True:
-            audio = self.record(lambda: stream.read(CHUNK)[0][:, 0], timeout)
-            heard_at = time.time()  # he stopped talking: the clock for time to first audio
+            if barged:  # he talked over the last answer: that's already this turn
+                audio, heard_at = barged
+            else:
+                audio = self.record(read, timeout)
+                heard_at = time.time()  # he stopped talking: the clock for time to first audio
             if audio is None:
                 if timeout == START_TIMEOUT:
                     self.play(MISS)  # woke but heard nothing
@@ -130,42 +174,93 @@ class Ears:
                 self.play(MISS)
                 return
             self.log(f"heard: {text[:120]}")
-            self.reply(text, heard_at)
-            _drain(stream)
+            self.reply(text, heard_at, read)
+            barged, self.barged = self.barged, None
+            if not barged:
+                _drain(stream)
             self.report("listening", detail="follow-up")
             timeout = config.FOLLOW_UP_SECONDS
 
-    def reply(self, text: str, heard_at: float) -> str:
+    def reply(self, text: str, heard_at: float, read_chunk: Callable[[], np.ndarray] | None = None) -> str:
         """Answer out loud, speaking each sentence as soon as the streaming reply finishes it,
-        and wait until it's all been said (so the mic doesn't hear JARVIS)."""
+        and wait until it's all been said. With `read_chunk` (and BARGE_IN), the mic stays
+        open meanwhile: if he talks over JARVIS it stops at once, and what he says ends up
+        in `self.barged` as (audio, heard_at) for the next turn."""
         from jarvis.speech import SentenceBuffer, sentences
         voice, buf = self._voice(), SentenceBuffer()
         voice.cancel()  # nothing from an earlier answer talks over this one
         voice.reset()
+        self.barged = None
+        cut, lock, finished = threading.Event(), threading.Lock(), threading.Event()
+        monitor = None
+        if read_chunk is not None and config.BARGE_IN:
+            monitor = threading.Thread(target=self._barge_in_watch, args=(read_chunk, finished, cut, lock),
+                                       daemon=True)
+            monitor.start()
+
+        def say(sentence: str) -> None:
+            with lock:  # never queue a sentence after he has cut in
+                if not cut.is_set():
+                    voice.say(sentence)
 
         def on_text(so_far: str) -> None:
             for sentence in buf.feed_text(so_far):
-                voice.say(sentence)
+                say(sentence)
 
         reply = self.answer(text, on_text)
         self.log(f"said: {reply[:120]}")
         if reply.startswith(buf.text):  # the usual case: finish what streamed
             for sentence in buf.feed(reply[len(buf.text):]) + buf.flush():
-                voice.say(sentence)
-        else:  # streaming failed or was a "checking" round: say the real answer instead
+                say(sentence)
+        elif not cut.is_set():  # streaming failed or was a "checking" round: say the real answer instead
             voice.cancel()
             for sentence in sentences(reply):
-                voice.say(sentence)
+                say(sentence)
         voice.wait()
+        if monitor:
+            finished.set()
+            monitor.join()  # after a barge-in, this waits until he's finished his sentence
         if voice.first_audio_at:
             ms = int((voice.first_audio_at - heard_at) * 1000)
             self.log(f"time_to_first_audio={ms}ms")
             self.timing(ms)
         return reply
 
+    def _barge_in_watch(self, read_chunk, finished: threading.Event, cut: threading.Event,
+                        lock: threading.Lock) -> None:
+        """Runs while JARVIS answers. Stops when the answer is over, unless he barged in;
+        then it keeps listening until he's done and hands over every chunk since he started."""
+        ep = Endpointer(self._floor(), phase=SPEAKING)
+        recent = deque(maxlen=math.ceil(config.BARGE_IN_MIN_MS / 1000 * RATE / CHUNK) + 2)
+        chunks: list = []
+        try:
+            while ep.phase == LISTENING or not finished.is_set():
+                chunk = read_chunk()
+                state = ep.feed(rms(chunk), CHUNK / RATE, playing=getattr(self._voice(), "playing", False))
+                if state == "talking":
+                    recent.append(chunk)
+                elif state == "barge_in":
+                    with lock:
+                        cut.set()
+                        self._voice().cancel()  # stop the sentence playing and drop the rest
+                    from jarvis.voice import stop_speaking
+                    stop_speaking()
+                    self.log("barge-in")
+                    self.report("listening")
+                    chunks = [*recent, chunk]  # the words that triggered it aren't lost
+                else:
+                    chunks.append(chunk)
+                    if state == "done":
+                        self.barged = (np.concatenate(chunks), time.time())
+                        return
+        except Exception as e:  # a mic hiccup mustn't break the answer
+            self.log(f"barge-in watch stopped: {e}")
+
+    def _floor(self) -> float:
+        return float(np.median(self.noise)) if self.noise else 0.003
+
     def record(self, read_chunk: Callable[[], np.ndarray], start_timeout: float) -> np.ndarray | None:
-        floor = float(np.median(self.noise)) if self.noise else 0.003
-        ep = Endpointer(floor, start_timeout)
+        ep = Endpointer(self._floor(), start_timeout)
         chunks = []
         while True:
             chunk = read_chunk()

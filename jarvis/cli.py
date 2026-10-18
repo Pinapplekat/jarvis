@@ -551,6 +551,7 @@ def _tick(mem: Memory) -> int:
         from jarvis import plans
 
         def ideas():
+            plans.settle_combined(mem)
             new = plans.maybe_propose_idea(mem, _now_local())
             plans.draft_plans(mem, tg)
             return f"new idea #{new}" if new else "none"

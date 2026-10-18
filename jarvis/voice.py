@@ -49,13 +49,30 @@ def speakable(text: str, limit: int = MAX_SPOKEN) -> str:
     return text
 
 
+_speaking: subprocess.Popen | None = None  # the `say` started by speak(), so it can be stopped
+
+
 def speak(text: str) -> bool:
     """Say it out loud without blocking. Returns False if there was nothing to say."""
+    global _speaking
     spoken = speakable(text)
     if not spoken:
         return False
-    subprocess.Popen(["say", "-v", config.VOICE_NAME, "-r", str(config.VOICE_RATE), spoken],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    _speaking = subprocess.Popen(["say", "-v", config.VOICE_NAME, "-r", str(config.VOICE_RATE), spoken],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    return True
+
+
+def stop_speaking() -> bool:
+    """Cut off whatever speak() is saying. True if something was still talking."""
+    global _speaking
+    proc, _speaking = _speaking, None
+    if proc is None or proc.poll() is not None:
+        return False
+    try:
+        proc.terminate()
+    except OSError:
+        return False
     return True
 
 
@@ -100,6 +117,11 @@ class SpeakQueue:
         with self._cond:
             self._pending += 1
             self._texts.put((self._gen, spoken))
+
+    @property
+    def playing(self) -> bool:
+        """Is a sentence coming out of the speakers right now?"""
+        return self._playing is not None
 
     def reset(self) -> None:
         """Start timing a new reply."""
