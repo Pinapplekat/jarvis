@@ -76,6 +76,7 @@ Message the bot like a person: "what's due this week?", "remember rent is due on
 - **Improving itself:** ask "add a /status command" (or JARVIS spots a gap; it may suggest one idea a day after `IDEA_HOUR`). JARVIS writes a plan (steps, files, risks) and sends it with **Yes / Not now**. Reply with changes to get a revised plan. A "yes" saves it to `~/Library/Application Support/JARVIS/plans/`. Then either:
   - **self-editing off (default):** in Claude Code, say "build the approved JARVIS plans" (`jarvis plans` lists them, `jarvis plans done <id>` marks one built); or
   - **self-editing on:** JARVIS builds it itself (see below) and sends you the result with **Deploy / Discard**.
+  - In short, JARVIS can propose and build changes to its own code once you approve a plan and self-editing is on.
 - **Always on:** `jarvis listen` keeps a connection open to Telegram (it also handles the Approve/Reject buttons). `jarvis schedule install` runs it in the background.
 
 ## Canvas deadlines and weekly digest

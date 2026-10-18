@@ -96,7 +96,10 @@ def test_stall_pings_once_then_exit_still_pings(jobdir, monkeypatch):
 def test_lost_job_is_reported(jobdir):
     mem = Memory(":memory:")
     jid = jobs.start_job(py("print(1)"), jobdir)
-    wait_done(jid)
+    pid = wait_done(jid)["pid"]
+    end = time.time() + 10
+    while jobs._alive(pid) and time.time() < end:  # the wrapper lingers briefly after writing "exit"
+        time.sleep(0.05)
     (jobs._dir(jid) / "exit").unlink()  # as if the Mac restarted mid-run
     assert jobs.job_status(jid)["state"] == "lost"
     assert jobs.check_jobs(mem) == 1
