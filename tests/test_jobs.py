@@ -71,8 +71,10 @@ def test_one_ping_per_exit(jobdir):
     wait_done(jid)
     assert jobs.check_jobs(mem) == 1
     assert jobs.check_jobs(mem) == 0
-    alerts = mem.undelivered_alerts()
-    assert len(alerts) == 1 and f"Job #{jid} finished OK" in alerts[0]["message"]
+    from jarvis import reports
+    filed = reports.recent(mem)
+    assert len(filed) == 1 and filed[0]["kind"] == "done" and "Background job finished OK" in filed[0]["text"]
+    assert mem.undelivered_alerts() == []  # JARVIS tells him, not a separate ping
 
 
 def test_stall_pings_once_then_exit_still_pings(jobdir, monkeypatch):
@@ -84,7 +86,8 @@ def test_stall_pings_once_then_exit_still_pings(jobdir, monkeypatch):
     later = time.time() + 11 * 60
     assert jobs.check_jobs(mem, now=later) == 1
     assert jobs.check_jobs(mem, now=later + 600) == 0
-    assert "printed nothing" in mem.undelivered_alerts()[0]["message"]
+    from jarvis import reports
+    assert "printed nothing" in reports.recent(mem)[0]["text"] and reports.recent(mem)[0]["kind"] == "note"
     jobs.kill_job(jid)
     wait_done(jid)
     assert jobs.check_jobs(mem) == 1
@@ -132,7 +135,7 @@ def test_background_command_always_waits_for_approval(jobdir, monkeypatch):
     [action] = mem.pending_actions(kind="run_command")
     payload = json.loads(action["payload"])
     assert payload["job"] is True and payload["argv"] == ["ls"]
-    assert "background as a job" in terminal.format_request(action["id"], payload)
+    assert "runs in the background" in terminal.format_request(action["id"], payload)
     assert jobs.list_jobs() == []
 
 
@@ -159,6 +162,6 @@ def test_run_tap_starts_a_job_reject_does_not(jobdir, monkeypatch):
                            on_done=lambda db, p, a, text: outcomes.append(text))
     [job] = jobs.list_jobs()
     assert job["action_id"] == aid
-    assert "job #" in tg.sent[-1] and "background job" in outcomes[0]
+    assert "in the background" in tg.sent[-1] and "#" not in tg.sent[-1] and "background job" in outcomes[0]
     assert mem.get_action(aid)["status"] == "done"
     assert wait_done(job["id"])["tail"] == "from job"

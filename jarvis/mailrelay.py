@@ -136,11 +136,52 @@ def list_accounts() -> list[str]:
     return [a.strip() for a in raw.split(",") if a.strip()]
 
 
+def digest(payload: dict) -> str:
+    """What exactly was approved: sender, recipients, subject and body."""
+    import hashlib
+    key = json.dumps([payload["from"], payload["to"], payload["subject"], payload["body"]])
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def email_risk(payload: dict, own: set[str] | None = None) -> str:
+    """'low' for mail only to Elijah's own address (it goes out on its own); anything that
+    reaches someone else is 'high' and needs his explicit yes."""
+    from jarvis import config
+    own = {a.lower() for a in (own or {config.MAIL_ACCOUNT}) if a}
+    to = {t.strip().lower() for t in payload.get("to") or []}
+    return "low" if to and to <= own and payload.get("from", "").lower() in own else "high"
+
+
+def approve(mem: Memory, action_id: int) -> None:
+    """Approve a draft as it is now. Any later change to it voids the approval."""
+    action = mem.get_action(action_id)
+    mem.set_kv(f"email_ok:{action_id}", digest(json.loads(action["payload"])))
+    mem.resolve_action(action_id, "approved")
+
+
+def queue_email(mem: Memory, payload: dict) -> tuple[int, str]:
+    """Queue a draft. Low-risk mail (to himself) is approved at once; the rest waits for his
+    yes. Returns (id, risk)."""
+    aid = mem.queue_action("send_email", payload)
+    risk = email_risk(payload)
+    if risk == "low":
+        approve(mem, aid)
+        mem.mark_notified(aid)
+        mem.log("approval", f"#{aid} to himself: sent without asking (low risk)")
+    return aid, risk
+
+
 def process_approved(mem: Memory, send: Callable[..., None] = send_email) -> tuple[int, int]:
-    """Send every approved email in the queue. Returns (sent, failed)."""
+    """Send every approved email in the queue, if it is still exactly what was approved.
+    Returns (sent, failed)."""
     sent = failed = 0
     for action in mem.pending_actions(status="approved", kind="send_email"):
         p = json.loads(action["payload"])
+        if mem.get_kv(f"email_ok:{action['id']}") != digest(p):
+            mem.resolve_action(action["id"], "failed")
+            mem.log("email_failed", f"#{action['id']}: changed after approval (or never confirmed); not sent")
+            failed += 1
+            continue
         try:
             send(p["from"], p["to"], p["subject"], p["body"])
         except Exception as e:

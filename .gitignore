@@ -9,3 +9,5 @@ data/
 token_cache.json
 .DS_Store
 .jarvis-source
+browser-profile/
+browser-sites.json

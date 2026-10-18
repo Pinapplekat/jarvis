@@ -107,7 +107,7 @@ def draft_plans(mem: Memory, tg, runner: Runner | None = None) -> int:
         if not mem.set_self_edit(job["id"], expect=("drafting",), status="proposed", title=title, plan=plan):
             continue
         lead = "💡 Idea" if job["origin"] == "idea" else "📝 Plan"
-        tg.send(f"{lead} #{job['id']}: {title}\n\n{plan}\n\nReply with changes, or:",
+        tg.send(f"{lead}: {title}\n\n{plan}\n\nReply with changes, or:",
                 buttons=[("Yes, build it ✅", f"plan_yes:{job['id']}"), ("Not now", f"plan_no:{job['id']}")])
         count += 1
     return count

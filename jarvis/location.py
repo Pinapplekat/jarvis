@@ -4,12 +4,16 @@ A shared location (or each update of a live share, which arrives as an edited me
 stored on this Mac. Nearby updates extend the last point instead of adding one, so a point
 that spans 20+ minutes is a stay. Stays become places; JARVIS asks once what each new one is
 ("school", "work") and learns which days and hours he's usually where, so it can guess whether
-he made it to class. The only thing that leaves the Mac is a rounded, cached reverse-geocode
-lookup to OpenStreetMap Nominatim. Telegram live sharing ends after at most 8 hours; JARVIS
-reminds him once when it lapses.
+he made it to class. The only things that leave the Mac are reverse-geocode lookups to
+OpenStreetMap Nominatim: rounded, cached place names, and the street address of the latest
+point (at most once a minute, only when he's moved, only the newest kept; REVERSE_GEOCODE=0
+turns it off). Coordinates never go into chat context or replies. Telegram live sharing ends
+after at most 8 hours; JARVIS reminds him once when it lapses.
 """
 
+import json
 import math
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
@@ -23,9 +27,15 @@ DWELL = timedelta(minutes=20)
 MAX_ACCURACY_M = 1000    # rougher fixes are ignored
 FOREVER = 0x7FFFFFFF     # Telegram's live_period for "until I turn it off"
 LAPSE_WINDOW = timedelta(hours=2)  # only remind about a share that ended recently
-GEO_ROUND = 3            # decimals sent to the geocoder (about 100 m)
+GEO_ROUND = 3            # decimals sent to the geocoder for place names (about 100 m)
+ADDRESS_ROUND = 5        # decimals sent for the street address (about 1 m)
+ADDRESS_MOVE_M = 30      # look the address up again only after moving this far...
+ADDRESS_EVERY_S = 60     # ...and at most once a minute
+ADDRESS_KEY = "location_address"  # the latest lookup only, replaced each time
 NOMINATIM = "https://nominatim.openstreetmap.org/reverse"
 USER_AGENT = "JARVIS-personal-assistant/0.1 (single user, cached lookups)"
+# Backstop for replies: "47.60621, -122.33207", "47.6° N, 122.3° W" and the like.
+COORDS = re.compile(r"-?\d{1,3}\.\d{2,}\s*°?\s*[NS]?\s*,\s*-?\d{1,3}\.\d{2,}\s*°?\s*[EW]?", re.I)
 
 Geocoder = Callable[[float, float], str | None]
 
@@ -141,6 +151,55 @@ def nominatim(lat: float, lon: float) -> str | None:
     return name[:80] or None
 
 
+def reverse_geocode(lat: float, lon: float, get=None) -> str | None:
+    """The street address at a point, e.g. '1701 Broadway, Capitol Hill, Seattle'. Sends only
+    the coordinates (rounded to ADDRESS_ROUND decimals) and the User-Agent. None if it fails."""
+    import httpx
+    get = get or httpx.get
+    try:
+        r = get(NOMINATIM, params={"lat": f"{lat:.{ADDRESS_ROUND}f}", "lon": f"{lon:.{ADDRESS_ROUND}f}",
+                                   "format": "jsonv2", "addressdetails": 1},
+                headers={"User-Agent": USER_AGENT}, timeout=5)
+        data = r.json() if r.status_code == 200 else {}
+    except (httpx.HTTPError, ValueError):
+        return None
+    a = data.get("address") or {}
+    street = " ".join(filter(None, [a.get("house_number"), a.get("road") or a.get("pedestrian")]))
+    area = a.get("neighbourhood") or a.get("suburb")
+    city = a.get("city") or a.get("town") or a.get("village")
+    text = ", ".join(dict.fromkeys(filter(None, [street, area, city])))
+    return text[:120] or None
+
+
+def street_address(mem: Memory, lat: float, lon: float, now: float | None = None,
+                   geocoder: Geocoder | None = None) -> str | None:
+    """The latest point's street address. Looked up only when he's moved ADDRESS_MOVE_M since
+    the last lookup, at most every ADDRESS_EVERY_S; only the newest answer is kept."""
+    import time
+    if not config.REVERSE_GEOCODE:
+        return None
+    now = now or time.time()
+    try:
+        last = json.loads(mem.get_kv(ADDRESS_KEY) or "{}")
+    except ValueError:
+        last = {}
+    if last and distance_m(last["lat"], last["lon"], lat, lon) < ADDRESS_MOVE_M:
+        return last.get("address")
+    if last and now - last.get("at", 0) < ADDRESS_EVERY_S:
+        return None  # moved, but too soon to ask again: say the street area instead
+    address = (geocoder or reverse_geocode)(lat, lon)
+    if address:
+        mem.set_kv(ADDRESS_KEY, json.dumps({"lat": lat, "lon": lon, "address": address, "at": now}))
+    else:  # a failure still counts towards the once-a-minute limit
+        mem.set_kv(ADDRESS_KEY, json.dumps({**last, "at": now}) if last else "")
+    return address
+
+
+def strip_coordinates(text: str) -> str:
+    """Remove anything that looks like a latitude/longitude pair (a backstop for replies)."""
+    return COORDS.sub("(location withheld)", text)
+
+
 def place_name(mem: Memory, lat: float, lon: float, geocoder: Geocoder | None = None,
                lookup: bool = True, now: float | None = None) -> str | None:
     """A readable name: cached by rounded coordinates; looked up at most once a second."""
@@ -190,7 +249,7 @@ def describe_spot(mem: Memory, lat: float, lon: float) -> str:
     near = place_name(mem, lat, lon, lookup=False)
     if p and p["name"]:
         return p["name"] + (f" ({near})" if near else "")
-    return f"near {near}" if near else f"around {lat:.2f}, {lon:.2f}"
+    return f"near {near}" if near else "at a spot with no name yet"
 
 
 # ----- learning places and routine -----
@@ -225,7 +284,7 @@ def learn(mem: Memory, now: datetime, ask: Callable[[str], None] | None = None,
             near = place_name(mem, p["lat"], p["lon"], geocoder=geocoder)
             spot = f"near {near}" if near else "at a spot I don't know"
             ask(f"📍 You've spent a while {spot}, sir. What is it to you: school, work, home? "
-                f"Just reply (place #{p['id']}), or ignore me.")
+                "Just reply, or ignore me.")
             mem.db.execute("UPDATE places SET asked_at = ? WHERE id = ?", (_iso(now), p["id"]))
             mem.db.commit()
             asked += 1
@@ -309,16 +368,20 @@ def movement(mem: Memory, now: datetime, hours: int = 4) -> list[str]:
     return out
 
 
-def for_prompt(mem: Memory, now: datetime) -> str:
-    """The ambient block for chat, every message. No network; coordinates only when unnamed, rounded."""
+def for_prompt(mem: Memory, now: datetime, geocoder: Geocoder | None = None) -> str:
+    """The ambient block for chat, every message. Never contains coordinates. May look up the
+    street address of a fresh point (see street_address for the limits)."""
     if not config.LOCATION:
         return "(location is turned off)"
     last = latest(mem)
     if not last:
         return "(no location shared yet; he can share it in Telegram, live sharing lasts up to 8 hours)"
     seen = _dt(last["last_seen"])
+    stale = is_stale(last, now)
     lines = [f"Last known: {describe_spot(mem, last['lat'], last['lon'])}, updated {_ago(now - seen)}"
-             + (" (STALE: he may have moved since)" if is_stale(last, now) else "")]
+             + (" (STALE: he may have moved since)" if stale else "")]
+    if not stale and (address := street_address(mem, last["lat"], last["lon"], geocoder=geocoder)):
+        lines.append(f"Street address (from OpenStreetMap, approximate): {address}")
     if last["source"] == "live":
         until = _dt(last["live_until"]) if last["live_until"] else None
         if until is None:
@@ -333,7 +396,7 @@ def for_prompt(mem: Memory, now: datetime) -> str:
         lines.append(f"Routine (a guess): {guess}")
     unlabelled = [p for p in places(mem) if not p["name"] and p["asked_at"]]
     if unlabelled:
-        lines.append("Places you asked about, not yet named: " + ", ".join(
+        lines.append("Places you asked about, not yet named (id for label_place only, never say it): " + ", ".join(
             f"#{p['id']} {describe_spot(mem, p['lat'], p['lon'])}" for p in unlabelled[-3:]))
     return "\n".join(lines)
 

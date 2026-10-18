@@ -8,7 +8,14 @@ commit back to the project repo (fast-forward only, so nothing of Elijah's is
 overwritten).
 
 Builds and deploys run as separate detached processes: a build takes minutes, and a
-deploy restarts the listener that would otherwise be running it.
+deploy restarts the listener that would otherwise be running it. The builder ("jarvis-build")
+runs Claude Code as a monitored session (jarvis.agent): sandboxed to the clone, every tool call
+graded by the same hook as task mode. It reports to JARVIS, not to Elijah: progress is kept
+for when he asks, notes and failures are passed on in JARVIS's words. A high-risk step (a
+permission prompt) is decided by JARVIS when it's off Elijah's side of the line, and otherwise
+forwarded to him as a plain-words question; it runs on the yes and the session resumes. A session that goes quiet for BUILD_HANG_MINUTES is
+restarted from where it was; a builder that dies is restarted by the tick. `jarvis build
+start|status|stop` controls it. Self-editing as a whole stays off until Elijah sets JARVIS_REPO.
 """
 
 import fcntl
@@ -21,12 +28,16 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from jarvis import config
+from jarvis import config, reports
 from jarvis.memory import Memory
 
 CLONE = config.DATA_DIR / "src"
 LOG = Path.home() / "Library/Logs/JARVIS/selfedit.log"
 LOCK = config.DATA_DIR / "selfedit.lock"
+BUILD_DIR = config.DATA_DIR / "build"     # the build session's state, log and status
+STATUS = BUILD_DIR / "status.json"
+PROGRESS_EVERY = 180                      # seconds between progress reports (kept for "how's it going?")
+MAX_RESTARTS = 2                          # hung sessions, or a builder that died
 GIT_ENV = {"GIT_AUTHOR_NAME": "JARVIS", "GIT_AUTHOR_EMAIL": "jarvis@localhost",
            "GIT_COMMITTER_NAME": "JARVIS", "GIT_COMMITTER_EMAIL": "jarvis@localhost"}
 SAFETY_FILES = ["jarvis/approvals.py", "jarvis/chat.py", "jarvis/selfedit.py", "jarvis/telegram.py",
@@ -92,8 +103,46 @@ def branch(edit_id: int) -> str:
 
 # ---------- spawning detached workers ----------
 
+def read_status() -> dict:
+    try:
+        return json.loads(STATUS.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _status(**fields) -> None:
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    data = {**read_status(), **fields}
+    tmp = STATUS.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data))
+    os.replace(tmp, STATUS)
+
+
+def _alive(pid) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:  # our own finished child lingers as a zombie until reaped
+        done, _ = os.waitpid(int(pid), os.WNOHANG)
+        return done == 0
+    except ChildProcessError:
+        return True
+
+
+def builder_alive() -> bool:
+    return _alive(read_status().get("pid"))
+
+
 def spawn(command: str, edit_id: int | None = None) -> None:
-    """Start `jarvis self-edit <command> [id]` in its own session so it outlives the caller."""
+    """Start `jarvis self-edit <command> [id]` in its own session so it outlives the caller.
+    A build is only started if no builder is running (it would pick up the queue anyway)."""
+    if command == "build" and builder_alive():
+        return
     project = Path(__file__).resolve().parent.parent
     args = ["uv", "run", "--project", str(project), "-q", "jarvis", "self-edit", command]
     if edit_id is not None:
@@ -137,21 +186,82 @@ def run_tests(cwd: Path) -> tuple[bool, str]:
     return r.returncode == 0, tail
 
 
-def run_agent(prompt: str, resume: str | None = None) -> dict:
-    from jarvis.chat import find_claude
-    cmd = [find_claude(), "-p", "--model", config.SELF_EDIT_MODEL,
-           "--tools", "Read,Edit,Write,Glob,Grep,Bash",
-           "--allowedTools", "Read", "Edit", "Write", "Glob", "Grep",
-           "Bash(uv run --extra dev pytest:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)",
-           "--permission-mode", "acceptEdits", "--strict-mcp-config", "--setting-sources", "",
-           "--output-format", "json"]
-    if resume:
-        cmd += ["--resume", resume]
-    r = _run(cmd + ["--", prompt], cwd=CLONE, timeout=1800)
+def run_agent(mem: Memory, tg, title: str, prompt: str, resume: str | None = None,
+              runner=None, poll: float = 5, edit_id: int = 0, judge=None):
+    """Run the build session to the end of its work: progress reported to JARVIS, high-risk
+    steps decided by JARVIS or asked of Elijah, hangs restarted. Returns the agent.Outcome."""
+    from jarvis import agent, reports
+    runner = runner or agent.run_session
+    rules = agent.AGENT_RULES.format(root=CLONE)
+    progress = {"at": 0.0}
+
+    def on_tool(update):
+        _status(last_update=update[:140], last_output=time.time())
+        if time.time() - progress["at"] >= PROGRESS_EVERY:
+            progress["at"] = time.time()
+            reports.add(mem, "build", edit_id, "progress", f"building {title}", f"now: {update[:140]}")
+
+    restarts = 0
+    while True:
+        out = runner(prompt, CLONE, BUILD_DIR, config.SELF_EDIT_MODEL, rules, resume=resume, on_tool=on_tool,
+                     on_tell=lambda text: reports.add(mem, "build", edit_id, "note", f"building {title}", text),
+                     should_stop=lambda: bool(read_status().get("stop")),
+                     hang_seconds=config.BUILD_HANG_MINUTES * 60, log_to=BUILD_DIR / "session.jsonl")
+        resume = out.session_id or resume
+        _status(session_id=resume, last_output=time.time())
+        if out.stopped:
+            raise RuntimeError("stopped by Elijah")
+        if out.hung:
+            restarts += 1
+            _status(restarts=restarts)
+            if restarts > MAX_RESTARTS:
+                raise RuntimeError(f"the build session went quiet {restarts} times")
+            _log(f"build session hung; resuming {resume}")
+            prompt = "You went quiet for a long time and were restarted. Check what finished, then carry on."
+            continue
+        if out.blocked:
+            outcome = _ask_and_wait(mem, tg, out.blocked, poll=poll, edit_id=edit_id, title=title, judge=judge)
+            prompt = agent.resume_note(out.blocked, outcome)
+            continue
+        if out.is_error and not out.session_id:
+            raise RuntimeError(f"Claude Code failed: {out.text.strip()[:300]}")
+        return out
+
+
+def _ask_and_wait(mem: Memory, tg, blocked: dict, poll: float = 5, edit_id: int = 0, title: str = "",
+                  judge=None) -> str:
+    """A paused step: JARVIS decides it when it's off Elijah's side of the line; otherwise ask
+    him and wait for his answer (the listener runs it on his yes and records the output)."""
+    from jarvis import agent, reports, terminal
     try:
-        return json.loads(r.stdout)
-    except json.JSONDecodeError:
-        raise RuntimeError(f"Claude Code failed: {(r.stderr or r.stdout).strip()[:300]}") from None
+        argv, cwd = agent.run_blocked(blocked)
+    except ValueError as e:
+        return f"(couldn't ask: {e})"
+    goal = f"build the approved plan: {title}"
+    approved, why = agent.review(judge, goal, blocked, CLONE)
+    if approved:
+        reports.add(mem, "build", edit_id, "progress", f"building {title}",
+                    f"I approved `{blocked.get('command', '')[:150]}` myself ({why})")
+        return agent.run_approved(blocked, CLONE)
+    verdict = terminal.Verdict("approval", blocked.get("reason", ""), argv, sandboxed=False,
+                               risk=blocked.get("risk") or "high", sandbox="")
+    aid = terminal.request_approval(mem, verdict, cwd or str(CLONE), blocked.get("why") or "",
+                                    extra={"build_id": edit_id or True})
+    terminal.notify_commands(mem, tg)
+    _status(phase="waiting for Elijah")
+    deadline = time.time() + (config.COMMAND_APPROVAL_MINUTES + 2) * 60
+    while time.time() < deadline:
+        action = mem.get_action(aid)
+        if action["status"] in ("done", "failed"):
+            _status(phase="building")
+            return mem.get_kv(f"agent_outcome:{aid}") or "(it ran; no output was recorded)"
+        if action["status"] == "rejected":
+            _status(phase="building")
+            return "(Elijah rejected this command)"
+        if read_status().get("stop"):
+            raise RuntimeError("stopped by Elijah")
+        time.sleep(poll)
+    return "(the approval request expired before Elijah answered)"
 
 
 def changed_files() -> list[str]:
@@ -169,8 +279,22 @@ def build_queued(mem: Memory, tg) -> None:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return  # the running builder will pick up the queue
-        while queued := mem.self_edits("queued"):
-            _build(mem, tg, queued[0]["id"])
+        _status(pid=os.getpid(), started=time.time(), stop=False, phase="starting", restarts=0)
+        try:
+            while queued := mem.self_edits("queued"):
+                _status(edit_id=queued[0]["id"], title=queued[0]["title"], phase="building", session_id=None)
+                _build(mem, tg, queued[0]["id"])
+        finally:
+            _status(pid=None, phase="idle", ended=time.time())
+
+
+def _judge(mem: Memory):
+    """JARVIS's judgment for deciding paused build steps (Jev, or Haiku). None if unavailable."""
+    try:
+        from jarvis import judge
+        return judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200]))
+    except Exception:
+        return None
 
 
 def _build(mem: Memory, tg, edit_id: int) -> None:
@@ -187,11 +311,12 @@ def _build(mem: Memory, tg, edit_id: int) -> None:
 
         prompt = AGENT_PROMPT.format(id=edit_id, title=job["title"], request=job["request"],
                                      plan=job["plan"] or "(none)")
-        out = run_agent(prompt)
+        judge = _judge(mem)
+        out = run_agent(mem, tg, job["title"], prompt, edit_id=edit_id, judge=judge)
         passed, tail = run_tests(CLONE)
         if not passed:  # one more go, with the failures
-            out = run_agent(f"The tests fail:\n{tail}\nFix them, then give the summary again.",
-                            resume=out.get("session_id"))
+            out = run_agent(mem, tg, job["title"], f"The tests fail:\n{tail}\nFix them, then give the summary again.",
+                            resume=out.session_id, edit_id=edit_id, judge=judge)
             passed, tail = run_tests(CLONE)
 
         files = changed_files()
@@ -204,12 +329,12 @@ def _build(mem: Memory, tg, edit_id: int) -> None:
             problem = "tests still fail:\n" + tail[-1200:]
         elif count_tests(CLONE) < baseline:
             problem = "the number of tests went down"
-        summary = str(out.get("result") or "").strip()[:2000]
+        summary = (out.summary or out.text).strip()[:2000]
         if problem:
             _git("reset", "-q", "--hard")
             _git("clean", "-qfd")
             mem.set_self_edit(edit_id, status="failed", summary=f"{problem}\n\n{summary}"[:3000])
-            tg.send(f"🛠 #{edit_id} {job['title']}: couldn't finish, {problem[:1500]}")
+            reports.add(mem, "build", edit_id, "failed", f"building {job['title']}", f"couldn't finish: {problem[:1500]}")
             _log(f"build #{edit_id} failed: {problem[:200]}")
             return
 
@@ -220,17 +345,17 @@ def _build(mem: Memory, tg, edit_id: int) -> None:
         touched_safety = [f for f in files if f in SAFETY_FILES]
 
         mem.set_self_edit(edit_id, status="ready", summary=summary)
-        text = f"🛠 #{edit_id} {job['title']} is built and tests pass.\n\n{summary}\n\n{stat}"
+        text = f"🛠 {job['title']} is built and tests pass.\n\n{summary}\n\n{stat}"
         if touched_safety:
             text += f"\n\n⚠️ Touches safety-critical code: {', '.join(touched_safety)}. Worth a look at the patch."
         if note:
             text += f"\n\n({note})"
-        tg.send_document(f"selfedit-{edit_id}.patch", patch.encode(), caption=f"#{edit_id} full change")
+        tg.send_document(f"selfedit-{edit_id}.patch", patch.encode(), caption=f"{job['title']}: the full change")
         tg.send(text, buttons=[("Deploy ✅", f"se_deploy:{edit_id}"), ("Discard ✖️", f"se_discard:{edit_id}")])
         _log(f"build #{edit_id} ready ({len(files)} files)")
     except Exception as e:
         mem.set_self_edit(edit_id, status="failed", summary=str(e)[:3000])
-        tg.send(f"🛠 #{edit_id} {job['title']}: build crashed ({str(e)[:300]})")
+        reports.add(mem, "build", edit_id, "failed", f"building {job['title']}", f"the build stopped ({str(e)[:300]})")
         _log(f"build #{edit_id} crashed: {e}")
 
 
@@ -261,7 +386,7 @@ def deploy(mem: Memory, tg, edit_id: int) -> None:
 
         mem.set_self_edit(edit_id, status="deployed")
         sync = sync_back()
-        tg.send(f"🚀 Deploying #{edit_id} {job['title']}. Restarting, back in a few seconds."
+        tg.send(f"🚀 Deploying {job['title']}. Restarting, back in a few seconds."
                 + (f"\n({sync})" if sync else ""))
         _log(f"deploy #{edit_id}: installing")
         # Reinstall from the clone's code. This restarts the listener (and replaces this
@@ -270,11 +395,11 @@ def deploy(mem: Memory, tg, edit_id: int) -> None:
                  cwd=CLONE, timeout=600)
         if r.returncode != 0:
             raise RuntimeError(f"install failed: {(r.stderr or r.stdout).strip()[-300:]}")
-        tg.send(f"✅ #{edit_id} is live.")
+        reports.add(mem, "build", edit_id, "done", job["title"], "deployed and live")
         _log(f"deploy #{edit_id} done")
     except Exception as e:
         mem.set_self_edit(edit_id, status="failed", summary=str(e)[:3000])
-        tg.send(f"⚠️ Couldn't deploy #{edit_id}: {str(e)[:400]}")
+        reports.add(mem, "build", edit_id, "failed", f"deploying {job['title']}", str(e)[:400])
         _log(f"deploy #{edit_id} failed: {e}")
 
 
@@ -315,8 +440,7 @@ def start_queued(mem: Memory, tg) -> None:
     """Announce newly queued requests and make sure a builder is running."""
     queued = mem.self_edits("queued")
     for job in queued:
-        if not job["notified"]:
-            tg.send(f"🛠 On it: #{job['id']} {job['title']}. I'll text you when it's ready to review (usually 5-15 min).")
+        if not job["notified"]:  # the plan's button already said it's building; JARVIS reports back
             mem.set_self_edit(job["id"], notified=1)
     if queued:
         spawn("build")
@@ -335,6 +459,68 @@ def handle_button(mem: Memory, tg, verb: str, edit_id: int) -> str:
     if verb == "se_discard":
         return "Discarded" if discard(mem, edit_id) else "Already handled"
     return "Unknown button"
+
+
+def start(mem: Memory, tg) -> str:
+    """`jarvis build start`: make sure a builder is running for anything queued (idempotent)."""
+    if builder_alive():
+        st = read_status()
+        return f"already running: {st.get('title', '?')} ({st.get('phase', '?')}), pid {st.get('pid')}"
+    if not mem.self_edits("queued"):
+        return "nothing queued to build (approve a plan first)"
+    spawn("build")
+    return "started"
+
+
+def stop_build(mem: Memory) -> str:
+    """`jarvis build stop`: end the current build (its session is killed within seconds)."""
+    st = read_status()
+    if not builder_alive():
+        return "no build is running"
+    _status(stop=True)
+    for _ in range(30):
+        if not builder_alive():
+            return "stopped"
+        time.sleep(1)
+    try:
+        os.killpg(os.getpgid(int(st["pid"])), 15)
+    except (ProcessLookupError, PermissionError):
+        pass
+    return "stopped (forced)"
+
+
+def status_text() -> str:
+    """`jarvis build status`: alive?, what it's on, last output, session id."""
+    st = read_status()
+    if not st:
+        return "no build has run yet"
+    alive = builder_alive()
+    quiet = f"{int((time.time() - st['last_output']) // 60)} min ago" if st.get("last_output") else "-"
+    return (f"builder: {'running, pid ' + str(st['pid']) if alive else 'not running'}\n"
+            f"plan: {st.get('title', '-')} ({st.get('phase', '-') if alive else 'idle'})\n"
+            f"last step: {st.get('last_update', '-')}, last output {quiet}\n"
+            f"session: {st.get('session_id') or '-'}, restarts: {st.get('restarts', 0)}\n"
+            f"session log: {BUILD_DIR / 'session.jsonl'}")
+
+
+def check_health(mem: Memory, tg) -> str:
+    """From the tick: a plan stuck 'building' with no builder alive gets restarted (twice at
+    most, then it's marked failed and Elijah is told)."""
+    stuck = mem.self_edits("building")
+    if not stuck or builder_alive():
+        return "ok"
+    job = stuck[0]
+    tries = int(mem.get_kv(f"build_restarts:{job['id']}") or 0)
+    if tries >= MAX_RESTARTS:
+        mem.set_self_edit(job["id"], status="failed", summary="the builder kept dying")
+        reports.add(mem, "build", job["id"], "failed", f"building {job['title']}",
+                    "the builder kept stopping, so I've set it aside; approving the plan again retries it")
+        return "gave up"
+    mem.set_kv(f"build_restarts:{job['id']}", str(tries + 1))
+    mem.set_self_edit(job["id"], status="queued", notified=1)
+    spawn("build")
+    _log(f"builder for #{job['id']} was gone; restarted ({tries + 1})")
+    return "restarted"
 
 
 def main(argv: list[str]) -> None:

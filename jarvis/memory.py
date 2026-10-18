@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS reminders (
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY,
     goal TEXT NOT NULL,
-    -- queued -> running <-> waiting (for Elijah's Run/Reject) -> done | failed | stopped
+    -- queued -> running <-> waiting (for Elijah's yes on a risky step) -> done | failed | stopped
     status TEXT NOT NULL DEFAULT 'queued',
     steps TEXT NOT NULL DEFAULT '[]',  -- JSON: [{n, update, action, result, check}]
     message_id INTEGER,                -- the Telegram progress message
@@ -176,6 +176,20 @@ CREATE TABLE IF NOT EXISTS kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- What JARVIS's tasks, jobs and builds tell JARVIS (not Elijah). JARVIS reads these and
+-- decides what to say: done / failed / note get passed on, progress is only for answering
+-- "how's it going?".
+CREATE TABLE IF NOT EXISTS reports (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    source TEXT NOT NULL,            -- task | job | build
+    ref INTEGER,                     -- the task / job / plan id
+    kind TEXT NOT NULL,              -- done | failed | note | progress
+    about TEXT NOT NULL,             -- what the work is, in a few words
+    text TEXT NOT NULL,
+    delivered_at TEXT                -- passed on to Elijah (progress: set at once, never sent)
+);
 """
 
 MIGRATIONS = [
@@ -184,6 +198,12 @@ MIGRATIONS = [
     ("projects", "brief", "ALTER TABLE projects ADD COLUMN brief TEXT"),
     ("projects", "brief_at", "ALTER TABLE projects ADD COLUMN brief_at TEXT"),
     ("observations", "tag", "ALTER TABLE observations ADD COLUMN tag TEXT"),
+    # Task mode as a Claude Code session: its id (to resume), its folder, what to tell it next.
+    ("tasks", "session_id", "ALTER TABLE tasks ADD COLUMN session_id TEXT"),
+    ("tasks", "folder", "ALTER TABLE tasks ADD COLUMN folder TEXT"),
+    ("tasks", "resume_note", "ALTER TABLE tasks ADD COLUMN resume_note TEXT"),
+    ("tasks", "blocked", "ALTER TABLE tasks ADD COLUMN blocked TEXT"),
+    ("tasks", "runs", "ALTER TABLE tasks ADD COLUMN runs INTEGER NOT NULL DEFAULT 0"),
 ]
 
 

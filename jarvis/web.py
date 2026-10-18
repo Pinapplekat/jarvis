@@ -1,5 +1,6 @@
 """Open web pages in JARVIS's own headless Chromium (runs JavaScript, no access to your
-browser's logins or cookies) and return their readable text and links."""
+browser's logins or cookies) and return their readable text and links. Banking and payment
+sites are never opened (here or in jarvis.browser)."""
 
 import ipaddress
 import re
@@ -27,6 +28,29 @@ def find_urls(text: str, limit: int = 3) -> list[str]:
     return list(dict.fromkeys(urls))[:limit]
 
 
+# Never opened, logged in or screenshotted. Extra domains: BROWSER_BLOCKLIST in .env.
+BLOCKED_SITES = [
+    "paypal.com", "venmo.com", "cash.app", "zellepay.com", "stripe.com", "squareup.com", "wise.com",
+    "chase.com", "bankofamerica.com", "wellsfargo.com", "capitalone.com", "citi.com", "usbank.com",
+    "americanexpress.com", "discover.com", "schwab.com", "fidelity.com", "vanguard.com", "robinhood.com",
+    "coinbase.com", "kraken.com", "binance.com", "becu.org", "navyfederal.org", "ally.com", "sofi.com",
+    "chime.com", "creditkarma.com", "intuit.com", "mint.com", "affirm.com", "klarna.com", "afterpay.com",
+]
+
+
+def blocked_site(url: str) -> str | None:
+    """Why this site is off limits (banking, payments), or None."""
+    from jarvis import config
+    host = (urlparse(url).hostname or "").lower().rstrip(".")
+    extra = [d.strip().lower() for d in config.BROWSER_BLOCKLIST.split(",") if d.strip()]
+    for domain in BLOCKED_SITES + extra:
+        if host == domain or host.endswith("." + domain):
+            return f"{domain} is a banking or payment site; JARVIS doesn't open those"
+    if re.search(r"(^|\.)(bank|banking|creditunion|cu)\.", host) or host.startswith(("bank.", "banking.", "pay.")):
+        return "that looks like a banking or payment site; JARVIS doesn't open those"
+    return None
+
+
 def check_url(url: str) -> str | None:
     """Return why a URL must not be opened, or None if it's fine. Blocks non-web schemes and
     addresses on this Mac or the local network, so a page can't point JARVIS at them."""
@@ -45,7 +69,7 @@ def check_url(url: str) -> str | None:
 
 
 def fetch_page(url: str, settle_ms: int = 2500) -> Page:
-    problem = check_url(url)
+    problem = blocked_site(url) or check_url(url)
     if problem:
         return Page(url, error=problem)
 

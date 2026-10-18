@@ -44,7 +44,12 @@ The first run triggers a macOS prompt to let your terminal control Mail. **The b
 
 ## Approvals and alerts (Telegram, free)
 
-Each queued draft arrives in Telegram with **Approve / Reject** buttons. Typing `yes 3` / `no 3` (or just `yes` when one is waiting) works too. Only your chat is obeyed, and a reply only counts for drafts sent before it.
+Anything risky (an email to someone else, a high-risk command) arrives in Telegram as a plain question, "is that what you meant?", with the exact recipients and text or the exact command, plus **Approve / Reject** (or **Run / Reject**) buttons as a shortcut. If you're at the Mac, JARVIS asks out loud too.
+
+- **Answer in words:** a clear "yes" (also "yep, go ahead", "do it", "send it", or a voice note saying so; at the desk mic or on a call too) does what the button does; a clear "no" cancels. Something that starts like an answer but isn't clear ("yes but make it shorter") cancels that item, says so, and goes to chat. A bare "yes" means the one thing waiting; with several waiting, JARVIS names them and asks you to tap the one you mean. "ok" with nothing waiting is just conversation.
+- **Safeguards:** only your chat is obeyed; a reply only counts for questions sent before it; command requests lapse after `COMMAND_APPROVAL_MINUTES` (30); text in pages, emails or files can never answer for you.
+- **Email:** mail only to your own address (`MAIL_ACCOUNT`) goes out on its own (low risk). Anything to anyone else needs your yes, and the yes covers that exact draft: if the recipients, subject or body change afterwards, it isn't sent.
+- **No internal numbers:** messages refer to things by what they are ("the email to your professor"), never "command #70". The CLI still shows ids.
 
 Setup:
 1. In Telegram, message **@BotFather** → `/newbot` → pick a name and a username ending in `bot`. It replies with a token.
@@ -61,7 +66,7 @@ uv run jarvis digest --send    # week ahead to Telegram
 Message the bot like a person: "what's due this week?", "remember rent is due on the 1st", "add ECON module 4 due Sunday", "email prof@school.edu asking for a 2-day extension". JARVIS answers in a few seconds. `jarvis ask "..."` does the same from the terminal.
 
 - **Brain:** the Claude Code CLI on this Mac (`claude -p`), so it uses your Claude subscription, not a separate API bill. Model: `JARVIS_MODEL` (default `sonnet`; `haiku` is faster and lighter on usage limits).
-- **Locked down:** Claude runs with no tools, no MCP servers and no personal settings. It can only *propose* actions (remember/forget a fact, log a note, update a project, add or finish a deadline, draft an email). JARVIS checks each one before doing it. Email is only ever drafted, and still needs your Approve tap.
+- **Locked down:** Claude runs with no tools, no MCP servers and no personal settings. It can only *propose* actions (remember/forget a fact, log a note, update a project, add or finish a deadline, draft an email). JARVIS checks each one before doing it. Email to anyone but you is only ever drafted and still needs your yes.
 - **Context it sees:** saved facts, projects, recent events, the next 14 days of deadlines, drafts awaiting approval, and the last 12 chat messages.
 - **Voice:** short and casual, matching how you text. Tweak the "Voice" section of `SYSTEM_PROMPT` in `jarvis/chat.py` to change it.
 - **Links:** send a link and JARVIS opens it in its own headless Chromium (JavaScript runs, so wikis and JS-heavy agendas work) before answering. It can also open links it remembers or finds on pages it read, up to 3 rounds and 6 pages per message. It has no access to your browser's logins, so pages behind Canvas or Google sign-in won't load. Local and private network addresses are blocked, and page text is treated as untrusted data. One-time setup: `uv run playwright install chromium`.
@@ -152,39 +157,53 @@ Ask "how do you decide when to speak up?" or "do the tests pass?" and JARVIS rea
 - **Limits:** only inside the project folder (`PROJECT_DIR`, default this repo; the background copy remembers where it came from). No `..` or symlink escapes. `.env`, token, key and database files are never opened. Checks run with no shell, a scrubbed environment and a timeout, inside a macOS sandbox that blocks file writes and network. Every result is redacted (your `.env` values plus token shapes like bot tokens, Twilio keys and the Canvas feed URL) and cut to 6,000 characters.
 - File contents and logs are treated as data, never instructions. Changing code still only happens through an approved plan. `SELF_INSPECT=0` turns it off.
 
-### Terminal commands (risky ones wait for your OK)
+### Terminal commands (graded by risk; only high risk asks)
 
-JARVIS can also run commands in chat ("show me the last 5 commits", "delete the old logs").
+JARVIS can also run commands in chat ("show me the last 5 commits", "what's in Downloads?", "delete the old logs"). Each one is graded `low`, `medium`, `high` or `critical`; `jarvis cmd try "git log -5"` shows the grade and what would happen.
 
-- **Run at once:** read-only commands on a strict allowlist, inside the project: `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `git status/log/diff/show`, and the tests. They run in the same no-writes, no-network sandbox, with flags that could write or run programs refused (`git diff --output`, `--ext-diff`, `tail -f`, `pytest -p`...), and secret files blocked. `jarvis cmd try "git log -5"` shows how a command would be treated.
-- **Wait for you:** anything else (writes, deletes, installs, other folders) arrives in Telegram with the exact command and folder and **Run / Reject** buttons. It runs only when you tap Run, once, then JARVIS sends the output. Requests lapse after `COMMAND_APPROVAL_MINUTES` (30), and a typed "yes" never runs a command.
-- **Never:** a shell. Pipes, redirects, `$`, `;` and `&&` are refused outright.
+- **Low, runs at once (anywhere on the Mac):** reading: `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `find`, `stat`, `du`, `diff`, `cd`, `pwd`, `which`, `ps`, `git status/log/diff/show/blame`, the tests, any tool's `--help`/`--version`. They run in a no-writes, no-network sandbox, with flags that could write or run programs refused (`git diff --output`, `--ext-diff`, `tail -f`, `find -exec`, `pytest -p`...).
+- **Medium, runs at once (inside the JARVIS project):** ordinary work: `mkdir`, `touch`, `cp`, `mv`, `rm` of files, `git add/commit/checkout/switch/stash/branch/pull`, `uv sync/add/run`, `npm install/test`, `python <script in the project>`, `make`. They run in a sandbox that can only write inside the project (plus temp and package caches). Network is allowed for installs. `.git` can only be written by git itself, and never its hooks or config, which would run later outside the sandbox.
+- **High, waits for your yes:** deletes or writes outside the project, recursive deletes, `git push`/`reset`/`clean`/`rebase`, installs outside the project (`pip`, `brew`), `curl`, a program by path, and **anything not recognised**.
+- **Critical, waits for your yes (flagged ⚠️):** `sudo`, recursive deletes outside the project, disks, `launchctl`, `security`, system settings, `osascript` (it can message people), `git push --force`.
+- **Secrets, refused outright at any grade:** `.env` files, keys, `~/.ssh`, `~/.gnupg`, `~/.aws`, keychains, browser cookies and logins (JARVIS's own profile too), Messages, JARVIS's database and token cache. The sandboxes can't open them either, so a script can't get around the check. Output is still redacted.
+- **Never:** a shell. Pipes, redirects, `$`, `;` and `&&` are refused outright. (`~` is expanded for you.)
 - **Log:** every command (auto, approved, rejected, expired, timed out) is appended to `~/Library/Application Support/JARVIS/commands.jsonl` with the time, command, folder, who approved it and the exit code, never the output. `jarvis cmd log` shows it. `COMMANDS=0` turns commands off.
 
 ### Background jobs (long commands, with pings)
 
 Commands that take longer than two minutes or keep running (long builds, installs, servers, launching Claude Code) run as background jobs instead of hitting the 120 s cutoff.
 
-- **Still your call:** JARVIS asks with the usual Run / Reject card, marked "runs in the background as a job". This always needs your tap, even for a read-only command, because a job runs outside the sandbox with no time limit.
+- **Still your call:** JARVIS asks the usual "is that what you meant?", noting it runs in the background. This always needs your yes, even for a read-only command, because a job runs outside the sandbox with no time limit.
 - **How it runs:** detached in its own session, with no shell and the same scrubbed environment. Output goes to `~/Library/Application Support/JARVIS/jobs/<id>/job.log`, and a small wrapper records the exit code, so JARVIS can tell whether a job finished, failed or died.
 - **"How's it going?":** JARVIS can read a job's state, runtime and last log lines without asking (redacted, treated as untrusted data). Chat always sees its five newest jobs.
-- **Pings:** each tick (every 5 min), JARVIS sends one Telegram message when a job finishes, fails or is lost, and one if it prints nothing for `JOB_STALL_MINUTES` (10).
+- **Reports:** each tick (every 5 min), a job that finishes, fails or is lost, or prints nothing for `JOB_STALL_MINUTES` (10), files one report to JARVIS, which tells you in its own words.
 - **CLI:** `jarvis jobs` lists them, `jarvis jobs show 3` shows one's log, `jarvis jobs kill 3` stops one. Finished jobs are removed after 14 days.
 
-### Task mode (working a problem step by step)
+### JARVIS and its helpers (you talk to one person)
 
-For anything that takes several steps ("figure out why the ears log is noisy", "get the tests passing", "find out how X works on my Mac"), JARVIS starts a task instead of answering in one go, or saying it doesn't know how. It works like a Claude Code session: Claude picks one action (inspect the project, run a command, open a page, or finish), sees the result, and decides the next step. It's told to investigate (search the code, read docs, run `--help`, check what's running) and to change approach when something fails.
+You tell JARVIS what you want; JARVIS hands the work to helpers (tasks, background jobs, self-edit builds) and keeps an eye on them. **The helpers report to JARVIS, never to you.** JARVIS tells you when something is done or failed, or when a helper has something you'd want to hear, in its own words, with whatever else came in at the same time bundled into one message (and said out loud if you're at the Mac). Progress is kept, not sent: ask "how's the site thing going?" or "what did you do today?" any time and JARVIS answers like someone who's been watching; "show me the steps" gets the full list.
 
-- **Checks between steps:** Jev (Haiku without a Jev key) answers three quick questions after each step: did it work, is the goal met, is it going in circles. Notes go back to Claude. Two "stuck" answers in a row get a nudge to try something different; four end the task with what it tried.
-- **Approval pauses, doesn't end:** a command that needs your OK shows Run / Reject (with Jev's risk label, e.g. "⚠️ risk: high") and the task waits. Run feeds the output back and the task carries on; Reject tells Claude to find another way. An expired request does the same. Jev can label risk but never approves anything.
-- **Progress:** one Telegram message per task, updated each step (✓ / ✗), then a short summary. Say "stop" (or "stop task 3") to end it; a command it was waiting on is cancelled.
-- **Budget:** 15 steps or 10 minutes of work (time waiting for you doesn't count). Tasks run inside `jarvis listen`; one cut off by a restart is picked up again with a note.
-- **Extra lookups that run at once** (sandboxed, so they can't write or reach the network): any installed tool's `--help`/`--version`, `which`, `ps`, `pgrep`, `pwd`, `date`, `file`, `stat`, `du`, and `find` inside the project (not `-exec`/`-delete`).
+**Who approves what.** When a helper hits a high-risk step, JARVIS decides first. It approves the step itself only if it's off your side of the line, clearly serves what you asked for, and it's sure (Jev or Haiku must say yes with at least `SELF_APPROVE_CONFIDENCE`, 0.8, confidence; any doubt or error means asking you). **Your side of the line, which JARVIS never approves:** anything critical (sudo, system settings, disks, credentials, `security`, `osascript`), anything irreversible (deleting or overwriting files, `git push`/`reset`/`clean`/`rebase`, uninstalling), and anything that reaches other people or sends your data out (email, `ssh`/`scp`/`gh`, publishing, `curl` with data). Those come to you as "is that what you meant?". Every step JARVIS approves itself is logged (`jarvis cmd log` shows `jarvis` as the approver) and listed in the task's steps. `SELF_APPROVE=0` makes JARVIS ask you about everything high-risk again. Commands JARVIS proposes in chat still ask you as before.
+
+### Task mode (working like Claude Code)
+
+For anything that takes several steps ("get the tests passing in ~/Code/site", "figure out why the ears log is noisy", "find out how X works on my Mac"), JARVIS starts a task instead of answering in one go. A task is a real **Claude Code session** (`TASK_MODEL`, default `sonnet`) working in one folder: it reads and edits code, runs commands and tests, checks the results, and keeps going until the goal is met and verified.
+
+- **Its folder:** "start a task in ~/Code/site to …" gives it that folder to edit. With no folder it works in the JARVIS project **read-only**: changing JARVIS's own code still takes an approved plan. Your home folder or `/` are refused as too broad.
+- **Fenced in three ways:** the whole `claude` process runs in a macOS sandbox that can only write to its folder (plus Claude Code's own files, caches and temp), can't read secrets, and can't change Claude Code's settings or hooks. A hook grades every tool call before it runs: reads anywhere (secrets excepted) and edits inside the folder go ahead; each command gets the same grade as above, so low and medium run and high or critical pause the task. Anything else is refused, and the hook fails closed. Approved high-risk commands are run by JARVIS for the session (as you, no shell), and the output goes back to it.
+- **Asks only when it matters:** a high-risk step goes to JARVIS first (see above); only your side of the line, or a step JARVIS isn't sure about, comes to you. Your yes runs it and the session carries on; a no (or an expiry) tells it to find another way.
+- **Reports to JARVIS:** no progress messages in your chat. JARVIS passes on the result, a failure, or something the session flagged for you (a note is a step, not the end). Jev (or Haiku) double-checks a "done" once before it's reported.
+- **Stop and budgets:** say "stop" to end it at once (the session is killed and a command it was waiting on is cancelled). `TASK_MAX_TURNS` (40) tool calls per run, 8 runs, `TASK_MAX_MINUTES` (20) of working time (waiting for you doesn't count). `TASKS=0` turns task mode off.
+- **Survives restarts:** the session id is saved, so a task cut off by a restart (or a session that goes quiet for 5 minutes) resumes where it was.
+- **CLI:** `jarvis tasks` lists them, `jarvis tasks show 3` shows the steps and the session log path, `jarvis tasks stop 3`.
 - JARVIS's chat sees its recent tasks and commands (waiting, ran, rejected, expired), so "did that go through?" gets a real answer.
 
 ### Self-editing (off unless you turn it on)
 
-With it on, approving a plan makes JARVIS build it: Claude Code edits a private clone (`~/Library/Application Support/JARVIS/src`) on its own branch, allowed only to edit files and run the tests. The build must pass all tests, can't reduce the test count, and can't touch `.env`. You get a summary, the patch file, and **Deploy / Discard**. Changes to safety-critical files (approvals, chat lockdown, Telegram, web, mail, scheduling, self-edit) are flagged ⚠️. Deploy merges, redeploys the background jobs, and fast-forwards this repo; if that sync fails, JARVIS sends the `git pull` command to run.
+With it on, approving a plan makes JARVIS build it: Claude Code edits a private clone of this repo (`~/Library/Application Support/JARVIS/src`) on its own branch. The build must pass all tests, can't reduce the test count, and can't touch `.env`. You get a summary, the patch file, and **Deploy / Discard**. Changes to safety-critical files (approvals, chat lockdown, Telegram, web, mail, scheduling, self-edit) are flagged ⚠️. Deploy merges, redeploys the background jobs, and fast-forwards this repo; if that sync fails, JARVIS sends the `git pull` command to run.
+
+- **The build session (`jarvis-build`):** a detached process, so you never open Claude Code yourself. It runs in the same sandbox and with the same hook as task mode (folder: the clone), and reports to JARVIS like any helper. A high-risk step (Claude Code's permission prompt) is decided by JARVIS when it's off your side of the line, otherwise forwarded to you as a plain-words question; it runs on the yes and the session resumes. A session that prints nothing for `BUILD_HANG_MINUTES` (10) is restarted from where it was (twice at most), and a builder that dies is restarted by the tick (twice at most, then the plan is marked failed and you're told).
+- **Control:** `jarvis build status` (running?, which plan, last step, last output, session id, log path), `jarvis build start` (starts a builder for queued plans unless one is already running), `jarvis build stop`.
 
 To turn it on yourself (from this folder):
 1. `uv run --extra dev pytest -q`
@@ -194,14 +213,35 @@ To turn it on yourself (from this folder):
 
 To turn it off: remove `JARVIS_REPO` from `.env` and run `uv run jarvis schedule install`.
 
+## JARVIS's browser (saved logins)
+
+Besides reading pages in a fresh, empty browser, JARVIS has its own **browser profile** that can stay signed in to sites you choose, so "what's new in my Canvas inbox?" or "screenshot my schedule page" can work.
+
+- **You log in, not JARVIS:** at the Mac, run `jarvis browser login canvas.seattlecolleges.edu`. A normal browser window opens. Sign in yourself, then close it. JARVIS never asks for, sees or stores a password; only the site's session cookie stays in the profile.
+- **Where it lives:** `~/Library/Application Support/JARVIS/browser-profile`, on this Mac only, outside the repo (and gitignored). It's in the secrets guard, so no command or task can read it, and it's never sent to Telegram.
+- **Only your sites:** pages on sites you logged in to (`jarvis browser sites`) open with the profile; everything else gets a fresh context. `jarvis browser forget <site>` takes one off the list, `jarvis browser reset` deletes the profile and every login.
+- **Banking and payment sites are blocked** everywhere (logins, browsing, screenshots, plain page reads): PayPal, Venmo, Cash App, Zelle, Stripe, major banks and brokerages, credit unions and the like. Add more with `BROWSER_BLOCKLIST=domain1.com,domain2.com`.
+- **What you get:** JARVIS reads the page text (as untrusted data, never instructions), and can send you a screenshot in Telegram. Local and private network addresses stay blocked. It reads and screenshots; it doesn't fill in forms or click buttons on your behalf.
+
+## Thinking heartbeat
+
+Each tick, JARVIS can take a cheap look at your situation: deadlines in the next 48 hours, unread mail headers, drafts waiting for you, upcoming reminders, open loops from its journal, and recent events. It texts you only if something is clearly worth it (a deadline about to slip, an important unanswered email), and is quiet otherwise.
+
+- **Cost cap:** at most one look every `HEARTBEAT_MIN_INTERVAL_MIN` (30) minutes and `HEARTBEAT_MAX_RUNS_PER_DAY` (24) a day, with `HEARTBEAT_MODEL` (default `haiku`). If nothing changed since the last look, there's no model call at all. Quiet hours skip it.
+- **Message cap:** at most `HEARTBEAT_MAX_MSGS_PER_DAY` (3) texts a day, `HEARTBEAT_MIN_MSG_GAP_MIN` (90) minutes apart; low-urgency thoughts stay unsent. Messages are delivered like alerts (and spoken if you're at the Mac).
+- **It can only suggest a message.** Same no-tools Claude as chat: no email, no calls, no commands. Mail and event text is treated as data.
+- **Off switch:** say "pause heartbeat" / "resume heartbeat" in chat, or `jarvis heartbeat off` / `on`; `HEARTBEAT=0` in `.env` turns it off for good. `jarvis heartbeat` shows today's runs and messages and the last decisions (each is also logged for the journal); `jarvis heartbeat run` does one look now.
+
 ## Location (from Telegram)
 
 Share your location with the JARVIS bot in Telegram (📎 → Location). A **live** share updates on its own, so JARVIS always roughly knows where you are, the same way it knows what's on your screen.
 
 - **What it keeps:** points on this Mac only (latitude, longitude, accuracy, time). If you haven't moved, an update extends the last point instead of adding one. It keeps at most `LOCATION_KEEP_POINTS` (300) points from the last `LOCATION_KEEP_DAYS` (14) days. A location counts as stale after `LOCATION_STALE_MINUTES` (30). Locations from anyone but you are ignored.
-- **Place names:** OpenStreetMap Nominatim turns a point into a street or building name. It gets coordinates rounded to about 100 m, at most one lookup a second, and the answers are cached. This is the only place your coordinates are sent. `LOCATION_GEOCODE=0` turns it off and keeps everything local.
+- **Place names:** OpenStreetMap Nominatim turns a point into a street or building name. It gets coordinates rounded to about 100 m, at most one lookup a second, and the answers are cached. `LOCATION_GEOCODE=0` turns it off.
+- **Street address:** so JARVIS can say "you're at 1701 Broadway" rather than just the area, it also looks up the street address of your latest point, also with Nominatim (`nominatim.openstreetmap.org/reverse`, free, no key). **What's sent:** only the latitude and longitude rounded to 5 decimals (about 1 m), plus JARVIS's User-Agent; no name, email, chat text or anything else. **When:** only for a fresh point when chat needs your location, only after you've moved about 30 m since the last lookup, and at most once a minute (Nominatim's usage policy), with a 5 s timeout. **What's kept:** only the latest address, replaced each time, in JARVIS's location state on this Mac; never in the journal, logs or facts, and no history. `jarvis location forget` wipes it. If a lookup fails, JARVIS falls back to the street area. **Off switch:** `REVERSE_GEOCODE=0` (no request at all; everything else works as before). This does send your precise location to a third party (OpenStreetMap); a self-hosted geocoder would avoid that if you'd rather.
+- **These are the only places your coordinates are sent.**
 - **Places and routine:** after 20 minutes in one spot, JARVIS asks once what the place is ("school", "work"). Reply in chat, or run `jarvis location label 3 school`. It then learns which weekdays and hours you're usually at each place, so chat and the morning brief can make a guess like "not at school; usually is by now on Mondays". These are guesses from your own history; class times in facts aren't read yet.
-- **What chat sees:** your last known place and how old it is, whether live sharing is on, the last few hours of movement, and the routine guess. Coordinates only appear when a place has no name, rounded to about 1 km.
+- **What chat sees:** your last known place and how old it is, the street address (when fresh), whether live sharing is on, the last few hours of movement, and the routine guess. **Never coordinates:** an unnamed spot is just "a spot with no name yet", the chat model is told never to state coordinates, and any latitude/longitude pair that still ends up in a reply is stripped before it reaches you.
 - **Live sharing lapses:** Telegram ends a live share after at most 8 hours, unless you pick "until I turn it off". JARVIS reminds you once when a share ends, outside quiet hours. A background reporter on the phone (OwnTracks, or a Shortcuts automation posting to an authenticated endpoint) would avoid the gaps. It isn't built; it would be a later plan.
 - **CLI:** `jarvis location` (what JARVIS sees), `jarvis location history --hours 24`, `jarvis location places`, and `jarvis location forget` (wipes all points, places and visits). `LOCATION=0` turns it off.
 

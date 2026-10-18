@@ -218,14 +218,22 @@ def test_inspect_results_come_back_as_untrusted_data(own_project):
 def test_read_only_command_runs_and_risky_one_waits_for_approval(own_project):
     m = Memory(":memory:")
     run = scripted({"reply": "checking", "actions": [{"type": "run_command", "command": "ls jarvis"}]},
-                   {"reply": "Two files, sir. Shall I delete one? It's waiting for your OK.",
+                   {"reply": "Two files, sir. Shall I delete the folder? It's waiting for your OK.",
                     "actions": [{"type": "run_command", "command": "ls jarvis"},
-                                {"type": "run_command", "command": "rm jarvis/voice.py", "why": "he asked"}]})
-    reply = respond(m, "list your files then delete voice.py", NOW, "", runner=run)
+                                {"type": "run_command", "command": "rm -r jarvis", "why": "he asked"}]})
+    reply = respond(m, "list your files then delete the folder", NOW, "", runner=run)
     assert "voice.py" in run.prompts[1] and "couldn't do" not in reply
     assert (own_project / "jarvis" / "voice.py").exists()  # not run, only queued
     pending = m.pending_actions(kind="run_command")
-    assert len(pending) == 1 and json.loads(pending[0]["payload"])["argv"] == ["rm", "jarvis/voice.py"]
+    assert len(pending) == 1 and json.loads(pending[0]["payload"])["argv"] == ["rm", "-r", "jarvis"]
+
+
+def test_medium_risk_project_work_runs_on_its_own(own_project):
+    m = Memory(":memory:")
+    run = scripted({"reply": "on it", "actions": [{"type": "run_command", "command": "touch jarvis/new.txt"}]},
+                   {"reply": "Made it, sir.", "actions": []})
+    assert respond(m, "make a file", NOW, "", runner=run) == "Made it, sir."
+    assert (own_project / "jarvis" / "new.txt").exists() and not m.pending_actions(kind="run_command")
 
 
 def test_shell_syntax_and_disabled_commands_are_reported(own_project, monkeypatch):

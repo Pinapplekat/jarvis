@@ -3,8 +3,9 @@
 A job is a command Elijah tapped Run on, launched detached in its own session with output
 going to a log under Application Support/JARVIS/jobs/<id>/. A tiny wrapper process waits for
 it and writes the exit code, so JARVIS can tell later whether it finished and how. Reading a
-job's status needs no approval; the log text is untrusted data. The tick pings Telegram once
-when a job exits, dies, or goes quiet for JOB_STALL_MINUTES.
+job's status needs no approval; the log text is untrusted data. The tick files one report to
+JARVIS (jarvis.reports) when a job exits, dies, or goes quiet for JOB_STALL_MINUTES, and JARVIS
+tells Elijah in its own words.
 """
 
 import json
@@ -202,8 +203,9 @@ def kill_job(job_id: int) -> bool:
 
 
 def check_jobs(mem: Memory, now: float | None = None) -> int:
-    """Raise one alert per event: a job exited, was lost, or has been quiet for JOB_STALL_MINUTES.
-    Delivered by the tick's alert step (quiet hours and voice rules apply there)."""
+    """File one report per event: a job exited, was lost, or has been quiet for JOB_STALL_MINUTES.
+    JARVIS passes it on (bundled with anything else that came in)."""
+    from jarvis import reports
     now = now or time.time()
     raised = 0
     for job_id in _ids():
@@ -211,21 +213,22 @@ def check_jobs(mem: Memory, now: float | None = None) -> int:
         if not meta or meta["notified"].get("end"):
             continue
         s = job_status(job_id, lines=8, now=now)
-        event, message = None, None
+        event, message, kind = None, None, "note"
         if s["state"] in ("exited", "lost"):
             event = "end"
+            kind = "done" if s["code"] == 0 else "failed"
             tail = s["tail"].splitlines()[-3:]
-            message = (f"Job #{job_id} {describe_state(s)}: $ {_command(s)[:150]}"
+            message = (f"Background job {describe_state(s)}: $ {_command(s)[:150]}"
                        + ("\n" + "\n".join(tail) if tail else ""))
         elif not meta["notified"].get("stall"):
             since = s["last_output"] or meta["started"]
             if now - since >= config.JOB_STALL_MINUTES * 60:
                 event = "stall"
-                message = (f"Job #{job_id} has printed nothing for {_duration(now - since)} "
+                message = (f"A background job has printed nothing for {_duration(now - since)} "
                            f"(still running {_duration(s['runtime'])}): $ {_command(s)[:150]}")
         if event:
-            if mem.raise_alert("high", message[:1500], dedupe_key=f"job:{job_id}:{event}") is not None:
-                raised += 1
+            reports.add(mem, "job", job_id, kind, f"the background job `{_command(s)[:60]}`", message[:1500])
+            raised += 1
             meta["notified"][event] = True
             _save_meta(meta)
             mem.log("job", f"#{job_id} {event}: {describe_state(s)}")

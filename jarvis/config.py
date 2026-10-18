@@ -3,7 +3,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+try:
+    load_dotenv()
+except OSError:  # inside a task's sandbox .env can't be read, by design
+    pass
 
 # Outside iCloud Drive: syncing a live SQLite file can corrupt it.
 DATA_DIR = Path(os.getenv("JARVIS_DATA_DIR", "~/Library/Application Support/JARVIS")).expanduser()
@@ -77,6 +80,29 @@ WARM_CLAUDE = os.getenv("WARM_CLAUDE", "1") == "1"  # keep a persistent chat ses
 JARVIS_REPO = os.getenv("JARVIS_REPO", "")
 SELF_EDIT_MODEL = os.getenv("SELF_EDIT_MODEL", "opus")
 IDEA_HOUR = int(os.getenv("IDEA_HOUR", "18"))
+BUILD_HANG_MINUTES = int(os.getenv("BUILD_HANG_MINUTES", "10"))  # no output this long: restart the build session
+
+# Task mode: a Claude Code session confined to the task's folder; risky steps wait for Elijah's yes.
+TASKS = os.getenv("TASKS", "1") == "1"                       # kill switch
+TASK_MODEL = os.getenv("TASK_MODEL", "sonnet")
+TASK_MAX_TURNS = int(os.getenv("TASK_MAX_TURNS", "40"))      # tool calls per session run
+TASK_MAX_MINUTES = int(os.getenv("TASK_MAX_MINUTES", "20"))  # working time (waiting for Elijah doesn't count)
+# JARVIS approving high-risk steps itself when they're off Elijah's side of the line (never anything
+# irreversible, money/credentials, sudo/system changes, or reaching other people). 0 = always ask him.
+SELF_APPROVE = os.getenv("SELF_APPROVE", "1") == "1"
+SELF_APPROVE_CONFIDENCE = float(os.getenv("SELF_APPROVE_CONFIDENCE", "0.8"))
+
+# Thinking heartbeat: each tick, a cheap look at deadlines, mail and open loops; texts only when worth it.
+HEARTBEAT = os.getenv("HEARTBEAT", "1") == "1"
+HEARTBEAT_MIN_INTERVAL_MIN = int(os.getenv("HEARTBEAT_MIN_INTERVAL_MIN", "30"))
+HEARTBEAT_MAX_RUNS_PER_DAY = int(os.getenv("HEARTBEAT_MAX_RUNS_PER_DAY", "24"))  # cost cap
+HEARTBEAT_MAX_MSGS_PER_DAY = int(os.getenv("HEARTBEAT_MAX_MSGS_PER_DAY", "3"))
+HEARTBEAT_MIN_MSG_GAP_MIN = int(os.getenv("HEARTBEAT_MIN_MSG_GAP_MIN", "90"))
+HEARTBEAT_MODEL = os.getenv("HEARTBEAT_MODEL", "haiku")
+
+# JARVIS's own browser profile (logins Elijah made himself). Outside the repo; never sent anywhere.
+BROWSER_PROFILE = DATA_DIR / "browser-profile"
+BROWSER_BLOCKLIST = os.getenv("BROWSER_BLOCKLIST", "")  # extra domains, comma-separated
 
 # Self-inspection and terminal commands. PROJECT_DIR is the JARVIS repo (the background jobs
 # run from a copy, which records where it came from); commands stay inside it unless approved.
@@ -96,6 +122,8 @@ LOCATION_GEOCODE = os.getenv("LOCATION_GEOCODE", "1") == "1"
 LOCATION_STALE_MINUTES = int(os.getenv("LOCATION_STALE_MINUTES", "30"))
 LOCATION_KEEP_POINTS = int(os.getenv("LOCATION_KEEP_POINTS", "300"))
 LOCATION_KEEP_DAYS = int(os.getenv("LOCATION_KEEP_DAYS", "14"))
+# Street address of the latest point (Nominatim, at most once a minute, only the latest kept).
+REVERSE_GEOCODE = os.getenv("REVERSE_GEOCODE", "1") == "1"
 
 # Twilio is used only for voice: urgent calls to you, and you calling JARVIS
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")

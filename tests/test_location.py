@@ -146,11 +146,11 @@ def test_geocoder_gets_rounded_coords_and_is_cached(mem):
     assert len(calls) == 1
 
 
-def test_geocoder_failure_falls_back_to_rounded_coordinates(mem):
+def test_geocoder_failure_never_falls_back_to_coordinates(mem):
     assert location.place_name(mem, *SCHOOL, geocoder=lambda lat, lon: None, now=100) is None
     location.record_point(mem, *SCHOOL, at(17, 9))
     text = location.for_prompt(mem, at(17, 9, 5))
-    assert "around 47.62, -122.32" in text and "47.6163" not in text
+    assert "a spot with no name yet" in text and "47.6" not in text and "-122.3" not in text
     # a failure isn't cached: the next lookup tries again
     assert location.place_name(mem, *SCHOOL, geocoder=lambda lat, lon: "Broadway", now=200) == "Broadway"
 
@@ -175,7 +175,7 @@ def test_stays_become_places_and_he_is_asked_once(mem):
     location.learn(mem, at(17, 10), ask=asked.append, geocoder=lambda lat, lon: "Broadway")
     location.learn(mem, at(17, 10, 5), ask=asked.append, geocoder=lambda lat, lon: "Broadway")
     [place] = location.places(mem)
-    assert len(asked) == 1 and f"place #{place['id']}" in asked[0] and "near Broadway" in asked[0]
+    assert len(asked) == 1 and "#" not in asked[0] and "near Broadway" in asked[0]
     assert "#1 near Broadway" in location.for_prompt(mem, at(17, 10))
     # a quick stop isn't a place
     location.record_point(mem, *HOME, at(17, 11))
@@ -264,3 +264,114 @@ def test_forget_all(mem):
     mem.set_kv("geo:47.616,-122.321", "x")
     location.forget_all(mem)
     assert location.latest(mem) is None and location.places(mem) == [] and mem.get_kv("geo:47.616,-122.321") is None
+
+
+# ----- street address (reverse geocoding) -----
+NOMINATIM_REPLY = {"address": {"house_number": "1701", "road": "Broadway", "neighbourhood": "Capitol Hill",
+                               "city": "Seattle", "postcode": "98122"}}
+
+
+class FakeGet:
+    """Stands in for httpx.get; records exactly what would be sent."""
+
+    def __init__(self, reply=NOMINATIM_REPLY, status=200, fail=False):
+        self.calls, self.reply, self.status, self.fail = [], reply, status, fail
+
+    def __call__(self, url, params=None, headers=None, timeout=None):
+        import httpx
+        self.calls.append({"url": url, "params": params, "headers": headers, "timeout": timeout})
+        if self.fail:
+            raise httpx.ConnectError("offline")
+        reply, status = self.reply, self.status
+
+        class R:
+            status_code = status
+
+            def json(self):
+                return reply
+        return R()
+
+
+def test_reverse_geocode_sends_only_rounded_coordinates():
+    get = FakeGet()
+    assert location.reverse_geocode(47.616321987, -122.321488123, get=get) == "1701 Broadway, Capitol Hill, Seattle"
+    [call] = get.calls
+    assert call["url"] == location.NOMINATIM and call["timeout"] == 5
+    assert call["params"] == {"lat": "47.61632", "lon": "-122.32149", "format": "jsonv2", "addressdetails": 1}
+    assert set(call["headers"]) == {"User-Agent"}  # nothing else about him goes out
+
+
+def test_reverse_geocode_failures_return_none():
+    assert location.reverse_geocode(1, 1, get=FakeGet(fail=True)) is None
+    assert location.reverse_geocode(1, 1, get=FakeGet(status=429)) is None
+    assert location.reverse_geocode(1, 1, get=FakeGet(reply={})) is None
+
+
+@pytest.fixture
+def geocoding(monkeypatch):
+    monkeypatch.setattr(config, "REVERSE_GEOCODE", True)
+
+
+def test_street_address_is_looked_up_only_after_moving_and_once_a_minute(mem, geocoding):
+    calls = []
+
+    def geo(lat, lon):
+        calls.append((lat, lon))
+        return f"address {len(calls)}"
+    assert location.street_address(mem, *SCHOOL, now=1000, geocoder=geo) == "address 1"
+    assert location.street_address(mem, SCHOOL[0] + 0.0001, SCHOOL[1], now=1100, geocoder=geo) == "address 1"  # ~11 m
+    assert location.street_address(mem, *HOME, now=1030, geocoder=geo) is None   # moved, but too soon
+    assert location.street_address(mem, *HOME, now=1100, geocoder=geo) == "address 2"
+    assert len(calls) == 2
+
+
+def test_only_the_latest_address_is_kept_nowhere_else(mem, geocoding):
+    location.street_address(mem, *SCHOOL, now=1000, geocoder=lambda lat, lon: "1701 Broadway")
+    location.street_address(mem, *HOME, now=2000, geocoder=lambda lat, lon: "5000 University Way")
+    keys = [r["key"] for r in mem.db.execute("SELECT key FROM kv WHERE value LIKE '%Broadway%' OR value LIKE '%University%'")]
+    assert keys == [location.ADDRESS_KEY] and "Broadway" not in mem.get_kv(location.ADDRESS_KEY)
+    assert not any("University" in e["content"] for e in mem.recent_events(50))
+    assert not mem.facts()
+    location.forget_all(mem)
+    assert mem.get_kv(location.ADDRESS_KEY) in (None, "")
+
+
+def test_off_switch_makes_no_request(mem, monkeypatch):
+    monkeypatch.setattr(config, "REVERSE_GEOCODE", False)
+    location.record_point(mem, *SCHOOL, at(17, 9))
+    text = location.for_prompt(mem, at(17, 9, 5), geocoder=lambda *a: pytest.fail("called"))
+    assert "Street address" not in text
+
+
+def test_failure_falls_back_to_the_street_area(mem, geocoding):
+    location.place_name(mem, *SCHOOL, geocoder=lambda lat, lon: "Broadway, Capitol Hill", now=100)
+    location.record_point(mem, *SCHOOL, at(17, 9))
+    text = location.for_prompt(mem, at(17, 9, 5), geocoder=lambda lat, lon: None)
+    assert "near Broadway, Capitol Hill" in text and "Street address" not in text
+
+
+def test_chat_context_has_the_address_never_coordinates(mem, geocoding):
+    location.record_point(mem, *SCHOOL, at(17, 9))
+    text = location.for_prompt(mem, at(17, 9, 5), geocoder=lambda lat, lon: "1701 Broadway, Seattle")
+    assert "Street address (from OpenStreetMap, approximate): 1701 Broadway, Seattle" in text
+    assert "47.6" not in text and "122.3" not in text
+    # a stale point isn't looked up at all
+    stale = location.for_prompt(mem, at(17, 11), geocoder=lambda *a: pytest.fail("called"))
+    assert "STALE" in stale
+
+
+@pytest.mark.parametrize("reply", ["You're at 47.61632, -122.32149, sir.", "That's 47.6163° N, 122.3214° W.",
+                                   "Coordinates: 47.616,-122.321"])
+def test_coordinates_are_stripped_from_replies(reply):
+    out = location.strip_coordinates(reply)
+    assert "47.61" not in out and "122.32" not in out and "(location withheld)" in out
+
+
+def test_strip_leaves_ordinary_numbers_alone():
+    assert location.strip_coordinates("Module 3 is 45.5% done, due 11.59 tonight.") == "Module 3 is 45.5% done, due 11.59 tonight."
+
+
+def test_chat_reply_never_carries_coordinates(mem):
+    run = lambda system, prompt, on_text=None: {"reply": "You're at 47.61632, -122.32149, sir.", "actions": []}  # noqa: E731
+    reply = chat.respond(mem, "where am I exactly?", at(17, 9), "", runner=run)
+    assert "47.61632" not in reply and "47.61632" not in mem.chat_history(2)[-1]["text"]

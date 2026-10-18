@@ -69,6 +69,16 @@ class TelegramClient:
         if not r.json().get("ok"):
             raise TelegramError(f"sendDocument failed ({r.status_code}): {r.json().get('description', '')}")
 
+    def send_photo(self, png: bytes, caption: str = "") -> None:
+        try:
+            r = self.http.post(f"{self._base}/sendPhoto",
+                               data={"chat_id": self.chat_id, "caption": caption[:1000]},
+                               files={"photo": ("page.png", png, "image/png")})
+        except httpx.HTTPError as e:
+            raise TelegramError(f"sendPhoto: {type(e).__name__}") from None
+        if not r.json().get("ok"):
+            raise TelegramError(f"sendPhoto failed ({r.status_code}): {r.json().get('description', '')}")
+
     def download(self, file_id: str) -> bytes:
         path = self._call("getFile", file_id=file_id)["file_path"]
         try:  # the file URL contains the bot token, so errors are rebuilt without it

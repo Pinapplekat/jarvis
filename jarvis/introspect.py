@@ -47,10 +47,49 @@ TOKEN_PATTERNS = [
     re.compile(r"\b(?:ghp|gho|github_pat)_[A-Za-z0-9_]{20,}\b"),         # GitHub tokens
 ]
 
-# A macOS sandbox profile: everything may be read, but nothing written (except temp and
-# /dev) and no network. Used for the checks and for auto-approved terminal commands.
+HOME = Path.home()
+# Folders that hold keys, sessions or private messages: never read by a command, anywhere.
+SECRET_DIRS = [HOME / ".ssh", HOME / ".gnupg", HOME / ".aws", HOME / ".config/gh", HOME / ".docker",
+               HOME / "Library/Keychains", HOME / "Library/Cookies", HOME / "Library/Messages",
+               HOME / "Library/Application Support/Google/Chrome", HOME / "Library/Safari",
+               HOME / "Library/Application Support/Firefox", config.BROWSER_PROFILE]
+
+
+def _sb(path) -> str:
+    return '"' + str(path).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def deny_secrets(keychain: bool = True) -> str:
+    """The OS-level secrets guard, in every sandbox: those folders, .env files (not .env.example),
+    JARVIS's database and token cache can't even be opened. `keychain=False` is only for the
+    sandbox around Claude Code itself, which reads its own login from the (encrypted) keychain;
+    commands still can't name keychain files, and `security` always needs Elijah's yes."""
+    dirs = [d for d in SECRET_DIRS if keychain or d.name != "Keychains"]
+    return ("(deny file-read* " + " ".join(f"(subpath {_sb(d)})" for d in dirs)
+            + r' (regex #"/\.env(\.[^/]*)?$") (regex #"/jarvis\.db") (regex #"/token_cache\.json$"))'
+            + r'(allow file-read* (regex #"/\.env\.example$"))')
+
+
+_DENY_SECRETS = deny_secrets()
+_TEMP = '(subpath "/private/tmp") (subpath "/private/var/folders") (subpath "/dev")'
+
+# Read-only: everything may be read (but secrets), nothing written (except temp and /dev), no
+# network. Used for the checks and for low-risk terminal commands.
 SANDBOX = ('(version 1)(allow default)(deny network-outbound (remote ip))(deny file-write*)'
-           '(allow file-write* (subpath "/private/tmp") (subpath "/private/var/folders") (subpath "/dev"))')
+           f'(allow file-write* {_TEMP})' + _DENY_SECRETS)
+
+
+def write_sandbox(root: Path, git: bool = False) -> str:
+    """Medium-risk commands: writes only inside `root` (plus temp and package caches), network
+    allowed (installs). Its .git can't be written (except by git itself, `git=True`), and never
+    its hooks or config, which would run code later outside the sandbox."""
+    root = Path(root).resolve()
+    caches = " ".join(f"(subpath {_sb(HOME / p)})" for p in (".cache", ".npm", "Library/Caches", ".local/share/uv"))
+    no_git = "" if git else f"(deny file-write* (subpath {_sb(root / '.git')}))"
+    return ("(version 1)(allow default)(deny file-write*)"
+            f"(allow file-write* (subpath {_sb(root)}) {_TEMP} {caches})" + no_git
+            + f"(deny file-write* (subpath {_sb(root / '.git/hooks')}) (literal {_sb(root / '.git/config')})"
+            + r' (regex #"/\.env(\.[^/]*)?$"))' + _DENY_SECRETS)
 
 
 class Refused(ValueError):
@@ -100,6 +139,19 @@ def redact(text: str, limit: int = MAX_OUTPUT) -> str:
 def is_secret(path: Path) -> bool:
     return any(part not in SECRET_OK and any(fnmatch.fnmatch(part.lower(), pat) for pat in SECRET_NAMES)
                for part in path.parts)
+
+
+def is_secret_path(path: Path) -> bool:
+    """An absolute path that is, or is inside, something secret (by name or by folder)."""
+    path = Path(path)
+    for d in SECRET_DIRS:
+        for form in {d, d.resolve()}:  # as written, and with symlinks followed
+            try:
+                path.relative_to(form)
+                return True
+            except ValueError:
+                continue
+    return is_secret(path)
 
 
 # ----- paths -----
@@ -211,10 +263,13 @@ def scrubbed_env() -> dict:
     return env
 
 
-def run_argv(argv: list[str], cwd: Path, timeout: float = 30, sandboxed: bool = True) -> Result:
+def run_argv(argv: list[str], cwd: Path, timeout: float = 30, sandboxed: bool = True,
+             profile: str | None = None) -> Result:
     """Run one command: no shell, fixed cwd, scrubbed env, timeout, and (by default) inside
-    the no-writes, no-network sandbox. Output is redacted and truncated."""
-    full = (["/usr/bin/sandbox-exec", "-p", SANDBOX] if sandboxed else []) + list(argv)
+    the no-writes, no-network sandbox, or `profile` (a write_sandbox). Output is redacted and
+    truncated."""
+    profile = profile or (SANDBOX if sandboxed else None)
+    full = (["/usr/bin/sandbox-exec", "-p", profile] if profile else []) + list(argv)
     try:
         r = subprocess.run(full, cwd=cwd, env=scrubbed_env(), capture_output=True, text=True,
                            timeout=timeout, stdin=subprocess.DEVNULL, errors="replace")

@@ -45,7 +45,7 @@ def test_chat_request_becomes_a_drafted_plan_with_buttons():
     assert plans.draft_plans(m, tg, run) == 1
     assert "add a /status command" in run.calls[0] and "jarvis/cli.py" in run.calls[0]
     text, buttons = tg.sent[0]
-    assert text.startswith("📝 Plan #1: Status command") and "1. add /status" in text
+    assert text.startswith("📝 Plan: Status command") and "1. add /status" in text
     assert buttons == [("Yes, build it ✅", "plan_yes:1"), ("Not now", "plan_no:1")]
     assert m.get_self_edit(1)["status"] == "proposed"
     assert plans.draft_plans(m, tg, run) == 0
@@ -80,7 +80,7 @@ def test_not_now_and_revise():
     assert apply_actions(m, [{"type": "revise_plan", "id": 2, "feedback": "also show deadlines"}], TZ) == []
     assert m.get_self_edit(2)["status"] == "drafting" and "also show deadlines" in m.get_self_edit(2)["request"]
     assert apply_actions(m, [{"type": "revise_plan", "id": 1, "feedback": "x"}], TZ)  # declined: can't revise
-    assert tg.sent[0][0].startswith("💡 Idea #1")
+    assert tg.sent[0][0].startswith("💡 Idea: ")
 
 
 def test_planning_failure_is_reported():

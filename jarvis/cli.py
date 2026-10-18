@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 import sys
 
 from jarvis import config
@@ -28,6 +29,18 @@ def _deliver(mem: Memory, messenger, caller) -> tuple[int, int]:
     from jarvis.alerts import deliver_alerts, parse_quiet_hours
     return deliver_alerts(mem, messenger, caller, _now_local().replace(tzinfo=None),
                           parse_quiet_hours(config.QUIET_HOURS))
+
+
+def _say_if_present(text: str) -> None:
+    """Ask out loud too, when he's at the Mac (outside quiet hours)."""
+    from datetime import datetime
+    from jarvis.voice import should_speak, speak
+    if should_speak(datetime.now()):
+        speak(text)
+
+
+HEARTBEAT_TOGGLE = re.compile(
+    r"^\s*(?P<verb>pause|stop|mute|silence|resume|unpause|unmute|start)\s+(?:the\s+|your\s+)?heartbeat\s*[.!]*\s*$", re.I)
 
 
 def _set_env(key: str, value: str) -> None:
@@ -191,7 +204,7 @@ def _runner_for(route, warm):
 
 
 def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = False, warm=None,
-            on_first=None, on_text=None, phone: bool = False) -> str:
+            on_first=None, on_text=None, phone: bool = False, send_photo=None) -> str:
     """One chat turn with full context. Shared by Telegram (typed or voice), the desk mic and
     phone calls.
     `on_first(sentence)` fires as soon as the reply's first sentence has streamed in;
@@ -225,7 +238,7 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
     reply = respond(mem, message, now, deadlines_text, runner=runner, on_progress=on_progress,
                     inbox_text=_inbox_text(mem) if "inbox" in blocks else "",
                     activity_text=_activity(mem) if "activity" in blocks else "", blocks=blocks,
-                    on_text=stream, spotter=_page_spotter())
+                    on_text=stream, spotter=_page_spotter(), send_photo=send_photo)
     total = time.time() - started
     first_at = f"{first.at - started:.1f}s" if first and first.at else "-"
     # Timings and choices only; never the message text.
@@ -236,11 +249,38 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
 
 
 def _task_worker(mem: Memory, tg):
-    """Task mode: Claude picks each step; Jev (or Haiku) checks between steps."""
+    """Task mode: a sandboxed Claude Code session per task; Jev (or Haiku) double-checks a 'done'."""
     from jarvis import judge
     from jarvis.tasks import Worker
     return Worker(tg, judge=judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])),
-                  log=lambda s: print(s, flush=True))
+                  log=lambda s: print(s, flush=True), say=_say_if_present)
+
+
+def _carry_on(worker):
+    """After a command Elijah answered: a task waiting on it resumes; a build gets the output."""
+    from jarvis import tasks
+
+    def carry_on(db, payload, action_id, outcome):
+        if payload.get("build_id"):
+            db.set_kv(f"agent_outcome:{action_id}", outcome[:6000])
+        if tasks.requeue(db, payload, action_id, outcome) and worker:
+            tasks.start_queued(db, worker)
+    return carry_on
+
+
+def _spoken_confirmation(mem: Memory, text: str) -> str | None:
+    """A yes/no said at the desk mic or on the phone, to whatever is waiting for his OK. Returns
+    what to say back, or None if it isn't one (then it's ordinary chat)."""
+    from datetime import datetime, timezone
+    from jarvis import terminal
+    from jarvis.approvals import confirm_by_words
+    tg = _messenger()
+
+    def on_command(verb, action_id):
+        return terminal.handle_button(mem, tg, verb, action_id, background=False, on_done=_carry_on(None)) \
+            if tg else "Telegram isn't set up"
+    done = confirm_by_words(mem, text, datetime.now(timezone.utc), on_command)
+    return done.note if done else None
 
 
 def _listen(mem: Memory) -> None:
@@ -268,6 +308,13 @@ def _listen(mem: Memory) -> None:
             set_state("telegram", "idle")
 
     def _on_text(update):
+        if (toggle := HEARTBEAT_TOGGLE.match(update.text or "")):
+            from jarvis import heartbeat
+            off = toggle["verb"].lower() in ("pause", "stop", "mute", "silence")
+            heartbeat.set_paused(mem, off)
+            tg.send("Heartbeat paused, sir; I'll only speak when spoken to (reminders and alerts still come)."
+                    if off else "Heartbeat back on, sir.")
+            return
         is_stop, stop_id = tasks.parse_stop(update.text)
         if is_stop and mem.db.execute("SELECT 1 FROM tasks WHERE status IN ('queued','running','waiting')").fetchone():
             tg.send(tasks.stop(mem, stop_id))
@@ -287,7 +334,7 @@ def _listen(mem: Memory) -> None:
                 sent["id"], sent["text"] = tg.send(sentence), sentence
 
         reply = _answer(mem, update.text, on_progress=tg.typing, spoken=update.via_voice, warm=warm,
-                        on_first=first_out)
+                        on_first=first_out, send_photo=tg.send_photo)
         if sent:  # buttons and plans below must still go out, so no early return
             if reply.strip() != sent["text"]:
                 tg.edit(sent["id"], reply)
@@ -303,7 +350,7 @@ def _listen(mem: Memory) -> None:
                 tg.send(reply)
         else:
             tg.send(reply)
-        notify_pending(mem, tg)  # drafts made in this chat get their buttons right away
+        notify_pending(mem, tg, say=_say_if_present)  # drafts and risky commands: the question, right away
         tasks.start_queued(mem, worker)  # a task started in this chat begins at once
         if mem.self_edits("drafting"):
             tg.typing()
@@ -312,11 +359,7 @@ def _listen(mem: Memory) -> None:
     def on_button(verb, edit_id):
         if verb.startswith("cmd_"):
             from jarvis import terminal
-
-            def carry_on(db, payload, action_id, outcome):  # a task waiting on this command resumes
-                if tasks.requeue(db, payload, action_id, outcome):
-                    tasks.start_queued(db, worker)
-            return terminal.handle_button(mem, tg, verb, edit_id, on_done=carry_on)
+            return terminal.handle_button(mem, tg, verb, edit_id, on_done=_carry_on(worker))
         if verb.startswith("plan_"):
             on_approved = (lambda i: selfedit.queue_approved(mem, tg, i)) if selfedit.enabled() else None
             return plans.handle_button(mem, verb, edit_id, on_approved)
@@ -339,6 +382,7 @@ def _listen(mem: Memory) -> None:
             tg.send(f"Following along{until}, sir ({where})." if p["source"] == "live"
                     else f"Noted, sir: {where}.")
 
+    from jarvis import reports
     from jarvis.reminders import deliver_reminders
     from jarvis.voice import Announcer
     announcer = Announcer(tg, mem)
@@ -348,6 +392,7 @@ def _listen(mem: Memory) -> None:
         try:
             deliver_reminders(mem, announcer, _now_local())
             tasks.start_queued(mem, worker)  # tasks from the desk mic, or resumed after an expiry
+            reports.deliver(mem, announcer.send)  # what tasks, jobs and builds told JARVIS, in one message
             # Short long-poll so reminders go out within ~25s of their time.
             handle_updates(mem, tg, int(config.TELEGRAM_CHAT_ID), on_text, wait=25, on_button=on_button,
                            transcribe=_transcribe, on_location=on_location)
@@ -378,6 +423,8 @@ def _phone() -> None:
     def answer(text, warm):
         mem = Memory(config.DB_PATH)  # SQLite connections stay on the thread that opened them
         try:
+            if (said := _spoken_confirmation(mem, text)):
+                return said
             reply = _answer(mem, text, spoken=True, phone=True, warm=warm)
             if tg:
                 notify_pending(mem, tg)  # drafts and commands asked for on the call get their buttons
@@ -436,7 +483,10 @@ def _tick(mem: Memory) -> int:
     def watch_jobs():
         raised, pruned = jobs.check_jobs(mem), jobs.prune()
         return f"{raised} pings" + (f", pruned {pruned}" if pruned else "")
-    step("jobs", watch_jobs)  # before alerts, so a finished job's ping goes out this tick
+    step("jobs", watch_jobs)  # before reporting, so a finished job is mentioned this tick
+    if tg:
+        from jarvis import reports
+        step("reports", lambda: f"passed on {reports.deliver(mem, announcer.send)}")  # backup for the listener
     if config.LOCATION:
         from jarvis import location
         from jarvis.alerts import in_quiet_hours, parse_quiet_hours
@@ -457,6 +507,16 @@ def _tick(mem: Memory) -> int:
         from jarvis.mailwatch import check_new_mail
         from jarvis import judge as _judge
         step("mail-watch", lambda: check_new_mail(mem, _now_local(), fast=_judge.fast_engine()))  # before alerts
+    if config.HEARTBEAT:
+        from jarvis import heartbeat
+        from jarvis.alerts import in_quiet_hours as _quiet, parse_quiet_hours as _hours
+
+        def think():
+            now = _now_local()
+            quiet = _quiet(now.time().replace(tzinfo=None), _hours(config.QUIET_HOURS))
+            from jarvis.canvas import from_memory
+            return heartbeat.run_heartbeat(mem, now, deadlines or from_memory(mem), quiet=quiet)
+        step("heartbeat", think)  # after Canvas and mail, before alerts: a message goes out this tick
     if tg or caller:
         step("alerts", lambda: "messaged %d, called %d" % _deliver(mem, announcer, caller))
     from jarvis.tasks import requeue
@@ -468,7 +528,10 @@ def _tick(mem: Memory) -> int:
     if tg:
         # Incoming messages and button presses are handled by `jarvis listen`, not here:
         # Telegram allows only one reader of updates at a time.
-        step("drafts", lambda: f"sent {notify_pending(mem, tg)}")
+        step("drafts", lambda: f"sent {notify_pending(mem, tg, say=_say_if_present)}")
+        from jarvis import selfedit
+        if selfedit.enabled():
+            step("build", lambda: selfedit.check_health(mem, tg))
         step("reminders", lambda: f"sent {deliver_reminders(mem, announcer, _now_local())}")  # backup for listener
         from jarvis import plans
 
@@ -567,6 +630,16 @@ def main() -> None:
     jb.add_argument("action", nargs="?", default="list", choices=["list", "show", "kill"])
     jb.add_argument("id", nargs="?", type=int)
     jb.add_argument("-n", type=int, default=40, help="for show: log lines")
+    hb = sub.add_parser("heartbeat", help="JARVIS's background check-ins: run one now, status, or turn off/on")
+    hb.add_argument("action", nargs="?", default="status", choices=["run", "status", "off", "on"])
+    bd = sub.add_parser("build", help="The self-edit build session (jarvis-build): start, status, or stop")
+    bd.add_argument("action", nargs="?", default="status", choices=["start", "status", "stop"])
+    br = sub.add_parser("browser", help="JARVIS's browser profile: log in to a site yourself, list sites, forget one, reset")
+    br.add_argument("action", nargs="?", default="sites", choices=["login", "sites", "forget", "reset"])
+    br.add_argument("site", nargs="?", help="for login/forget: e.g. canvas.seattlecolleges.edu")
+    tk = sub.add_parser("tasks", help="Task mode: list tasks, show one's steps, or stop one")
+    tk.add_argument("action", nargs="?", default="list", choices=["list", "show", "stop"])
+    tk.add_argument("id", nargs="?", type=int)
     lo = sub.add_parser("location", help="Where your phone was last seen (Telegram location shares)")
     lo.add_argument("action", nargs="?", default="show", choices=["show", "history", "places", "label", "forget"])
     lo.add_argument("id", nargs="?", type=int, help="for label: the place number")
@@ -693,10 +766,10 @@ def main() -> None:
     if args.cmd == "draft":
         if not args.sender:
             sys.exit("Set MAIL_ACCOUNT in .env or pass --from")
-        aid = mem.queue_action("send_email", {
-            "from": args.sender, "to": args.to, "subject": args.subject, "body": args.body,
-        })
-        print(f"Queued email #{aid}. It goes to Telegram on the next tick, or: jarvis approve {aid}")
+        from jarvis.mailrelay import queue_email
+        aid, risk = queue_email(mem, {"from": args.sender, "to": args.to, "subject": args.subject, "body": args.body})
+        print(f"Queued email #{aid}." + (" It's only to you, so it goes out on the next tick." if risk == "low" else
+              f" It goes to Telegram on the next tick, or: jarvis approve {aid}"))
         return
     if args.cmd == "queue":
         for a in mem.pending_actions(kind="send_email"):
@@ -707,7 +780,11 @@ def main() -> None:
         action = mem.get_action(args.id)
         if not action or action["status"] != "pending":
             sys.exit(f"No pending action #{args.id}")
-        mem.resolve_action(args.id, "approved" if args.cmd == "approve" else "rejected")
+        if args.cmd == "approve" and action["kind"] == "send_email":
+            from jarvis.mailrelay import approve
+            approve(mem, args.id)
+        else:
+            mem.resolve_action(args.id, "approved" if args.cmd == "approve" else "rejected")
         print(f"#{args.id} {args.cmd}d")
         return
     if args.cmd == "relay":
@@ -772,7 +849,10 @@ def main() -> None:
         from jarvis import terminal
         if args.action == "try":
             v = terminal.classify(args.command)
-            print(f"{v.kind}: {v.reason}" + (f"\nwould run: {' '.join(v.argv)}" if v.argv else ""))
+            how = {"auto": f"runs on its own ({v.sandbox} sandbox)", "approval": "asks you first",
+                   "reject": "refused"}[v.kind]
+            print(f"{v.risk if v.kind != 'reject' else 'refused'}: {how}. {v.reason}"
+                  + (f"\nwould run: {' '.join(v.argv)}" if v.argv else ""))
             return
         for e in terminal.recent_audit(args.n):
             what = e.get("outcome") or (f"exit {e.get('exit')}" if "exit" in e else "waiting for OK")
@@ -792,6 +872,64 @@ def main() -> None:
             print(f"#{s['id']} {jobs.describe_state(s)}\n$ {' '.join(s['argv'])}\nin {s['cwd']}\n\n{s['tail']}")
         else:
             print(f"Stopped #{args.id}" if jobs.kill_job(args.id or 0) else f"Job #{args.id} isn't running")
+        return
+    if args.cmd == "heartbeat":
+        from jarvis import heartbeat
+        now = _now_local()
+        if args.action == "run":
+            from jarvis.canvas import from_memory
+            try:
+                deadlines = _deadlines(mem, now, max_age=FEED_CACHE_SECONDS)
+            except (Exception, SystemExit):
+                deadlines = from_memory(mem)
+            print(heartbeat.run_heartbeat(mem, now, deadlines, force=True))
+            print("(a message, if any, goes out with the next tick)")
+        elif args.action in ("off", "on"):
+            heartbeat.set_paused(mem, args.action == "off")
+            print(f"Heartbeat {'paused' if args.action == 'off' else 'on'}. (HEARTBEAT=0 in .env turns it off for good.)")
+        else:
+            print(heartbeat.status(mem, now))
+            for e in mem.db.execute("SELECT at, content FROM events WHERE kind = 'heartbeat' ORDER BY id DESC LIMIT 10"):
+                print(f"  {e['at'][5:16]} {e['content'][:140]}")
+        return
+    if args.cmd == "build":
+        from jarvis import selfedit
+        if args.action == "status":
+            print(selfedit.status_text())
+            if not selfedit.enabled():
+                print("(self-editing is off: JARVIS_REPO isn't set)")
+            return
+        if not selfedit.enabled():
+            sys.exit("Self-editing is off. To turn it on, set JARVIS_REPO in .env to this project folder.")
+        tg = _messenger()
+        print(selfedit.start(mem, tg) if args.action == "start" else selfedit.stop_build(mem))
+        return
+    if args.cmd == "browser":
+        from jarvis import browser
+        if args.action == "login":
+            if not args.site:
+                sys.exit("Usage: jarvis browser login <site>   (e.g. canvas.seattlecolleges.edu)")
+            print("A browser window is opening. Sign in yourself, then close the window. "
+                  "JARVIS never sees your password; only the session cookie stays in its profile.")
+            print(f"Saved: JARVIS can now open {browser.login(args.site)} as you.")
+        elif args.action == "forget":
+            print("Removed" if args.site and browser.forget_site(args.site) else f"{args.site!r} isn't on the list")
+        elif args.action == "reset":
+            browser.reset()
+            print("Deleted the browser profile and every saved login.")
+        else:
+            print("\n".join(browser.sites()) or "(no sites yet: jarvis browser login <site>)")
+            print(f"\nProfile (local only, never shared): {config.BROWSER_PROFILE}")
+        return
+    if args.cmd == "tasks":
+        from jarvis import tasks
+        if args.action == "show":
+            print(tasks.show(mem, args.id or (tasks.recent(mem, 1)[0]["id"] if tasks.recent(mem, 1) else 0)))
+        elif args.action == "stop":
+            print(tasks.stop(mem, args.id))
+        else:
+            for t in tasks.recent(mem, 15):
+                print(f"#{t['id']:<4} {t['status']:<8} {len(tasks.steps_of(t)):>3} steps  {t['goal'][:90]}")
         return
     if args.cmd == "location":
         from datetime import timedelta
@@ -827,7 +965,8 @@ def main() -> None:
         speech._whisper()  # load the model up front so the first answer isn't slow
         log = lambda s: print(s, flush=True)  # noqa: E731
         warm = _warm(mem)
-        Ears(answer=lambda text, on_text=None: _answer(mem, text, spoken=True, warm=warm, on_text=on_text),
+        Ears(answer=lambda text, on_text=None: _spoken_confirmation(mem, text)
+             or _answer(mem, text, spoken=True, warm=warm, on_text=on_text),
              transcribe=speech.transcribe, log=log,
              timing=lambda ms: mem.log("first_audio", f"time_to_first_audio={ms}ms")).run_forever()
         return
