@@ -56,7 +56,7 @@ def test_jarvis_decides_a_build_step_off_elijahs_side_of_the_line(build):
     m, tg = Memory(":memory:"), FakeTG()
     blocked = {"tool": "Bash", "command": f"touch {build / 'note.txt'}", "cwd": str(build / "src"), "reason": "", "risk": "high"}
     run = runner(agent.Outcome(session_id="s", blocked=blocked), agent.Outcome(session_id="s", text="STATUS: done\nok"))
-    yes = lambda state, qs: {q.key: Answer(True, 0.95) for q in qs}  # noqa: E731
+    yes = lambda state, qs: {q.key: Answer("medium" if q.key == "risk" else True, 0.95) for q in qs}  # noqa: E731
     selfedit.run_agent(m, tg, "x", "build it", runner=run, judge=yes)
     assert (build / "note.txt").exists() and tg.sent == [] and "exit 0" in run.calls[1]["prompt"]
 

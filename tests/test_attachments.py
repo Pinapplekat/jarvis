@@ -112,3 +112,35 @@ def test_chat_can_attach_an_allowed_screenshot(shots):
     respond(Memory(":memory:"), "send me the screenshot", datetime.now(ZoneInfo("UTC")), "", runner=run,
             send_photo=lambda data, caption: sent.append((data, caption)))
     assert sent == [(PNG, "y = 3x")]
+
+
+def test_a_screenshot_request_captures_and_sends_in_one_step(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from jarvis.chat import respond
+
+    def fake_capture(argv, **kw):
+        class R:
+            returncode, stderr = 0, ""
+        if argv[0].endswith("screencapture"):
+            open(argv[-1], "wb").write(PNG)
+        return R()
+    monkeypatch.setattr(attachments, "capture_screen", lambda run=None, real=attachments.capture_screen: real(run=fake_capture))
+    rounds = [{"reply": "Here it is, sir.", "actions": [{"type": "screenshot"}]}, {"reply": "Here it is, sir.", "actions": []}]
+    prompts, sent = [], []
+
+    def run(system, prompt, on_text=None):
+        prompts.append(prompt)
+        return rounds[min(len(prompts), 2) - 1]
+    m = Memory(":memory:")
+    assert respond(m, "send me a screenshot", datetime.now(ZoneInfo("UTC")), "", runner=run,
+                   send_photo=lambda data, caption: sent.append(data)) == "Here it is, sir."
+    assert sent == [PNG] and not m.pending_actions()  # no permission asked
+    assert "taken and sent to him" in prompts[1]
+
+
+def test_a_failed_capture_is_reported_not_hidden():
+    class R:
+        returncode, stderr = 1, "could not create image from display"
+    with pytest.raises(RuntimeError, match="couldn't capture"):
+        attachments.capture_screen(run=lambda argv, **kw: R())

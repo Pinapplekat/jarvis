@@ -14,6 +14,7 @@ pipes, redirects or substitution), output is redacted, and every command is logg
 """
 
 import json
+import re
 import shlex
 import sys
 import threading
@@ -118,7 +119,7 @@ NPM_OK = {"install", "ci", "test", "run"}
 # Critical: system-wide, credentials, disks, or things that reach other people.
 CRITICAL = {"sudo", "su", "doas", "diskutil", "dd", "mkfs", "newfs_apfs", "fdisk", "shutdown", "reboot",
             "halt", "launchctl", "csrutil", "spctl", "security", "tccutil", "nvram", "pmset", "systemsetup",
-            "networksetup", "dscl", "passwd", "osascript", "mail", "sendmail", "chown", "kextload",
+            "networksetup", "dscl", "passwd", "mail", "sendmail", "chown", "kextload",
             "softwareupdate", "scutil"}
 # Flags that make an otherwise read-only command write, run programs, follow forever or reach out.
 # (git's global options like -c or --git-dir can't appear: the subcommand must come first.)
@@ -259,6 +260,11 @@ GIT_YOURS = {"push", "reset", "clean", "rebase", "filter-branch", "gc", "prune",
 REACHES_OUT = {"ssh", "scp", "rsync", "sftp", "ftp", "gh", "twine", "nc", "telnet", "mail", "sendmail"}
 PUBLISH = {("npm", "publish"), ("uv", "publish"), ("brew", "uninstall"), ("brew", "remove"),
            ("defaults", "write"), ("defaults", "delete"), ("crontab", "-r"), ("crontab", "-e")}
+OSASCRIPT_DANGER = re.compile(
+    r"do shell script|keystroke|key code|\bMessages\b|\bMail\b|\bsend\b|delete|\bFinder\b|Terminal|"
+    r"System (?:Settings|Preferences|Events.+(?:shut down|restart|log out|sleep))|administrator|password|"
+    r"empty (?:the )?trash|\bmove\b|duplicate|make new|\bquit\b|run script|open location|URL|keychain|"
+    r"clipboard|the clipboard|set the clipboard", re.I)
 CURL_SENDS = ("-d", "--data", "--data-raw", "--data-binary", "--data-urlencode", "-F", "--form", "-T",
               "--upload-file", "-X", "--request", "--json")
 
@@ -352,6 +358,24 @@ def _grade(command, cwd: Path | None = None, root: Path | None = None) -> Verdic
             return _approval("high", f"pytest flag {bad} isn't allowed automatically", argv)
         return Verdict("auto", "running the tests",
                        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *rest], risk="low")
+
+    if tool == "screencapture":  # his own screen, saved to a temp or screenshot folder: low
+        from jarvis.attachments import SHOTS_DIR
+        targets = [a for a in args if not a.startswith("-")]
+        safe = [Path("/private/tmp"), Path("/private/var/folders"), SHOTS_DIR.resolve(), root]
+        if targets and all(any(_inside(_full(t, where), d) for d in safe) for t in targets) \
+                and not {"-P", "-u", "-B"} & set(args):
+            # Unsandboxed: it needs Screen Recording, and it only writes the image file.
+            return Verdict("auto", "a screenshot to a temp folder", argv, sandboxed=False, risk="low", sandbox="")
+        return _approval("high", "screenshot to an unusual place", argv)
+
+    if tool == "osascript":  # app scripting: a click can be fine; typing, sending, deleting never are
+        script = " ".join(a for a in args if a != "-e")
+        if any(not a.startswith("-") and Path(a).suffix in (".scpt", ".applescript", ".js") for a in args):
+            return _approval("critical", "runs a script file", argv)
+        if OSASCRIPT_DANGER.search(script):
+            return _approval("critical", "this script can type, send, delete or change settings", argv)
+        return _approval("high", "app scripting (JARVIS judges it)", argv)
 
     if tool == "screen" and args[:1] in (["-ls"], ["-list"]) and len(args) <= 2:  # just lists sessions
         return Verdict("auto", "read-only screen listing", argv, risk="low")

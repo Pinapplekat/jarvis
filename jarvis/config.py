@@ -90,7 +90,7 @@ TASK_MAX_MINUTES = int(os.getenv("TASK_MAX_MINUTES", "20"))  # working time (wai
 # JARVIS approving high-risk steps itself when they're off Elijah's side of the line (never anything
 # irreversible, money/credentials, sudo/system changes, or reaching other people). 0 = always ask him.
 SELF_APPROVE = os.getenv("SELF_APPROVE", "1") == "1"
-SELF_APPROVE_CONFIDENCE = float(os.getenv("SELF_APPROVE_CONFIDENCE", "0.8"))
+SELF_APPROVE_CONFIDENCE = float(os.getenv("SELF_APPROVE_CONFIDENCE", "0.6"))  # Jev's confidence in a low/medium grade
 
 # Thinking heartbeat: each tick, a cheap look at deadlines, mail and open loops; texts only when worth it.
 HEARTBEAT = os.getenv("HEARTBEAT", "1") == "1"

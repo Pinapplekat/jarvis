@@ -51,7 +51,7 @@ def test_medium_risk_project_work_runs_automatically_in_the_write_sandbox(projec
     ("tail -f jarvis/chat.py", "high"), ("tail -nf 5 x", "high"), ("grep -rf pats jarvis", "high"),
     ("pytest -p evil_plugin", "high"), ("/bin/ls", "high"), ("curl https://x.test", "high"), ("pip install x", "high"),
     ("touch /usr/local/x", "high"), ("python /etc/x.py", "high"), ("brew install x", "high"),
-    ("sudo ls", "critical"), ("rm -rf ~/Documents", "critical"), ("osascript -e x", "critical"),
+    ("sudo ls", "critical"), ("rm -rf ~/Documents", "critical"), ("osascript -e 'tell application \"Messages\" to send \"hi\"'", "critical"), ("osascript -e x", "high"),
     ("launchctl unload x", "critical"), ("uv run rm -rf build", "high"), ("frobnicate", "high"),
 ])
 def test_high_and_critical_wait_for_elijah_and_unknown_is_high(project, command, risk):
@@ -222,3 +222,22 @@ def test_listing_screen_sessions_is_low_risk_but_driving_one_isnt(project):
 def test_internal_numbers_are_stripped_from_replies(text, expected):
     from jarvis.chat import strip_internal_ids
     assert strip_internal_ids(text) == expected
+
+
+
+@pytest.mark.parametrize("script,risk,yours", [
+    ('tell application "System Events" to click at {860, 674}', "high", ""),  # Jev's call
+    ('tell application "System Events" to keystroke "hello"', "critical", "critical"),
+    ('do shell script "rm -rf ~"', "critical", "critical"),
+    ('tell application "Mail" to send theMessage', "critical", "critical"),
+    ('tell application "Finder" to delete file "x"', "critical", "critical"),
+])
+def test_app_scripting_clicks_are_judged_but_typing_sending_deleting_are_his(project, script, risk, yours):
+    v = classify(["osascript", "-e", script])
+    assert (v.kind, v.risk, v.yours) == ("approval", risk, yours)
+
+
+def test_a_screenshot_to_a_temp_folder_is_low_risk_and_unsandboxed(project):
+    v = classify("screencapture -x /private/tmp/desk.png")
+    assert (v.kind, v.risk, v.sandboxed) == ("auto", "low", False)
+    assert classify("screencapture -x ~/Documents/x.png").kind == "approval"

@@ -278,7 +278,10 @@ class Worker:
             return
         _save(mem, task_id, status=status, summary=summary[:2000], waiting_on=None, resume_note=None)
         mem.log("task", f"#{task_id} {status} after {len(steps_of(t))} steps")
-        reports.add(mem, "task", task_id, "done" if status == "done" else "failed", t["goal"][:80], summary,
+        on_own = [s["update"].removeprefix("Approved myself: ") for s in steps_of(t)
+                  if s["update"].startswith("Approved myself: ")]
+        told = summary + (f" (Ran on my own along the way: {'; '.join(on_own[:5])}.)" if on_own else "")
+        reports.add(mem, "task", task_id, "done" if status == "done" else "failed", t["goal"][:80], told,
                     attachments=attachments)
 
 

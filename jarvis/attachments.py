@@ -75,11 +75,28 @@ def send_image(tg, path: str | Path, caption: str = "", mem: Memory | None = Non
     return full
 
 
+def capture_screen(run=None) -> Path:
+    """A screenshot of his whole screen, saved to the screenshot folder. Only when he asks; sent
+    only to his own chat. Raises RuntimeError if macOS won't capture (no Screen Recording)."""
+    import subprocess
+    SHOTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = SHOTS_DIR / f"screen-{datetime.now():%Y%m%d-%H%M%S}.png"
+    r = (run or subprocess.run)(["/usr/sbin/screencapture", "-x", "-t", "png", str(path)],
+                                capture_output=True, text=True, timeout=20)
+    if r.returncode != 0 or not path.exists() or path.stat().st_size == 0:
+        raise RuntimeError(f"couldn't capture the screen ({(r.stderr or '').strip()[:120] or 'no image'})")
+    if path.stat().st_size > MAX_BYTES:  # a big Retina screen: shrink it to fit Telegram
+        (run or subprocess.run)(["/usr/bin/sips", "-Z", "2400", str(path)], capture_output=True, timeout=20)
+    for old in sorted(SHOTS_DIR.glob("*.png"), key=lambda f: f.stat().st_mtime)[:-50]:
+        old.unlink(missing_ok=True)
+    return path
+
+
 def save_shot(png: bytes, name: str = "page") -> Path:
     """Keep a screenshot (from the browser) where it can be attached later."""
     SHOTS_DIR.mkdir(parents=True, exist_ok=True)
     path = SHOTS_DIR / f"{name}-{datetime.now():%Y%m%d-%H%M%S}.png"
     path.write_bytes(png)
-    for old in sorted(SHOTS_DIR.glob("*.png"))[:-50]:  # keep the newest 50
+    for old in sorted(SHOTS_DIR.glob("*.png"), key=lambda f: f.stat().st_mtime)[:-50]:  # keep the newest 50
         old.unlink(missing_ok=True)
     return path

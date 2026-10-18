@@ -58,9 +58,13 @@ def done(summary="Done, sir."):
     return {"text": f"Fixed it.\nSTATUS: done\n{summary}"}
 
 
-def judge_says(met=True):
+def judge_says(met=True, tier=None):
+    """A Jev stand-in: yes/no questions get `met`; a risk grade gets `tier` (low when met, else high)."""
     def decide(state, questions):
-        return {q.key: Answer(met, 0.9) for q in questions}
+        out = {q.key: Answer(met, 0.9) for q in questions}
+        if "risk" in out:
+            out["risk"] = Answer(tier or ("low" if met else "high"), 0.9)
+        return out
     return decide
 
 
@@ -300,7 +304,7 @@ def test_review_treats_a_judge_error_as_ask_him(project, tmp_path):
     def broken(state, questions):
         raise RuntimeError("Jev down")
     ok, why = agent.review(broken, "goal", blocked_step(tmp_path, "brew install jq"), tmp_path / "site")
-    assert not ok and "couldn't judge" in why
+    assert not ok and "couldn't grade" in why
 
 
 def test_chat_sees_where_an_active_task_is(project, tmp_path):
@@ -339,3 +343,25 @@ def test_images_the_session_attaches_ride_along_with_the_report(project, tmp_pat
 def test_attach_lines_are_read_from_the_stream():
     out = agent.Outcome(text="Done.\nATTACH: /x/a.png\nSTATUS: done\nAll set, sir.")
     assert out.summary == "All set, sir." and agent.attach_lines(out.text) == ["/x/a.png"]
+
+
+def test_jev_grade_decides_off_the_line_and_failure_means_ask(project, tmp_path):
+    step = blocked_step(tmp_path, f"touch {tmp_path / 'x'}")
+    assert agent.review(judge_says(True, tier="medium"), "goal", step, tmp_path / "site")[0] is True
+    assert agent.review(judge_says(True, tier="high"), "goal", step, tmp_path / "site") == (False, "graded high risk")
+    junk = lambda state, qs: {q.key: Answer("maybe", 0.9) for q in qs}  # noqa: E731
+    assert agent.review(junk, "goal", step, tmp_path / "site") == (False, "couldn't grade it")
+
+
+def test_low_risk_but_not_what_he_asked_for_still_asks(project, tmp_path):
+    def sneaky(state, questions):
+        return {"risk": Answer("low", 0.95), "serves_goal": Answer(False, 0.9)}
+    ok, why = agent.review(sneaky, "fix the tests", blocked_step(tmp_path, f"touch {tmp_path / 'y'}"), tmp_path / "site")
+    assert not ok and "not clearly something you asked for" in why
+
+
+def test_the_final_report_says_what_jarvis_ran_on_its_own(project, tmp_path):
+    m, tg = Memory(":memory:"), FakeTelegram()
+    run = session(([], [], {"blocked": blocked_step(tmp_path, f"touch {tmp_path / 'z'}")}), ([], [], done("Done, sir.")))
+    run_task(m, tasks.Worker(tg, runner=run, judge=judge_says(True), log=lambda s: None), folder=str(tmp_path / "site"))
+    assert "Ran on my own along the way: touch" in reports.recent(m)[0]["text"]

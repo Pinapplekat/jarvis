@@ -252,7 +252,7 @@ def test_jarvis_approves_its_own_chat_command_off_his_side_of_the_line(own_proje
     target = tmp_path / "made-by-jarvis"
     run = scripted({"reply": "on it", "actions": [{"type": "run_command", "command": f"mkdir {target}", "why": "he asked"}]},
                    {"reply": "Made it, sir.", "actions": [{"type": "run_command", "command": f"mkdir {target}"}]})
-    yes = lambda state, qs: {q.key: Answer(True, 0.95) for q in qs}  # noqa: E731
+    yes = lambda state, qs: {q.key: Answer("low" if q.key == "risk" else True, 0.95) for q in qs}  # noqa: E731
     assert respond(m, f"make a folder at {target}", NOW, "", runner=run, judge=yes) == "Made it, sir."
     assert target.is_dir() and not m.pending_actions(kind="run_command")
     assert "you approved it yourself" in run.prompts[1]
@@ -262,7 +262,7 @@ def test_his_side_of_the_line_still_waits_for_him_in_chat(own_project):
     from jarvis.judge import Answer
     m = Memory(":memory:")
     run = scripted({"reply": "It's waiting for your OK, sir.", "actions": [{"type": "run_command", "command": "git push"}]})
-    yes = lambda state, qs: {q.key: Answer(True, 0.99) for q in qs}  # noqa: E731
+    yes = lambda state, qs: {q.key: Answer("low" if q.key == "risk" else True, 0.99) for q in qs}  # noqa: E731
     respond(m, "push it", NOW, "", runner=run, judge=yes)
     assert len(m.pending_actions(kind="run_command")) == 1
 
@@ -271,3 +271,9 @@ def test_internal_numbers_never_reach_him(own_project):
     m = Memory(":memory:")
     run = scripted({"reply": "Plan #16 is approved, sir.", "actions": []})
     assert respond(m, "status?", NOW, "", runner=run) == "The plan is approved, sir."
+
+
+def test_spelled_out_internal_numbers_are_stripped_too():
+    from jarvis.chat import strip_internal_ids
+    assert strip_internal_ids("Plan seventeen is approved, sir.") == "The plan is approved, sir."
+    assert strip_internal_ids("I plan one thing tonight.") == "I plan one thing tonight."
