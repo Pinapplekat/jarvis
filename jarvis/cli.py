@@ -249,6 +249,17 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
     return reply
 
 
+def _send_rest(tg, reply: str, first: str | None = None) -> None:
+    """Deliver a chat reply as new messages, never editing one already sent: after an early
+    first sentence, just the rest (nothing if that was all); the whole reply if it changed
+    since (a failure or a rethink); anything over Telegram's limit in several messages."""
+    from jarvis.chat import remainder
+    from jarvis.telegram import split_text
+    rest = remainder(reply, first)
+    for piece in split_text(reply if rest is None else rest):
+        tg.send(piece)
+
+
 def _task_worker(mem: Memory, tg):
     """Task mode: a sandboxed Claude Code session per task; Jev (or Haiku) double-checks a 'done'."""
     from jarvis import judge
@@ -330,27 +341,26 @@ def _listen(mem: Memory) -> None:
         tg.typing()
         sent = {}
 
-        def first_out(sentence):  # typed chat: send the first sentence now, fill in the rest after
+        def first_out(sentence):  # typed chat: send the first sentence now, the rest as its own message
             if not update.via_voice:
                 sent["id"], sent["text"] = tg.send(sentence), sentence
 
         reply = _answer(mem, update.text, on_progress=tg.typing, spoken=update.via_voice, warm=warm,
                         on_first=first_out, send_photo=tg.send_photo)
         if sent:  # buttons and plans below must still go out, so no early return
-            if reply.strip() != sent["text"]:
-                tg.edit(sent["id"], reply)
+            _send_rest(tg, reply, sent["text"])
         elif update.via_voice:  # answer a voice note with a voice note (walks, AirPods)
             from jarvis.speech import voice_note
             tg.action("record_voice")
             try:
                 tg.send_voice(voice_note(reply), caption=reply if len(reply) <= 1000 else "")
                 if len(reply) > 1000:
-                    tg.send(reply)
+                    _send_rest(tg, reply)
             except Exception as e:  # never lose the answer over audio trouble
                 mem.log("voice_note_failed", str(e)[:200])
-                tg.send(reply)
+                _send_rest(tg, reply)
         else:
-            tg.send(reply)
+            _send_rest(tg, reply)
         notify_pending(mem, tg, say=_say_if_present)  # drafts and risky commands: the question, right away
         tasks.start_queued(mem, worker)  # a task started in this chat begins at once
         if mem.self_edits("drafting"):

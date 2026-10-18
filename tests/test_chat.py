@@ -157,6 +157,65 @@ def test_first_sentence_and_remainder():
     assert remainder("anything", None) is None
 
 
+def test_split_first_sentence_waits_for_a_real_end():
+    from jarvis.chat import split_first_sentence
+    assert split_first_sentence("Two things, sir. Econ Sunday.") == ("Two things, sir.", "Econ Sunday.")
+    assert split_first_sentence("Two things, sir.") is None  # might still be "sir.5" or more
+    assert split_first_sentence("Dr. Grant moved it to Friday. Sorry.") == ("Dr. Grant moved it to Friday.", "Sorry.")
+    assert split_first_sentence("Bring snacks, e.g. chips and dip. Ok?") == ("Bring snacks, e.g. chips and dip.", "Ok?")
+    assert split_first_sentence("It's 3.5 hours from J. Smith's place! Go.") == ("It's 3.5 hours from J. Smith's place!", "Go.")
+    assert split_first_sentence("It's on agenda.test/week3.html now. Then") == ("It's on agenda.test/week3.html now.", "Then")
+    assert split_first_sentence("Is it due?\nYes, Sunday.") == ("Is it due?", "Yes, Sunday.")
+    assert split_first_sentence("") is None
+    assert split_first_sentence("Ok. Sure thing.\n") == ("Ok. Sure thing.", "")  # too short to send alone
+
+
+def test_first_sentence_gets_the_same_backstops_as_the_reply():
+    from jarvis.chat import FirstSentence, remainder, tidy
+    got = []
+    FirstSentence(got.append).feed("Plan #16 is approved, sir. Building")
+    assert got == ["The plan is approved, sir."]
+    assert remainder(tidy("Plan #16 is approved, sir. Building now."), got[0]) == "Building now."
+
+
+class FakeTelegram:
+    def __init__(self):
+        self.sent, self.edits = [], []
+
+    def send(self, text, buttons=None):
+        self.sent.append(text)
+        return len(self.sent)
+
+    def edit(self, message_id, text):
+        self.edits.append((message_id, text))
+
+
+def test_reply_goes_out_as_new_messages_never_edits():
+    from jarvis.cli import _send_rest
+    tg = FakeTelegram()
+    _send_rest(tg, "Two things, sir. Econ on Sunday.", "Two things, sir.")
+    assert tg.sent == ["Econ on Sunday."] and tg.edits == []
+    tg = FakeTelegram()
+    _send_rest(tg, "Done, sir.", "Done, sir.")  # one sentence: the early one was all of it
+    assert tg.sent == [] and tg.edits == []
+    tg = FakeTelegram()
+    _send_rest(tg, "Sorry, I couldn't think just now (boom).", "Checking now, sir.")  # failed mid-stream
+    assert tg.sent == ["Sorry, I couldn't think just now (boom)."] and tg.edits == []
+    tg = FakeTelegram()
+    _send_rest(tg, "First one here. " + "word " * 1500, "First one here.")  # past Telegram's limit
+    assert len(tg.sent) == 2 and all(len(s) <= 4000 for s in tg.sent) and tg.edits == []
+    tg = FakeTelegram()
+    _send_rest(tg, "No early sentence went out.")
+    assert tg.sent == ["No early sentence went out."]
+
+
+def test_split_text_keeps_words_whole():
+    from jarvis.telegram import split_text
+    assert split_text("short") == ["short"] and split_text("  ") == []
+    pieces = split_text("abc " * 30, limit=50)
+    assert all(len(p) <= 50 for p in pieces) and " ".join(pieces).split() == ["abc"] * 30
+
+
 def test_streaming_only_on_first_round():
     m, seen = Memory(":memory:"), []
 

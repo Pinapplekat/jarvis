@@ -25,6 +25,20 @@ class Update:
     location: dict | None = None       # a shared location or live-location update (jarvis.location point)
 
 
+def split_text(text: str, limit: int = MAX_TEXT) -> list[str]:
+    """Text cut into Telegram-sized messages, at a line break or space where possible."""
+    pieces, text = [], text.strip()
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut < limit // 2:
+            cut = text.rfind(" ", 0, limit)
+        if cut < limit // 2:
+            cut = limit
+        pieces.append(text[:cut].rstrip())
+        text = text[cut:].strip()
+    return pieces + [text] if text else pieces
+
+
 class TelegramError(RuntimeError):
     pass
 

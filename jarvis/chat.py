@@ -498,17 +498,44 @@ def strip_internal_ids(text: str) -> str:
     return INTERNAL_ID.sub(fix, text)
 
 
+SENTENCE_END = re.compile(r"[.!?]+['\")\]]*(?=\s)")
+ABBREVIATIONS = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "e.g", "i.e", "a.m", "p.m",
+                 "no", "approx", "dept", "est", "fig", "inc", "ltd", "co", "mt", "ave", "u.s"}
+
+
+def split_first_sentence(text: str) -> tuple[str, str] | None:
+    """(first sentence, the rest) once the first sentence is clearly over: its . ! or ? is
+    followed by a space or newline. Abbreviations ("Dr.", "e.g."), initials, decimals ("3.5")
+    and links ("site.com/a.b") don't count as ends. None if no sentence has ended yet."""
+    for m in SENTENCE_END.finditer(text):
+        first = text[:m.end()].strip()
+        if len(first) < 8:
+            continue
+        if m[0].startswith(".") and not m[0].startswith(".."):
+            before = text[:m.start()].split()
+            word = before[-1].lstrip("(\"'").lower() if before else ""
+            if word in ABBREVIATIONS or (len(word) == 1 and word.isalpha()):
+                continue
+        return first, text[m.end():].strip()
+    return None
+
+
+def tidy(text: str) -> str:
+    """The backstops every piece of a reply gets before Elijah sees it."""
+    from jarvis.location import strip_coordinates
+    return strip_internal_ids(strip_coordinates(text))  # context never has coordinates; ids are for actions only
+
+
 class FirstSentence:
     """Feed it the streaming reply text; it calls on_first once, as soon as the first full
     sentence is available (so JARVIS can start speaking or sending while it writes the rest)."""
-    END = re.compile(r"^(.{8,}?[.!?])(?=\s)", re.S)
 
     def __init__(self, on_first: Callable[[str], None]):
         self.on_first, self.sentence, self.at = on_first, None, None
 
     def feed(self, text_so_far: str) -> None:
-        if self.sentence is None and (m := self.END.match(text_so_far)):
-            self.sentence, self.at = m[1].strip(), time.time()
+        if self.sentence is None and (split := split_first_sentence(text_so_far)):
+            self.sentence, self.at = tidy(split[0]), time.time()
             self.on_first(self.sentence)
 
 
@@ -699,7 +726,6 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             reply += "\n\n(couldn't do: " + "; ".join(problems) + ")"
         for p in pages:
             mem.log("web_open", f"{p.url}: {p.error or p.title or 'ok'}")
-    from jarvis.location import strip_coordinates
-    reply = strip_internal_ids(strip_coordinates(reply))  # context never has coordinates; ids are for actions only
+    reply = tidy(reply)
     mem.add_chat("assistant", reply)
     return reply
