@@ -11,6 +11,7 @@ import subprocess
 import uuid
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from pathlib import Path
 
 from jarvis import config
 
@@ -118,6 +119,28 @@ def capture_text(window: Window) -> str:
         return redact(ocr(str(path)))[: config.WATCH_MAX_CHARS]
     finally:
         path.unlink(missing_ok=True)
+
+
+VISION_MAX_EDGE = 1568  # Claude scales larger images down anyway; smaller is faster and lighter
+
+
+def capture_for_vision(run=None) -> Path:
+    """His whole screen, downsized, in a temp file for JARVIS to look at itself. Nothing is sent or
+    spoken; the caller deletes the file as soon as it's been looked at. RuntimeError if macOS won't
+    capture (no Screen Recording permission)."""
+    tmp_dir = config.DATA_DIR / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    path = tmp_dir / f"vision-{uuid.uuid4().hex}.jpg"
+    run = run or subprocess.run
+    try:
+        r = run(["/usr/sbin/screencapture", "-x", "-t", "jpg", str(path)], capture_output=True, text=True, timeout=20)
+        if r.returncode != 0 or not path.exists() or path.stat().st_size == 0:
+            raise RuntimeError(f"couldn't capture the screen ({(r.stderr or '').strip()[:120] or 'no image'})")
+        run(["/usr/bin/sips", "-Z", str(VISION_MAX_EDGE), str(path)], capture_output=True, timeout=20)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return path
 
 
 def meaningfully_changed(old: str | None, new: str, threshold: float = 0.85) -> bool:

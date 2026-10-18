@@ -162,6 +162,46 @@ def test_speak_queue_survives_a_failed_render():
     assert q.wait(5) and [e[1] for e in log] == ["Good."]
 
 
+def test_desk_mic_can_ask_whats_on_screen_and_hears_text_only(tmp_path, monkeypatch):
+    """No send_photo at the desk mic: the look still works, and no picture is taken for Telegram."""
+    from jarvis import attachments, screen
+    from jarvis.chat import respond
+    shot = tmp_path / "vision.jpg"
+    monkeypatch.setattr(screen, "capture_for_vision", lambda run=None: shot.write_bytes(b"JPEG") and shot)
+    monkeypatch.setattr(attachments, "capture_screen", lambda run=None: pytest.fail("no picture for Telegram"))
+    prompts, looks, streamed = [], [], []
+
+    def run(system, prompt, on_text=None):
+        prompts.append(prompt)
+        if on_text:
+            on_text("Having a look, sir.")
+        return {"reply": "Having a look, sir.", "actions": [{"type": "look_at_screen"}]}
+
+    def vision(system, prompt, image):
+        looks.append(prompt)
+        return "Your econ essay, sir; two paragraphs in."
+    m = Memory(":memory:")
+    reply = respond(m, "(said out loud, transcribed) what's on my screen", NOON, "", runner=run,
+                    on_text=streamed.append, vision=vision)
+    assert reply == "Your econ essay, sir; two paragraphs in."  # what the desk speaks: just text
+    assert "(said out loud" in looks[0] and not shot.exists() and len(prompts) == 1
+
+
+def test_screenshot_asked_for_by_voice_takes_no_picture(monkeypatch):
+    from jarvis import attachments
+    from jarvis.chat import respond
+    monkeypatch.setattr(attachments, "capture_screen", lambda run=None: pytest.fail("can't be sent from here"))
+    rounds = [{"reply": "One moment.", "actions": [{"type": "screenshot"}]},
+              {"reply": "I can't send pictures from the desk, sir; ask me what's on it instead.", "actions": []}]
+    prompts = []
+
+    def run(system, prompt, on_text=None):
+        prompts.append(prompt)
+        return rounds[min(len(prompts), 2) - 1]
+    reply = respond(Memory(":memory:"), "(said out loud, transcribed) send me a screenshot", NOON, "", runner=run)
+    assert "use look_at_screen" in prompts[1] and "couldn't do" not in reply
+
+
 def test_latency_summary_includes_first_audio():
     from jarvis.cli import latency_summary
     out = latency_summary(["time_to_first_audio=900ms", "time_to_first_audio=1500ms",

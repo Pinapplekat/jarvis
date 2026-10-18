@@ -223,6 +223,8 @@ JARVIS can send images from the Mac to your Telegram: a screenshot a helper took
 
 **Your screen, on request:** "send me a screenshot" captures your whole screen and sends it in the same step: no permission prompt, no second request. It's only taken when you ask, kept in the screenshot folder (newest 50), and goes only to your chat.
 
+**Looking at your screen, privately:** "what's on my screen?" or "what does this error say?" makes JARVIS capture the screen and look at the picture itself (a second, tool-less Claude call with the image attached as input, `JARVIS_HEAVY_MODEL`), then answer in text. Nothing is sent to Telegram or shown, and the picture is deleted right after. It works from the desk mic and phone calls too, where pictures can't be sent. Screen text is treated as untrusted data and the look can only answer, never act. Needs Screen Recording permission for the background job's Python; it's slower than a normal reply and uses more of your Claude limits.
+
 - **Only images** (png, jpg, gif, webp), up to 10 MB, sent as a photo (or as a file if Telegram refuses the photo).
 - **Only from allowed folders:** JARVIS's screenshot folder (`~/Library/Application Support/JARVIS/shots`, where browser screenshots are kept, newest 50), its task folders, and the folders of tasks you started in the last week, plus any you add with `ATTACH_DIRS=/path/one,/path/two`. Paths are fully resolved first, so `..` and symlinks can't escape, and private locations (keys, keychains, the browser profile) are refused even inside an allowed folder. Text in pages, emails or files can't add folders.
 - **Only to your chat.** `jarvis send-image <path> --caption "..."` sends one by hand with the same checks.

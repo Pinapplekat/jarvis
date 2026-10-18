@@ -99,9 +99,10 @@ class Session:
     def alive(self) -> bool:
         return self.proc.poll() is None
 
-    def ask(self, text: str, timeout: float = REPLY_TIMEOUT, on_text: Callable[[str], None] | None = None) -> dict:
-        """Send one message; return the structured reply. `on_text` gets the "reply" text so
-        far as it streams (needs --include-partial-messages); actions only come at the end."""
+    def ask(self, text: str | list, timeout: float = REPLY_TIMEOUT, on_text: Callable[[str], None] | None = None) -> dict:
+        """Send one message; return the structured reply. `text` may also be a list of content
+        blocks (an image plus text). `on_text` gets the "reply" text so far as it streams (needs
+        --include-partial-messages); actions only come at the end."""
         if not self.alive():
             raise SessionDied("session process has exited")
         try:
