@@ -353,6 +353,9 @@ def _grade(command, cwd: Path | None = None, root: Path | None = None) -> Verdic
         return Verdict("auto", "running the tests",
                        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *rest], risk="low")
 
+    if tool == "screen" and args[:1] in (["-ls"], ["-list"]) and len(args) <= 2:  # just lists sessions
+        return Verdict("auto", "read-only screen listing", argv, risk="low")
+
     if tool in LOOKUPS:
         if (bad := _blocked_flag(tool, args)):
             return _approval("high", f"{tool} {bad} isn't allowed automatically", argv)

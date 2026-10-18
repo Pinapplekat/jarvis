@@ -244,3 +244,30 @@ def test_shell_syntax_and_disabled_commands_are_reported(own_project, monkeypatc
     run = scripted({"reply": "ok", "actions": [{"type": "run_command", "command": "rm x"}]})
     assert "turned off" in respond(m, "rm x", NOW, "", runner=run)
     assert m.pending_actions(kind="run_command") == []
+
+
+def test_jarvis_approves_its_own_chat_command_off_his_side_of_the_line(own_project, tmp_path):
+    from jarvis.judge import Answer
+    m = Memory(":memory:")
+    target = tmp_path / "made-by-jarvis"
+    run = scripted({"reply": "on it", "actions": [{"type": "run_command", "command": f"mkdir {target}", "why": "he asked"}]},
+                   {"reply": "Made it, sir.", "actions": [{"type": "run_command", "command": f"mkdir {target}"}]})
+    yes = lambda state, qs: {q.key: Answer(True, 0.95) for q in qs}  # noqa: E731
+    assert respond(m, f"make a folder at {target}", NOW, "", runner=run, judge=yes) == "Made it, sir."
+    assert target.is_dir() and not m.pending_actions(kind="run_command")
+    assert "you approved it yourself" in run.prompts[1]
+
+
+def test_his_side_of_the_line_still_waits_for_him_in_chat(own_project):
+    from jarvis.judge import Answer
+    m = Memory(":memory:")
+    run = scripted({"reply": "It's waiting for your OK, sir.", "actions": [{"type": "run_command", "command": "git push"}]})
+    yes = lambda state, qs: {q.key: Answer(True, 0.99) for q in qs}  # noqa: E731
+    respond(m, "push it", NOW, "", runner=run, judge=yes)
+    assert len(m.pending_actions(kind="run_command")) == 1
+
+
+def test_internal_numbers_never_reach_him(own_project):
+    m = Memory(":memory:")
+    run = scripted({"reply": "Plan #16 is approved, sir.", "actions": []})
+    assert respond(m, "status?", NOW, "", runner=run) == "The plan is approved, sir."

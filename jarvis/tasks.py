@@ -167,6 +167,7 @@ class Worker:
     def _loop(self, mem: Memory, task_id: int) -> None:
         from jarvis import agent
         checked = False
+        attached: list[str] = []  # images the session wants him to see, sent with the final report
         while True:
             t = get(mem, task_id)
             if not t or t["status"] != "running":
@@ -196,6 +197,7 @@ class Worker:
                               on_tell=on_tell, edits=editable(root),
                               should_stop=lambda: (get(mem, task_id) or {"status": "gone"})["status"] != "running",
                               hang_seconds=self.hang_seconds, log_to=state_dir(task_id) / "session.jsonl")
+            attached += [p for p in out.attachments if p not in attached]
             if steps and steps[-1].get("ok") is None and not out.blocked:
                 steps[-1]["ok"] = not out.is_error
             _save(mem, task_id, steps=steps, session_id=out.session_id or t["session_id"], runs=t["runs"] + 1,
@@ -214,9 +216,9 @@ class Worker:
                     _save(mem, task_id, resume_note=f"A checker isn't convinced the goal is met ({doubt}). Verify "
                                                     "it properly, then finish again.")
                     continue
-                return self._end(mem, task_id, "done", out.summary or "Done, sir.")
+                return self._end(mem, task_id, "done", out.summary or "Done, sir.", attached)
             if out.status == "stuck":
-                return self._end(mem, task_id, "failed", out.summary or "I couldn't finish that, sir.")
+                return self._end(mem, task_id, "failed", out.summary or "I couldn't finish that, sir.", attached)
             if out.is_error and not out.session_id:
                 return self._end(mem, task_id, "failed",
                                  f"I couldn't start working on that, sir ({out.text.strip()[:200] or 'Claude Code failed'}).")
@@ -270,13 +272,14 @@ class Worker:
         tried = "; ".join(s["update"] for s in steps_of(t)[-4:]) or "nothing yet"
         return f"I stopped that task, sir: {why}. Last things I tried: {tried}."
 
-    def _end(self, mem: Memory, task_id: int, status: str, summary: str) -> None:
+    def _end(self, mem: Memory, task_id: int, status: str, summary: str, attachments: list[str] = ()) -> None:
         t = get(mem, task_id)
         if not t or t["status"] in ("done", "failed", "stopped"):
             return
         _save(mem, task_id, status=status, summary=summary[:2000], waiting_on=None, resume_note=None)
         mem.log("task", f"#{task_id} {status} after {len(steps_of(t))} steps")
-        reports.add(mem, "task", task_id, "done" if status == "done" else "failed", t["goal"][:80], summary)
+        reports.add(mem, "task", task_id, "done" if status == "done" else "failed", t["goal"][:80], summary,
+                    attachments=attachments)
 
 
 def progress_text(t) -> str:

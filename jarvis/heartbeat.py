@@ -235,6 +235,8 @@ def run_heartbeat(mem: Memory, now: datetime, deadlines: list = (), quiet: bool 
         return "held back (runaway guard)"
     state.update(hash=digest, msgs=state["msgs"] + 1, last_msg=stamp)
     _save(mem, state)
+    from jarvis.chat import strip_internal_ids
+    message = strip_internal_ids(message)
     mem.raise_alert("urgent" if urgency == "urgent" else "high", message[:600], dedupe_key=f"heartbeat:{digest}")
     mem.add_chat("assistant", message[:600])  # so chat (and the next look) knows it was said
     mem.log("heartbeat", f"sent ({urgency}): {message[:200]}" + (f" [{why}]" if why else ""))

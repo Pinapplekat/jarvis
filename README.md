@@ -49,7 +49,7 @@ Anything risky (an email to someone else, a high-risk command) arrives in Telegr
 - **Answer in words:** a clear "yes" (also "yep, go ahead", "do it", "send it", or a voice note saying so; at the desk mic or on a call too) does what the button does; a clear "no" cancels. Something that starts like an answer but isn't clear ("yes but make it shorter") cancels that item, says so, and goes to chat. A bare "yes" means the one thing waiting; with several waiting, JARVIS names them and asks you to tap the one you mean. "ok" with nothing waiting is just conversation.
 - **Safeguards:** only your chat is obeyed; a reply only counts for questions sent before it; command requests lapse after `COMMAND_APPROVAL_MINUTES` (30); text in pages, emails or files can never answer for you.
 - **Email:** mail only to your own address (`MAIL_ACCOUNT`) goes out on its own (low risk). Anything to anyone else needs your yes, and the yes covers that exact draft: if the recipients, subject or body change afterwards, it isn't sent.
-- **No internal numbers:** messages refer to things by what they are ("the email to your professor"), never "command #70". The CLI still shows ids.
+- **No internal numbers:** messages refer to things by what they are ("the email to your professor"), never "command #70"; if the model slips, "Plan #16" is rewritten to "the plan" before it reaches you. The CLI still shows ids.
 
 Setup:
 1. In Telegram, message **@BotFather** → `/newbot` → pick a name and a username ending in `bot`. It replies with a token.
@@ -183,7 +183,9 @@ Commands that take longer than two minutes or keep running (long builds, install
 
 You tell JARVIS what you want; JARVIS hands the work to helpers (tasks, background jobs, self-edit builds) and keeps an eye on them. **The helpers report to JARVIS, never to you.** JARVIS tells you when something is done or failed, or when a helper has something you'd want to hear, in its own words, with whatever else came in at the same time bundled into one message (and said out loud if you're at the Mac). Progress is kept, not sent: ask "how's the site thing going?" or "what did you do today?" any time and JARVIS answers like someone who's been watching; "show me the steps" gets the full list.
 
-**Who approves what.** When a helper hits a high-risk step, JARVIS decides first. It approves the step itself only if it's off your side of the line, clearly serves what you asked for, and it's sure (Jev or Haiku must say yes with at least `SELF_APPROVE_CONFIDENCE`, 0.8, confidence; any doubt or error means asking you). **Your side of the line, which JARVIS never approves:** anything critical (sudo, system settings, disks, credentials, `security`, `osascript`), anything irreversible (deleting or overwriting files, `git push`/`reset`/`clean`/`rebase`, uninstalling), and anything that reaches other people or sends your data out (email, `ssh`/`scp`/`gh`, publishing, `curl` with data). Those come to you as "is that what you meant?". Every step JARVIS approves itself is logged (`jarvis cmd log` shows `jarvis` as the approver) and listed in the task's steps. `SELF_APPROVE=0` makes JARVIS ask you about everything high-risk again. Commands JARVIS proposes in chat still ask you as before.
+**Who approves what.** When a helper hits a high-risk step, JARVIS decides first. It approves the step itself only if it's off your side of the line, clearly serves what you asked for, and it's sure (Jev or Haiku must say yes with at least `SELF_APPROVE_CONFIDENCE`, 0.8, confidence; any doubt or error means asking you). **Your side of the line, which JARVIS never approves:** anything critical (sudo, system settings, disks, credentials, `security`, `osascript`), anything irreversible (deleting or overwriting files, `git push`/`reset`/`clean`/`rebase`, uninstalling), and anything that reaches other people or sends your data out (email, `ssh`/`scp`/`gh`, publishing, `curl` with data). Those come to you as "is that what you meant?". Every step JARVIS approves itself is logged (`jarvis cmd log` shows `jarvis` as the approver) and listed in the task's steps. `SELF_APPROVE=0` makes JARVIS ask you about everything high-risk again. The same line applies to commands JARVIS proposes in chat: off your side and clearly what you asked for, it runs them itself and tells you the result; your side waits for your yes.
+
+**Seeing its helpers.** JARVIS always knows the state of its own helpers, and it can also see every Claude Code session on this Mac (one in a screen window like `jarvis-build`, one in the desktop app) from the live transcript Claude Code writes under `~/.claude/projects`: what each was asked, its last steps and words, and whether it's working or has gone quiet. Ask "is Claude still working?" or "what's the build doing?" and it answers from that; it never tries screen dumps. It also knows when self-editing is off, so it won't claim an approved plan is building. `jarvis helpers` shows what it sees; `jarvis helpers <title words>` shows one session in detail. Read-only, redacted, treated as data.
 
 ### Task mode (working like Claude Code)
 
@@ -212,6 +214,15 @@ To turn it on yourself (from this folder):
 4. `uv run jarvis schedule install`
 
 To turn it off: remove `JARVIS_REPO` from `.env` and run `uv run jarvis schedule install`.
+
+## Pictures to your phone
+
+JARVIS can send images from the Mac to your Telegram: a screenshot a helper took, a chart it made, a page it browsed. A task attaches one by writing `ATTACH: /path/to/image.png` and JARVIS sends it with its report; in chat, ask to see it ("send me the screenshot") and JARVIS attaches it.
+
+- **Only images** (png, jpg, gif, webp), up to 10 MB, sent as a photo (or as a file if Telegram refuses the photo).
+- **Only from allowed folders:** JARVIS's screenshot folder (`~/Library/Application Support/JARVIS/shots`, where browser screenshots are kept, newest 50), its task folders, and the folders of tasks you started in the last week, plus any you add with `ATTACH_DIRS=/path/one,/path/two`. Paths are fully resolved first, so `..` and symlinks can't escape, and private locations (keys, keychains, the browser profile) are refused even inside an allowed folder. Text in pages, emails or files can't add folders.
+- **Only to your chat.** `jarvis send-image <path> --caption "..."` sends one by hand with the same checks.
+- Screen captures from JARVIS's senses aren't kept (they're deleted as soon as the text is read), so they can't be sent.
 
 ## JARVIS's browser (saved logins)
 

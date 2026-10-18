@@ -59,11 +59,11 @@ class TelegramClient:
             }
         return self._call("sendMessage", **payload)["message_id"]
 
-    def send_document(self, filename: str, data: bytes, caption: str = "") -> None:
+    def send_document(self, filename: str, data: bytes, caption: str = "", mime: str = "text/plain") -> None:
         try:
             r = self.http.post(f"{self._base}/sendDocument",
                                data={"chat_id": self.chat_id, "caption": caption[:1000]},
-                               files={"document": (filename, data, "text/plain")})
+                               files={"document": (filename, data, mime)})
         except httpx.HTTPError as e:
             raise TelegramError(f"sendDocument: {type(e).__name__}") from None
         if not r.json().get("ok"):

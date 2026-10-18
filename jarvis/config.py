@@ -104,6 +104,8 @@ HEARTBEAT_MODEL = os.getenv("HEARTBEAT_MODEL", "haiku")
 # JARVIS's own browser profile (logins Elijah made himself). Outside the repo; never sent anywhere.
 BROWSER_PROFILE = DATA_DIR / "browser-profile"
 BROWSER_BLOCKLIST = os.getenv("BROWSER_BLOCKLIST", "")  # extra domains, comma-separated
+# Extra folders JARVIS may send images from (besides its screenshots, task folders); comma-separated.
+ATTACH_DIRS = os.getenv("ATTACH_DIRS", "")
 
 # Self-inspection and terminal commands. PROJECT_DIR is the JARVIS repo (the background jobs
 # run from a copy, which records where it came from); commands stay inside it unless approved.

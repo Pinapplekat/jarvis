@@ -206,3 +206,19 @@ def test_ps_works_even_though_the_sandbox_cant_launch_it(project):
     assert v.kind == "auto" and not v.sandboxed and classify("pgrep -fl python").sandboxed
     result = terminal.run_command(v)
     assert result.code == 0 and "PID" in result.output
+
+
+def test_listing_screen_sessions_is_low_risk_but_driving_one_isnt(project):
+    assert classify("screen -ls").risk == "low" and classify("screen -ls").kind == "auto"
+    v = classify("screen -S 42341.jarvis-build -X hardcopy /tmp/x.txt")
+    assert v.kind == "approval" and v.yours == ""  # JARVIS may decide this one
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("No progress yet, sir. Plan #16 is approved.", "No progress yet, sir. The plan is approved."),
+    ("I stopped your task #3.", "I stopped your task."), ("Command #70 ran fine.", "The command ran fine."),
+    ("It's the #1 priority.", "It's the #1 priority."), ("Module 3 is due.", "Module 3 is due."),
+])
+def test_internal_numbers_are_stripped_from_replies(text, expected):
+    from jarvis.chat import strip_internal_ids
+    assert strip_internal_ids(text) == expected

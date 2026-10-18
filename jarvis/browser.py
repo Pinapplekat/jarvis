@@ -29,6 +29,7 @@ class Shot:
     page: Page
     png: bytes | None = None
     logged_in: bool = False  # opened with his saved profile
+    path: str = ""           # where the screenshot was saved (attachable later)
 
 
 def _host(url: str) -> str:
@@ -150,7 +151,9 @@ def browse(url: str, screenshot: bool = False, settle_ms: int = 2500) -> Shot:
                               links=list(dict.fromkeys(map(tuple, links)))[:MAX_LINKS])
                 if (why := blocked_site(page.url)):  # redirected somewhere off limits
                     return Shot(Page(url, error=why))
-                return Shot(result, png, logged_in=use_profile)
+                from jarvis.attachments import save_shot
+                saved = str(save_shot(png, _host(page.url) or "page")) if png else ""
+                return Shot(result, png, logged_in=use_profile, path=saved)
             finally:
                 context.close()
                 if browser:

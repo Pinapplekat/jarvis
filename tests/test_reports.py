@@ -37,3 +37,25 @@ def test_chat_sees_what_was_reported_and_what_was_passed_on():
     assert "progress (for you only): site tests: 10 steps in" in text and "done (not passed on)" in text
     reports.deliver(m, lambda t: None, lambda items: "ok")
     assert "done (told him)" in reports.for_prompt(m)
+
+
+def test_pictures_go_after_the_message_and_refusals_are_said(tmp_path):
+    m = Memory(":memory:")
+    reports.add(m, "task", 1, "done", "the graph", "Rendered y = 3x.", attachments=["/ok.png", "/nope.png"])
+    sent, images = [], []
+
+    def send_image(path, caption):
+        if path == "/nope.png":
+            raise ValueError("isn't a folder JARVIS may send images from")
+        images.append((path, caption))
+    reports.deliver(m, sent.append, lambda items: "The graph is done, sir.", send_image=send_image)
+    assert sent[0] == "The graph is done, sir." and images == [("/ok.png", "the graph")]
+    assert "couldn't send the picture nope.png" in sent[1]
+
+
+def test_reports_never_carry_internal_numbers():
+    m = Memory(":memory:")
+    reports.add(m, "task", 1, "done", "x", "y")
+    sent = []
+    reports.deliver(m, sent.append, lambda items: "Task #7 is done, sir.")
+    assert sent == ["The task is done, sir."]

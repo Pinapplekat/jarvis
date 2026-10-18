@@ -204,6 +204,7 @@ MIGRATIONS = [
     ("tasks", "resume_note", "ALTER TABLE tasks ADD COLUMN resume_note TEXT"),
     ("tasks", "blocked", "ALTER TABLE tasks ADD COLUMN blocked TEXT"),
     ("tasks", "runs", "ALTER TABLE tasks ADD COLUMN runs INTEGER NOT NULL DEFAULT 0"),
+    ("reports", "attachments", "ALTER TABLE reports ADD COLUMN attachments TEXT"),  # JSON list of image paths
 ]
 
 

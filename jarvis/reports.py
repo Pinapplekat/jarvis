@@ -11,6 +11,7 @@ Report text written by an agent is untrusted data to the composer, never instruc
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable
 
 from jarvis import config
@@ -34,12 +35,15 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def add(mem: Memory, source: str, ref: int | None, kind: str, about: str, text: str) -> int:
-    """File a report. Progress is marked delivered at once: it's for JARVIS, never sent."""
+def add(mem: Memory, source: str, ref: int | None, kind: str, about: str, text: str,
+        attachments: list[str] = ()) -> int:
+    """File a report, optionally with images to show him (checked again when sent). Progress is
+    marked delivered at once: it's for JARVIS, never sent."""
     now = _now()
     cur = mem.db.execute(
-        "INSERT INTO reports (at, source, ref, kind, about, text, delivered_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (now, source, ref, kind, about.strip()[:120], text.strip()[:2000], None if kind in PASS_ON else now))
+        "INSERT INTO reports (at, source, ref, kind, about, text, delivered_at, attachments) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (now, source, ref, kind, about.strip()[:120], text.strip()[:2000], None if kind in PASS_ON else now,
+         json.dumps(list(attachments)[:5]) if attachments else None))
     mem.db.commit()
     return cur.lastrowid
 
@@ -77,8 +81,10 @@ def compose_with_claude(items: list[dict]) -> str:
     return str(out.get("message") or "").strip()
 
 
-def deliver(mem: Memory, send: Callable[[str], object], compose: Composer | None = None) -> int:
-    """Pass on what's waiting as one message. Returns how many reports it covered."""
+def deliver(mem: Memory, send: Callable[[str], object], compose: Composer | None = None,
+            send_image: Callable[[str, str], object] | None = None) -> int:
+    """Pass on what's waiting as one message, then any images the reports carry (each checked
+    by jarvis.attachments inside `send_image(path, caption)`). Returns how many reports it covered."""
     items = _claim(mem)
     if not items:
         return 0
@@ -87,10 +93,23 @@ def deliver(mem: Memory, send: Callable[[str], object], compose: Composer | None
     except Exception as e:  # never lose a report over the composer
         mem.log("report_compose_failed", str(e)[:200])
         text = plain(items)
-    send(text)
-    mem.add_chat("assistant", text)
+    send(strip_ids(text))
+    mem.add_chat("assistant", strip_ids(text))
+    for r in items:
+        for path in json.loads(r.get("attachments") or "[]"):
+            if not send_image:
+                break
+            try:
+                send_image(path, r["about"][:200])
+            except Exception as e:  # not allowed, gone, or Telegram trouble: say so, keep going
+                send(f"(I couldn't send the picture {Path(path).name}: {str(e)[:150]})")
     mem.log("reported", json.dumps([r["id"] for r in items]))
     return len(items)
+
+
+def strip_ids(text: str) -> str:
+    from jarvis.chat import strip_internal_ids
+    return strip_internal_ids(text)
 
 
 def for_prompt(mem: Memory, n: int = 6) -> str:

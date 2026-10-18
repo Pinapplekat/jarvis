@@ -238,7 +238,8 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
     reply = respond(mem, message, now, deadlines_text, runner=runner, on_progress=on_progress,
                     inbox_text=_inbox_text(mem) if "inbox" in blocks else "",
                     activity_text=_activity(mem) if "activity" in blocks else "", blocks=blocks,
-                    on_text=stream, spotter=_page_spotter(), send_photo=send_photo)
+                    on_text=stream, spotter=_page_spotter(), send_photo=send_photo,
+                    judge=judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])))
     total = time.time() - started
     first_at = f"{first.at - started:.1f}s" if first and first.at else "-"
     # Timings and choices only; never the message text.
@@ -382,7 +383,7 @@ def _listen(mem: Memory) -> None:
             tg.send(f"Following along{until}, sir ({where})." if p["source"] == "live"
                     else f"Noted, sir: {where}.")
 
-    from jarvis import reports
+    from jarvis import attachments, reports
     from jarvis.reminders import deliver_reminders
     from jarvis.voice import Announcer
     announcer = Announcer(tg, mem)
@@ -392,7 +393,8 @@ def _listen(mem: Memory) -> None:
         try:
             deliver_reminders(mem, announcer, _now_local())
             tasks.start_queued(mem, worker)  # tasks from the desk mic, or resumed after an expiry
-            reports.deliver(mem, announcer.send)  # what tasks, jobs and builds told JARVIS, in one message
+            reports.deliver(mem, announcer.send, send_image=lambda path, caption: attachments.send_image(
+                tg, path, caption, mem))  # what tasks, jobs and builds told JARVIS, in one message, with pictures
             # Short long-poll so reminders go out within ~25s of their time.
             handle_updates(mem, tg, int(config.TELEGRAM_CHAT_ID), on_text, wait=25, on_button=on_button,
                            transcribe=_transcribe, on_location=on_location)
@@ -486,7 +488,8 @@ def _tick(mem: Memory) -> int:
     step("jobs", watch_jobs)  # before reporting, so a finished job is mentioned this tick
     if tg:
         from jarvis import reports
-        step("reports", lambda: f"passed on {reports.deliver(mem, announcer.send)}")  # backup for the listener
+        from jarvis import attachments
+        step("reports", lambda: f"passed on {reports.deliver(mem, announcer.send, send_image=lambda p, c: attachments.send_image(tg, p, c, mem))}")  # backup for the listener
     if config.LOCATION:
         from jarvis import location
         from jarvis.alerts import in_quiet_hours, parse_quiet_hours
@@ -639,6 +642,11 @@ def main() -> None:
     br = sub.add_parser("browser", help="JARVIS's browser profile: log in to a site yourself, list sites, forget one, reset")
     br.add_argument("action", nargs="?", default="sites", choices=["login", "sites", "forget", "reset"])
     br.add_argument("site", nargs="?", help="for login/forget: e.g. canvas.seattlecolleges.edu")
+    hp = sub.add_parser("helpers", help="What JARVIS sees of its helpers: build, Claude Code sessions on this Mac")
+    hp.add_argument("which", nargs="?", default="", help="words from a session's title for detail")
+    si = sub.add_parser("send-image", help="Send an image to your Telegram (same folder checks as JARVIS uses)")
+    si.add_argument("path")
+    si.add_argument("--caption", default="")
     tk = sub.add_parser("tasks", help="Task mode: list tasks, show one's steps, or stop one")
     tk.add_argument("action", nargs="?", default="list", choices=["list", "show", "stop"])
     tk.add_argument("id", nargs="?", type=int)
@@ -923,6 +931,20 @@ def main() -> None:
         else:
             print("\n".join(browser.sites()) or "(no sites yet: jarvis browser login <site>)")
             print(f"\nProfile (local only, never shared): {config.BROWSER_PROFILE}")
+        return
+    if args.cmd == "helpers":
+        from jarvis import helpers
+        print(helpers.detail(mem, args.which) if args.which else helpers.for_prompt(mem, max_age=0))
+        return
+    if args.cmd == "send-image":
+        from jarvis.attachments import send_image
+        tg = _messenger()
+        if not tg:
+            sys.exit("Telegram isn't set up")
+        try:
+            print(f"Sent {send_image(tg, args.path, args.caption, mem)}")
+        except ValueError as e:
+            sys.exit(f"Not sent: {e}")
         return
     if args.cmd == "tasks":
         from jarvis import tasks

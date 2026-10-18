@@ -1,3 +1,4 @@
+import json
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -323,3 +324,18 @@ def test_he_can_ask_to_see_the_steps(project, tmp_path):
         return rounds[min(len(prompts), 2) - 1]
     assert respond(m, "show me the steps", datetime.now(ZoneInfo("UTC")), "", runner=run) == "One step so far, sir."
     assert "✓ 1. Running pytest -q" in prompts[1] and "<helpers_reports" in prompts[0]
+
+
+def test_images_the_session_attaches_ride_along_with_the_report(project, tmp_path):
+    m, tg = Memory(":memory:"), FakeTelegram()
+    shot = str(tmp_path / "site" / "chart.png")
+    run = session(([], [], {"text": f"Made it.\nATTACH: {shot}\nSTATUS: done\nThe chart's ready, sir.",
+                            "attachments": [shot]}))
+    t = run_task(m, tasks.Worker(tg, runner=run, log=lambda s: None), folder=str(tmp_path / "site"))
+    filed = reports.recent(m)[0]
+    assert t["summary"] == "The chart's ready, sir." and json.loads(filed["attachments"]) == [shot]
+
+
+def test_attach_lines_are_read_from_the_stream():
+    out = agent.Outcome(text="Done.\nATTACH: /x/a.png\nSTATUS: done\nAll set, sir.")
+    assert out.summary == "All set, sir." and agent.attach_lines(out.text) == ["/x/a.png"]
