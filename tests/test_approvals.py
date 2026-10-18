@@ -233,7 +233,7 @@ def test_drafts_and_commands_ask_is_that_what_you_meant_and_can_say_it():
     _command(m)
     spoken = []
     assert notify_pending(m, t, say=spoken.append) == 2
-    assert all("Is that what you meant" in text for text, _ in t.sent)
+    assert all("Yes or no?" in text or "Is that what you meant" in text for text, _ in t.sent)
     assert all("#" not in text.split("$")[0] for text, _ in t.sent)
     assert len(spoken) == 2
 

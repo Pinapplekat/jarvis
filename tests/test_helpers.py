@@ -68,4 +68,13 @@ def test_secrets_in_transcripts_are_masked():
 
 def test_it_says_when_self_editing_is_off(monkeypatch):
     monkeypatch.setattr(selfedit, "enabled", lambda: False)
-    assert "self-editing isn't enabled" in helpers.for_prompt(Memory(":memory:"))
+    assert "self-editing: OFF" in helpers.for_prompt(Memory(":memory:"))
+
+
+def test_it_says_what_the_build_is_doing_when_self_editing_is_on(monkeypatch):
+    monkeypatch.setattr(selfedit, "enabled", lambda: True)
+    m = Memory(":memory:")
+    eid = m.add_self_edit("request", "README note", "add it")
+    m.set_self_edit(eid, status="ready")
+    text = helpers.for_prompt(m)
+    assert "self-editing: ON; your build session is idle" in text and "waiting for his Deploy/Discard: README note" in text

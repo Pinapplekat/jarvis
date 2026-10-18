@@ -26,7 +26,7 @@ SECRET_NAMES = [".env", ".env.*", "*token*", "*secret*", "*credential*", "*.pem"
                 "id_rsa*", "id_ed25519*", "*.keychain*", "jarvis.db*", "*.sqlite*"]
 SECRET_OK = {".env.example"}  # the template has no values
 LOG_DIR = Path.home() / "Library/Logs/JARVIS"
-LOGS = {"tick", "listen", "ears", "watch", "menubar"}
+LOGS = {"tick", "listen", "ears", "watch", "menubar", "selfedit", "phone"}
 
 # Read-only checks, each a fixed argv (run in the project folder, sandboxed).
 GIT = ["git", "--no-optional-locks", "-c", "core.pager=cat", "-c", "color.ui=false"]

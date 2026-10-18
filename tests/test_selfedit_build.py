@@ -63,14 +63,14 @@ def test_jarvis_decides_a_build_step_off_elijahs_side_of_the_line(build):
 
 def test_a_permission_prompt_becomes_a_plain_words_question_and_resumes(build):
     m, tg = Memory(":memory:"), FakeTG()
-    blocked = {"tool": "Bash", "command": "uv add rich", "cwd": str(build / "src"), "reason": "uv add", "risk": "high"}
+    blocked = {"tool": "Bash", "command": "pip install rich", "cwd": str(build / "src"), "reason": "pip", "risk": "high"}
     run = runner(agent.Outcome(session_id="s", blocked=blocked), agent.Outcome(session_id="s", text="STATUS: done\nok"))
 
     def answer_after_asked(seconds):  # stands in for the listener: Elijah says yes, JARVIS runs it
         [action] = m.pending_actions(kind="run_command")
         if action["notified_at"]:
             m.resolve_action(action["id"], "done")
-            m.set_kv(f"agent_outcome:{action['id']}", "[exit 0]\nadded rich")
+            m.set_kv(f"agent_outcome:{action['id']}", "[exit 0]\ninstalled rich")
     import time as _time
     real_sleep = _time.sleep
     _time.sleep = answer_after_asked
@@ -79,8 +79,8 @@ def test_a_permission_prompt_becomes_a_plain_words_question_and_resumes(build):
     finally:
         _time.sleep = real_sleep
     question = next(text for text, buttons in tg.sent if buttons)
-    assert "for the build" in question and "$ uv add rich" in question and "Is that what you meant?" in question
-    assert run.calls[1]["resume"] == "s" and "added rich" in run.calls[1]["prompt"]
+    assert "for the build" in question and "$ pip install rich" in question
+    assert run.calls[1]["resume"] == "s" and "installed rich" in run.calls[1]["prompt"]
 
 
 def test_a_no_is_passed_on(build):

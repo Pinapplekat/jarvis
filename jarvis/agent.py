@@ -108,6 +108,8 @@ def decide(tool: str, tool_input: dict, root: Path, cwd: Path | None = None,
             return "deny", v.reason, "high"
         if v.kind == "auto" and v.risk == "medium" and not edits:
             return "deny", "this folder is read-only to you (JARVIS's code changes through an approved plan)", "high"
+        if v.kind == "auto" and v.root and not _inside(Path(v.root).resolve(), root):
+            return "ask", f"{v.reason} outside your folder (JARVIS runs it for you)", v.risk  # your sandbox can't write there
         if v.kind == "auto":
             return "allow", v.reason, v.risk
         return "ask", v.reason, v.risk
@@ -384,10 +386,12 @@ def review(judge, goal: str, blocked: dict, root: Path,
     untrusted, so it can't set its own tier."""
     from jarvis.judge import grade_command
     from jarvis.terminal import classify
-    if not config.SELF_APPROVE or judge is None:
-        return False, "JARVIS doesn't approve steps itself right now"
     command = str(blocked.get("command", ""))
     v = classify(command, Path(blocked.get("cwd") or root), root)
+    if v.kind == "auto":  # safe by the rules, just outside the session's own sandbox
+        return True, v.reason
+    if not config.SELF_APPROVE or judge is None:
+        return False, "JARVIS doesn't approve steps itself right now"
     if v.kind != "approval":
         return False, v.reason
     if v.yours:

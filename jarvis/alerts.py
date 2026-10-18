@@ -50,7 +50,7 @@ def deliver_alerts(
                 note = " (no call: Twilio isn't set up)"
             elif urgent and quiet_now:
                 note = " (calling you after quiet hours)"
-            messenger.send(f"{'🚨 URGENT' if urgent else '🔔'} {alert['message']}{note}")
+            messenger.send(f"{'Urgent: ' if urgent else ''}{alert['message']}{note}")  # in JARVIS's voice, no badges
             mem.mark_alert(alert["id"], "texted_at")
             messages += 1
         if urgent and caller and alert["called_at"] is None and not quiet_now:

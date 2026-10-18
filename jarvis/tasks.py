@@ -237,6 +237,8 @@ class Worker:
                                             "another way.")
             return self._loop(mem, task_id)
         approved, why = agent.review(self.judge, t["goal"], blocked, folder_of(t))
+        if not approved:
+            mem.log("self_approve_declined", f"task #{task_id}: {blocked.get('command', '')[:150]} ({why})")
         if approved:
             outcome = agent.run_approved(blocked, folder_of(t))
             steps = steps_of(t)

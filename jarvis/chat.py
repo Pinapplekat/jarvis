@@ -146,6 +146,9 @@ You can't do anything directly. To change something, put actions in "actions":
   on his list. You get the page text; with screenshot true he gets a picture of it in Telegram. Same
   pattern as open_url. Banking and payment sites are blocked. You never ask for or handle passwords.
 - stop_task: {{"type":"stop_task","id":optional task id}} when he wants a task stopped.
+- dont_remind: {{"type":"dont_remind","about":"a few words naming it, e.g. Twilio suspension email","until":"YYYY-MM-DD" optional}}
+  when he says he's handled something, already knows, or doesn't want to hear about it. Your
+  background check-ins then leave it alone (3 days by default).
 - label_place: {{"type":"label_place","id":place number,"name":"school"}} when he tells you what a
   place in <location> is (e.g. he answers "that's school" to your question about place #3). Short
   lowercase names: school, work, home, gym.
@@ -211,6 +214,14 @@ Rules:
 - .env (his settings and secrets) and the self-editing switch (JARVIS_REPO in .env) are his alone.
   You can't edit them and must never offer to; if he wants a setting changed, tell him the exact line
   to add and that he runs `uv run jarvis schedule install` afterwards.
+- Never promise to check, watch, report back or behave differently "from now on" unless something
+  real does it: an action in this same reply (inspect, job_status, helper_detail, a task), or one of
+  the things that happen on their own (helpers report to you, reminders, the heartbeat). How you work
+  only changes through a code change; if he wants that, offer a plan_improvement instead of a promise.
+- Your build's state is in <helpers> (self-editing ON/OFF, what's building, what waits for Deploy);
+  job_status is only for background jobs. To dig in, read the "selfedit" log with inspect.
+- When he says he's done something (submitted the essay, replied to that email), mark it: deadline_done
+  for a stored deadline, and dont_remind for anything else, so you never bring it up again.
 - Never show him internal numbers (command #70, task #11, email #5, job #3, place #2, plan #4).
   Those ids are only for your actions. Refer to things by what they are: "the email to your
   professor", "the test run", "the place near Broadway".
@@ -424,6 +435,10 @@ def apply_actions(mem: Memory, actions: list[dict], tz, ran: set[str] = frozense
                     raise ValueError("can't send pictures from here")
                 full = safe_image_path(str(a["path"]), mem)
                 send_photo(full.read_bytes(), str(a.get("caption") or "")[:200])
+            elif kind == "dont_remind":
+                from jarvis.heartbeat import dont_remind
+                until = parse_due(str(a["until"]), tz) if a.get("until") else None
+                dont_remind(mem, str(a["about"]), until)
             elif kind == "label_place":
                 from jarvis.location import label_place
                 if not label_place(mem, int(a["id"]), str(a["name"])):
@@ -573,6 +588,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                     ok, why = agent.review(judge, message, step, project_dir(),
                                            asker="You (JARVIS) proposed this command while answering him")
                     if not ok:
+                        mem.log("self_approve_declined", f"chat: {key[:150]} ({why})")
                         continue  # queued for Elijah from the final answer
                     looked.add(key)
                     on_progress()
@@ -663,6 +679,15 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                     open_urls(wanted[:3])
                 look(out.get("actions") or [])
             if len(requested) + len(looked) == before:  # nothing new to read: this is the real answer
+                stalled = [a for a in out.get("actions") or [] if a.get("type") in GATHER]
+                if stalled and round_ < MAX_ROUNDS - 1:
+                    # It asked to look something up but nothing new could be fetched (a repeat, or not
+                    # allowed). Don't let "checking..." be the last word: ask for a real answer now.
+                    findings.append(("your last look-ups", "(nothing new came back: they were repeats or "
+                                     "not possible. Answer now with what you know, and don't say you're "
+                                     "checking or will report back.)"))
+                    out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
+                                                             activity_text, blocks, findings))
                 break
     except Exception as e:
         reply = f"Sorry, I couldn't think just now ({e})."

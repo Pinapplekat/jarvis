@@ -147,14 +147,18 @@ def for_prompt(mem: Memory, max_age: float = 20) -> str:
         return hit[1]
     lines = []
     from jarvis import selfedit
-    st = selfedit.read_status()
-    if st:
-        alive = selfedit.builder_alive()
-        lines.append(f"- your self-edit build: {'running' if alive else 'not running'}"
-                     + (f", {st.get('title', '')} ({st.get('phase', '')}), last step: {st.get('last_update', '-')}" if alive else ""))
-    elif not selfedit.enabled():
-        lines.append("- your self-edit build: off (self-editing isn't enabled, so approved plans wait for a Claude "
-                     "Code session to build them)")
+    if not selfedit.enabled():
+        lines.append("- self-editing: OFF (approved plans wait for a Claude Code session to build them)")
+    else:
+        st, alive = selfedit.read_status(), selfedit.builder_alive()
+        building = [r["title"] for r in mem.self_edits("queued", "building")] if mem is not None else []
+        ready = [r["title"] for r in mem.self_edits("ready")] if mem is not None else []
+        state = ("building " + st.get("title", "?") + f" ({st.get('phase', '?')}), last step: {st.get('last_update', '-')}, "
+                 f"last output {int((time.time() - (st.get('last_output') or st.get('started') or time.time())) // 60)} min ago"
+                 if alive else "idle")
+        lines.append(f"- self-editing: ON; your build session is {state}"
+                     + (f"; queued: {', '.join(building)}" if building and not alive else "")
+                     + (f"; waiting for his Deploy/Discard: {', '.join(ready)}" if ready else ""))
     screens = screen_names()
     for s in claude_sessions(mem):
         lines.append(f"- Claude Code session \"{s['title'] or s['last_prompt'][:60] or s['id'][:8]}\" in "

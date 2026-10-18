@@ -144,7 +144,7 @@ def test_approval_flow_runs_only_after_run_is_tapped(project):
     assert notify_pending(m, tg, say=spoken.append) == 1
     text, buttons = tg.sent[0]
     assert f"$ rm -r {target}" in text and buttons == [("Run ▶️", f"cmd_run:{aid}"), ("Reject ✖️", f"cmd_reject:{aid}")]
-    assert "Is that what you meant?" in text and "high risk" in text and f"#{aid}" not in text
+    assert text.startswith("Sir, I need your yes") and text.endswith("Yes or no?") and f"#{aid}" not in text
     assert spoken and "is that what you meant" in spoken[0]
     assert target.exists()  # nothing ran yet
     assert handle_button(m, tg, "cmd_run", aid, background=False) == "Running it"

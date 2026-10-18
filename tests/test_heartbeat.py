@@ -95,15 +95,14 @@ def test_no_quota_important_things_keep_getting_through():
     assert len(m.undelivered_alerts()) == 4
 
 
-def test_it_sees_what_it_already_said_and_whether_he_answered(monkeypatch):
+def test_it_sees_the_conversation_both_sides():
     m = Memory(":memory:")
     m.add_chat("assistant", "Module 3 is due tonight, sir.")  # stamped with the real clock
+    m.add_chat("user", "I know, I'll get it done")
     now = datetime.now(TZ) + timedelta(seconds=5)
     think = thinker(QUIET)
     heartbeat.run_heartbeat(m, now, [], think=think)
-    assert "Module 3 is due tonight, sir." in think.calls[0] and "no reply since" in think.calls[0]
-    m.add_chat("user", "on it")
-    assert "he replied after" in heartbeat.conversation_today(m, now)
+    assert 'you: "Module 3 is due tonight, sir."' in think.calls[0] and "Elijah: \"I know, I'll get it done\"" in think.calls[0]
 
 
 def test_his_preferences_shape_the_look():
@@ -217,3 +216,79 @@ def test_its_own_logs_dont_count_as_change():
     heartbeat.set_paused(m, False)
     m.log("answered", "1.2s total")
     assert heartbeat.snapshot(m, NOW, [essay()]) == first
+
+
+# ----- not nagging, in code -----
+def say_about(item, urgency="normal", text="Sir, the Econ work is still unstarted."):
+    return {"notify": True, "message": text, "urgency": urgency, "about": [item]}
+
+
+def test_an_item_it_already_raised_isnt_repeated_unless_more_urgent():
+    m = Memory(":memory:")
+    d = essay(20)
+    assert heartbeat.run_heartbeat(m, NOW, [d], think=thinker(say_about("deadline:canvas:1"))) == "sent"
+    later_look = heartbeat.run_heartbeat(m, later(40), [essay(20, "Module 3 essay"), essay(30, "other")],
+                                         think=thinker(say_about("deadline:canvas:1")))
+    assert later_look == "held back (already said, not more urgent)"
+    assert heartbeat.run_heartbeat(m, later(80), [d, essay(31, "x")],
+                                   think=thinker(say_about("deadline:canvas:1", "high"))) == "sent"  # escalated
+    assert len(m.undelivered_alerts()) == 2
+
+
+def test_i_know_closes_the_item_for_good(monkeypatch):
+    import time
+    m = Memory(":memory:")
+    now = datetime.now(TZ)
+    assert heartbeat.run_heartbeat(m, now, [essay(20)], think=thinker(say_about("deadline:canvas:1"))) == "sent"
+    time.sleep(1.1)
+    m.add_chat("user", "I know my econ work is due, don't worry about me")
+    later_now = datetime.now(TZ) + timedelta(minutes=40)
+    think = thinker(say_about("deadline:canvas:1", "high"))
+    out = heartbeat.run_heartbeat(m, later_now, [essay(20)], think=think)
+    assert out in ("quiet", "held back (he said he's handled it)")
+    assert "Module 3 essay" not in (think.calls[0] if think.calls else "")  # it's gone from what it sees
+
+
+def test_jev_decides_whether_a_reply_closes_it():
+    import time
+    m = Memory(":memory:")
+    now = datetime.now(TZ)
+    heartbeat.run_heartbeat(m, now, [essay(20)], think=thinker(say_about("deadline:canvas:1")))
+    time.sleep(1.1)
+    m.add_chat("user", "what's the weather like")
+    fast = lambda state, qs: {q.key: Answer(False, 0.9) for q in qs}  # noqa: E731  (not a dismissal)
+    heartbeat.notice_dismissals(m, datetime.now(TZ) + timedelta(minutes=5), fast)
+    assert heartbeat.open_items(m, datetime.now(TZ), [essay(20)])  # still open
+
+
+def test_chat_dont_remind_closes_matching_items():
+    m = Memory(":memory:")
+    heartbeat.dont_remind(m, "Module 3 essay")
+    assert heartbeat.open_items(m, NOW, [essay(20)]) == []
+
+
+def test_only_recent_unread_mail_counts():
+    import json as _json
+    m = Memory(":memory:")
+    naive = NOW.replace(tzinfo=None)
+    m.set_kv("inbox_snapshot", _json.dumps({"at": NOW.isoformat(), "messages": [
+        {"id": "new1", "sender": "Prof <p@x.edu>", "subject": "Quiz moved", "received": (naive - timedelta(hours=2)).isoformat(), "read": False},
+        {"id": "old1", "sender": "Twilio", "subject": "RESPONSE REQUIRED", "received": (naive - timedelta(days=3)).isoformat(), "read": False},
+        {"id": "read1", "sender": "Prof", "subject": "Read already", "received": naive.isoformat(), "read": True}]}))
+    ids = [iid for _, iid, _ in heartbeat.open_items(m, NOW)]
+    assert ids == ["mail:new1"]
+
+
+def test_its_own_failures_can_be_mentioned_by_the_way():
+    m = Memory(":memory:")
+    m.log("jev_fallback", "Jev 402: insufficient credits")
+    snap = heartbeat.snapshot(m, datetime.now(TZ))
+    assert "[health:jev_fallback] Jev (fast decisions): failed 1x, latest: Jev 402: insufficient credits" in snap
+    assert "By the way, sir" in heartbeat.HEARTBEAT_SYSTEM
+
+
+def test_item_ids_never_reach_him():
+    m = Memory(":memory:")
+    think = thinker(say_about("deadline:canvas:1", text="Sir, [deadline:canvas:1] the essay is due soon."))
+    heartbeat.run_heartbeat(m, NOW, [essay(5)], think=think)
+    assert m.undelivered_alerts()[0]["message"] == "Sir, the essay is due soon."

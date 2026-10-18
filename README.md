@@ -239,14 +239,14 @@ Besides reading pages in a fresh, empty browser, JARVIS has its own **browser pr
 
 ## Thinking heartbeat
 
-JARVIS glances at your situation through the day: deadlines in the next 48 hours, unread mail headers, drafts waiting for you, reminders, open loops from its journal, and recent events. It speaks up when something's worth it, the way a person would, and is quiet otherwise.
+JARVIS glances at your situation through the day and only speaks when there's something new worth saying, the way a person who's been paying attention would: "By the way, sir, Jev has been failing since noon; it looks like the credits ran out."
 
-- **Judgment, not a quota.** There's no daily message limit. Each look also sees everything JARVIS has already told you today (and when), whether you answered, and what you've said about how much you want to hear from it. Important and new: it says it. Already said: only again if it's become more urgent, and it says why. You've gone quiet: minor things wait, important ones still come. Tell it "back off" or "keep me posted on econ" in chat and it remembers (a preference fact) and adjusts.
-- **Two stages, cheap.** With a Jev key, Jev takes every look (every `HEARTBEAT_JEV_INTERVAL_MIN`, 10, minutes): one fast typed decision on whether anything is worth saying. A sure "no" ends the look there. Only a yes, or a maybe, wakes `HEARTBEAT_MODEL` (default `haiku`) to make the final call and write the message. Without Jev, Claude looks every `HEARTBEAT_MIN_INTERVAL_MIN` (30) minutes. If nothing has changed there's no call at all; a deadline crossing 48/24/12/6/3/1 hours left counts as a change.
-- **Quiet hours:** only something truly urgent goes out (an urgent alert: the text now, a call once quiet hours end, if Twilio is set up). Everything else waits and is reconsidered in the morning. It also looks less often at night.
-- **Limits that stay:** `HEARTBEAT_MAX_RUNS_PER_DAY` (24) Claude calls a day (cost, not talking), and a runaway guard of `HEARTBEAT_RUNAWAY_PER_DAY` (10) messages that only matters if something is broken.
-- **It can only suggest a message.** Same no-tools Claude as chat: no email, no commands. What it says joins the chat history, so you can reply to it naturally. Mail and event text is treated as data.
-- **Off switch:** say "pause heartbeat" / "resume heartbeat" in chat, or `jarvis heartbeat off` / `on`; `HEARTBEAT=0` in `.env` turns it off for good. `jarvis heartbeat` shows today's looks and messages and the last decisions (each is also logged for the journal); `jarvis heartbeat run` does one look now.
+- **What it looks at:** deadlines in the next 48 hours, email that arrived in the last 36 hours (old unread mail isn't news), drafts waiting for you, open loops from its journal, what you're working on right now (screen, terminal, git, and today's conversation, both sides), and how its own systems are doing (an integration failing, like Jev running out of credits).
+- **It doesn't nag, and that's enforced in code:** every item has an id, and once JARVIS has raised one it won't raise it again for 12 hours unless it has become more urgent. Answer a check-in with "I know", "already did it" or "don't worry" and Jev recognises it and closes those items for a week. Tell JARVIS in chat you've handled something and it closes it too (or marks the deadline done).
+- **Judgment, not a quota:** no daily message limit; a runaway guard of `HEARTBEAT_RUNAWAY_PER_DAY` (10) only matters if something breaks. Quiet hours let only something truly urgent through; the rest waits for morning.
+- **Cheap:** with a Jev key, Jev takes every look (every `HEARTBEAT_JEV_INTERVAL_MIN`, 10, minutes) and a sure "nothing to say" ends it there; only then does `HEARTBEAT_MODEL` (`haiku`) write the message. Nothing changed means no call at all. `HEARTBEAT_MAX_RUNS_PER_DAY` (24) caps Claude calls.
+- **It can only suggest a message**: no tools, no email, no commands. What it says joins the chat history, so you can reply naturally.
+- **Off switch:** "pause heartbeat" / "resume heartbeat" in chat, `jarvis heartbeat off` / `on`, or `HEARTBEAT=0`. `jarvis heartbeat` shows today's looks, messages, what you've closed, and its last decisions.
 
 ## Location (from Telegram)
 

@@ -250,11 +250,11 @@ def test_jarvis_approves_its_own_chat_command_off_his_side_of_the_line(own_proje
     from jarvis.judge import Answer
     m = Memory(":memory:")
     target = tmp_path / "made-by-jarvis"
-    run = scripted({"reply": "on it", "actions": [{"type": "run_command", "command": f"mkdir {target}", "why": "he asked"}]},
-                   {"reply": "Made it, sir.", "actions": [{"type": "run_command", "command": f"mkdir {target}"}]})
+    run = scripted({"reply": "on it", "actions": [{"type": "run_command", "command": f"touch {target}", "why": "he asked"}]},
+                   {"reply": "Made it, sir.", "actions": [{"type": "run_command", "command": f"touch {target}"}]})
     yes = lambda state, qs: {q.key: Answer("low" if q.key == "risk" else True, 0.95) for q in qs}  # noqa: E731
-    assert respond(m, f"make a folder at {target}", NOW, "", runner=run, judge=yes) == "Made it, sir."
-    assert target.is_dir() and not m.pending_actions(kind="run_command")
+    assert respond(m, f"make a file at {target}", NOW, "", runner=run, judge=yes) == "Made it, sir."
+    assert target.is_file() and not m.pending_actions(kind="run_command")
     assert "you approved it yourself" in run.prompts[1]
 
 
@@ -277,3 +277,23 @@ def test_spelled_out_internal_numbers_are_stripped_too():
     from jarvis.chat import strip_internal_ids
     assert strip_internal_ids("Plan seventeen is approved, sir.") == "The plan is approved, sir."
     assert strip_internal_ids("I plan one thing tonight.") == "I plan one thing tonight."
+
+
+def test_checking_is_never_the_last_word(own_project):
+    m = Memory(":memory:")
+    run = scripted({"reply": "Checking the build log, sir.", "actions": [{"type": "inspect", "op": "log", "arg": "selfedit"}]},
+                   {"reply": "Still checking, sir.", "actions": [{"type": "inspect", "op": "log", "arg": "selfedit"}]},
+                   {"reply": "The build log is empty, sir; nothing has run yet.", "actions": []})
+    reply = respond(m, "is the build running?", NOW, "", runner=run)
+    assert reply == "The build log is empty, sir; nothing has run yet."
+    assert "don't say you're checking" in run.prompts[-1]
+
+
+def test_dont_remind_from_chat_closes_it_for_the_heartbeat(own_project):
+    from jarvis import heartbeat
+    from zoneinfo import ZoneInfo
+    m = Memory(":memory:")
+    assert apply_actions(m, [{"type": "dont_remind", "about": "Twilio suspension"}], ZoneInfo("UTC")) == []
+    assert heartbeat._closed_by_chat(m, "Twilio Support: RESPONSE REQUIRED: Suspension of your account", 1e10 - 1) is False
+    import time
+    assert heartbeat._closed_by_chat(m, "Twilio Support: Suspension notice", time.time())

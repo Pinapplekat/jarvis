@@ -117,7 +117,7 @@ def test_risky_step_pauses_asks_in_plain_words_then_resumes_with_the_output(proj
     t = run_task(m, worker, folder=str(tmp_path / "site"))
     assert t["status"] == "waiting" and target.exists()
     request, buttons = next((x, b) for x, b in tg.sent if b)
-    assert "for the task I'm working on" in request and "critical risk" in request and f"rm -r {target}" in request
+    assert "for the task I'm on" in request and "Yes or no?" in request and f"rm -r {target}" in request
     assert "#" not in request.split("$")[0] and spoken  # no internal numbers; asked out loud too
 
     def carry_on(db, payload, action_id, outcome):

@@ -90,6 +90,10 @@ def ocr(path: str) -> str:
     request = Vision.VNRecognizeTextRequest.alloc().init()
     request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
     request.setUsesLanguageCorrection_(False)  # code and paths shouldn't be "corrected"
+    try:  # the Neural Engine path fails on this Mac (e5rt errors, minutes per image); the CPU is quick
+        request.setUsesCPUOnly_(True)
+    except AttributeError:
+        pass
     ok, error = handler.performRequests_error_([request], None)
     if not ok:
         raise RuntimeError(f"OCR failed: {error}")

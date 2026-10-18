@@ -398,6 +398,19 @@ def _grade(command, cwd: Path | None = None, root: Path | None = None) -> Verdic
         safe = [tool, *GREP_EXCLUDES, *args] if tool == "grep" else argv
         return Verdict("auto", f"read-only {tool}", safe, risk="low")
 
+    if tool == "mkdir" and (not in_root or _outside(args, where, root)):
+        # Making a folder can't hurt anything: fine anywhere in his home or temp (secrets were refused above),
+        # in a sandbox that may only write there.
+        targets = [_full(a, where) for a in args if not a.startswith("-")]
+        places = [Path.home().resolve(), Path("/private/tmp"), Path("/private/var/folders")]
+        if targets and all(any(_inside(t, p) for p in places) for t in targets):
+            import os
+            parent = Path(os.path.commonpath([str(t.parent) for t in targets]))
+            while not parent.exists() and parent != parent.parent:
+                parent = parent.parent
+            return Verdict("auto", "making a folder", argv, sandboxed=True, risk="medium", sandbox="write",
+                           root=str(parent))
+
     if tool in FILE_WRITERS:
         if not in_root or (why := _outside(args, where, root)):
             return _approval("high", f"{tool} outside the project", argv)
@@ -479,14 +492,13 @@ def describe_action(payload: dict) -> str:
 
 def format_request(action_id: int, payload: dict) -> str:
     """The plain-words question. No internal numbers: he answers yes or no to this one thing."""
-    level = payload.get("level") or "high"
-    flag = "⚠️ " if level == "critical" else ""
-    who = " for the task I'm working on" if payload.get("task_id") else " for the build" if payload.get("build_id") else ""
-    job = "\nIt runs in the background (no time limit); I'll ping you when it ends." if payload.get("job") else ""
-    return (f"{flag}Before I go ahead{who}, sir: I'd like to run this ({level} risk: "
-            f"{payload.get('reason', 'not read-only')}).\n\n$ {shlex.join(payload['argv'])}\nin {payload['cwd']}"
-            + (f"\n\nWhy: {payload['why']}" if payload.get("why") else "") + job
-            + "\n\nIs that what you meant? Reply yes to run it, no to cancel (or use the buttons).")
+    from jarvis.introspect import project_dir
+    who = " for the task I'm on" if payload.get("task_id") else " for the build" if payload.get("build_id") else ""
+    why = f" It's to {payload['why'][0].lower()}{payload['why'][1:].rstrip('.')}." if payload.get("why") else ""
+    where = "" if Path(payload["cwd"]) == project_dir() else f" (in {Path(payload['cwd']).name or payload['cwd']})"
+    job = " It runs in the background; I'll tell you when it's done." if payload.get("job") else ""
+    return (f"Sir, I need your yes{who} before I run this; {payload.get('reason', 'it is not routine')}."
+            f"{why}{job}\n\n$ {shlex.join(payload['argv'])}{where}\n\nYes or no?")
 
 
 def notify_commands(mem: Memory, tg, say=None) -> int:
