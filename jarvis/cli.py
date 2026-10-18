@@ -515,7 +515,9 @@ def _tick(mem: Memory) -> int:
             now = _now_local()
             quiet = _quiet(now.time().replace(tzinfo=None), _hours(config.QUIET_HOURS))
             from jarvis.canvas import from_memory
-            return heartbeat.run_heartbeat(mem, now, deadlines or from_memory(mem), quiet=quiet)
+            from jarvis import judge as _judge_mod
+            return heartbeat.run_heartbeat(mem, now, deadlines or from_memory(mem), quiet=quiet,
+                                           fast=_judge_mod.fast_engine())
         step("heartbeat", think)  # after Canvas and mail, before alerts: a message goes out this tick
     if tg or caller:
         step("alerts", lambda: "messaged %d, called %d" % _deliver(mem, announcer, caller))
@@ -882,7 +884,8 @@ def main() -> None:
                 deadlines = _deadlines(mem, now, max_age=FEED_CACHE_SECONDS)
             except (Exception, SystemExit):
                 deadlines = from_memory(mem)
-            print(heartbeat.run_heartbeat(mem, now, deadlines, force=True))
+            from jarvis import judge as _judge_mod
+            print(heartbeat.run_heartbeat(mem, now, deadlines, force=True, fast=_judge_mod.fast_engine()))
             print("(a message, if any, goes out with the next tick)")
         elif args.action in ("off", "on"):
             heartbeat.set_paused(mem, args.action == "off")

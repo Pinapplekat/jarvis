@@ -5,6 +5,7 @@ import pytest
 
 from jarvis import config, heartbeat
 from jarvis.canvas import Deadline
+from jarvis.judge import Answer
 from jarvis.memory import Memory
 
 TZ = ZoneInfo("America/Los_Angeles")
@@ -15,9 +16,9 @@ NOW = datetime(2026, 10, 17, 14, 0, tzinfo=TZ)
 def limits(monkeypatch):
     monkeypatch.setattr(config, "HEARTBEAT", True)
     monkeypatch.setattr(config, "HEARTBEAT_MIN_INTERVAL_MIN", 30)
+    monkeypatch.setattr(config, "HEARTBEAT_JEV_INTERVAL_MIN", 10)
     monkeypatch.setattr(config, "HEARTBEAT_MAX_RUNS_PER_DAY", 5)
-    monkeypatch.setattr(config, "HEARTBEAT_MAX_MSGS_PER_DAY", 2)
-    monkeypatch.setattr(config, "HEARTBEAT_MIN_MSG_GAP_MIN", 90)
+    monkeypatch.setattr(config, "HEARTBEAT_RUNAWAY_PER_DAY", 10)
 
 
 def thinker(*outs):
@@ -33,6 +34,18 @@ def thinker(*outs):
     return think
 
 
+def jev(worth, confidence=0.9, urgency="normal", fail=False):
+    calls = []
+
+    def decide(state, questions):
+        calls.append(state)
+        if fail:
+            raise RuntimeError("Jev down")
+        return {"worth_saying": Answer(worth, confidence), "urgency": Answer(urgency, 0.8)}
+    decide.calls = calls
+    return decide
+
+
 SAY = {"notify": True, "message": "ECON Module 3 is due in five hours, sir, and you haven't opened it.", "urgency": "high"}
 QUIET = {"notify": False, "message": "", "urgency": "low", "why": "nothing new"}
 
@@ -45,10 +58,9 @@ def later(minutes):
     return NOW + timedelta(minutes=minutes)
 
 
-def test_kill_switch_pause_and_quiet_hours_skip_the_model(monkeypatch):
+def test_kill_switch_and_pause_skip_everything(monkeypatch):
     m = Memory(":memory:")
     never = thinker(AssertionError("called"))
-    assert heartbeat.run_heartbeat(m, NOW, quiet=True, think=never) == "quiet hours"
     heartbeat.set_paused(m, True)
     assert heartbeat.run_heartbeat(m, NOW, think=never) == "paused"
     heartbeat.set_paused(m, False)
@@ -64,59 +76,92 @@ def test_quiet_by_default_and_every_decision_logged():
     assert "quiet: nothing new" in m.recent_events(1)[0]["content"]
 
 
-def test_a_message_becomes_a_high_alert_with_the_snapshot_as_data():
+def test_a_message_becomes_an_alert_and_joins_the_conversation():
     m = Memory(":memory:")
     think = thinker(SAY)
     assert heartbeat.run_heartbeat(m, NOW, [essay()], think=think) == "sent"
     [alert] = m.undelivered_alerts()
     assert alert["level"] == "high" and "Module 3" in alert["message"]
+    assert m.chat_history(1)[0]["text"] == SAY["message"]  # chat and the next look know it was said
     assert "ECON: Module 3 essay" in think.calls[0] and "untrusted" in think.calls[0]
     assert m.pending_actions() == []  # it never drafts email or queues anything
 
 
-def test_unchanged_snapshot_costs_nothing():
+def test_no_quota_important_things_keep_getting_through():
     m = Memory(":memory:")
+    think = thinker(SAY)
+    for i, hours in enumerate([20, 10, 5, 2]):  # four messages in a few hours: its call, not a cap
+        assert heartbeat.run_heartbeat(m, later(31 * i), [essay(hours - i * 0.5)], think=think) == "sent"
+    assert len(m.undelivered_alerts()) == 4
+
+
+def test_it_sees_what_it_already_said_and_whether_he_answered(monkeypatch):
+    m = Memory(":memory:")
+    m.add_chat("assistant", "Module 3 is due tonight, sir.")  # stamped with the real clock
+    now = datetime.now(TZ) + timedelta(seconds=5)
+    think = thinker(QUIET)
+    heartbeat.run_heartbeat(m, now, [], think=think)
+    assert "Module 3 is due tonight, sir." in think.calls[0] and "no reply since" in think.calls[0]
+    m.add_chat("user", "on it")
+    assert "he replied after" in heartbeat.conversation_today(m, now)
+
+
+def test_his_preferences_shape_the_look():
+    m = Memory(":memory:")
+    m.remember("preference", "heartbeat", "back off during the week; only deadlines")
     think = thinker(QUIET)
     heartbeat.run_heartbeat(m, NOW, [essay()], think=think)
-    assert heartbeat.run_heartbeat(m, later(31), [essay()], think=think) == "nothing changed"
+    assert "back off during the week; only deadlines" in think.calls[0]
+
+
+def test_quiet_hours_only_urgent_wakes_him_the_rest_waits_for_morning():
+    m = Memory(":memory:")
+    assert heartbeat.run_heartbeat(m, NOW, [essay()], quiet=True, think=thinker(SAY)) == "waiting for morning"
+    assert m.undelivered_alerts() == []
+    # not marked as seen, so the morning look reconsiders it even though nothing changed
+    assert heartbeat.run_heartbeat(m, later(121), [essay()], think=thinker(SAY)) == "sent"
+    m2 = Memory(":memory:")
+    urgent = {**SAY, "urgency": "urgent"}
+    assert heartbeat.run_heartbeat(m2, NOW, [essay(1)], quiet=True, think=thinker(urgent)) == "sent"
+    assert m2.undelivered_alerts()[0]["level"] == "urgent"
+
+
+def test_unchanged_snapshot_costs_nothing_but_time_running_out_is_a_change():
+    m = Memory(":memory:")
+    think = thinker(QUIET)
+    heartbeat.run_heartbeat(m, NOW, [essay(30)], think=think)
+    assert heartbeat.run_heartbeat(m, later(31), [essay(30)], think=think) == "nothing changed"
     assert len(think.calls) == 1
-    assert heartbeat.run_heartbeat(m, later(62), [essay(), essay(20, "Quiz 4")], think=think) == "quiet"
+    # the same deadline, now inside the 24-hour bucket: worth a fresh look
+    assert heartbeat.run_heartbeat(m, NOW + timedelta(hours=7), [essay(30)], think=think) == "quiet"
     assert len(think.calls) == 2
 
 
-def test_min_interval_between_runs():
+def test_min_interval_between_looks():
     m = Memory(":memory:")
     think = thinker(QUIET)
     heartbeat.run_heartbeat(m, NOW, [essay()], think=think)
     assert heartbeat.run_heartbeat(m, later(10), [essay(20, "new")], think=think) == "not due"
 
 
-def test_daily_run_cap(monkeypatch):
+def test_daily_claude_cap(monkeypatch):
     monkeypatch.setattr(config, "HEARTBEAT_MAX_RUNS_PER_DAY", 2)
     m = Memory(":memory:")
     think = thinker(QUIET)
     for i in range(2):
         heartbeat.run_heartbeat(m, later(31 * i), [essay(20 + i, f"t{i}")], think=think)
-    assert heartbeat.run_heartbeat(m, later(100), [essay(30, "new")], think=think) == "daily run cap reached"
+    assert heartbeat.run_heartbeat(m, later(100), [essay(30, "new")], think=think) == "daily Claude cap reached"
     assert len(think.calls) == 2
-    # a new day resets the counters
     assert heartbeat.run_heartbeat(m, NOW + timedelta(days=1), [essay(40, "x")], think=think) == "quiet"
 
 
-def test_daily_message_cap_and_min_gap():
+def test_runaway_guard_only_stops_a_broken_loop(monkeypatch):
+    monkeypatch.setattr(config, "HEARTBEAT_RUNAWAY_PER_DAY", 2)
     m = Memory(":memory:")
     think = thinker(SAY)
-    assert heartbeat.run_heartbeat(m, NOW, [essay(5, "a")], think=think) == "sent"
-    assert heartbeat.run_heartbeat(m, later(31), [essay(5, "b")], think=think) == "held back (min gap)"
-    assert heartbeat.run_heartbeat(m, later(95), [essay(5, "c")], think=think) == "sent"
-    assert heartbeat.run_heartbeat(m, later(200), [essay(5, "d")], think=think) == "held back (daily message cap)"
-    assert len(m.undelivered_alerts()) == 2
-
-
-def test_low_urgency_stays_quiet():
-    m = Memory(":memory:")
-    assert heartbeat.run_heartbeat(m, NOW, [essay()], think=thinker({**SAY, "urgency": "low"})) == "held back (low urgency)"
-    assert m.undelivered_alerts() == []
+    for i in range(2):
+        assert heartbeat.run_heartbeat(m, later(31 * i), [essay(5, f"t{i}")], think=think) == "sent"
+    assert heartbeat.run_heartbeat(m, later(100), [essay(5, "t9")], think=think) == "held back (runaway guard)"
 
 
 @pytest.mark.parametrize("out", [{"notify": "yes", "message": "x", "urgency": "high"}, {}, RuntimeError("CLI failed")])
@@ -124,6 +169,37 @@ def test_malformed_or_failed_output_stays_quiet(out):
     m = Memory(":memory:")
     assert heartbeat.run_heartbeat(m, NOW, [essay()], think=thinker(out)).startswith("quiet")
     assert m.undelivered_alerts() == []
+
+
+# ----- Jev's cheap first look -----
+def test_a_sure_no_from_jev_costs_no_claude_call():
+    m = Memory(":memory:")
+    fast, think = jev(False, 0.9), thinker(AssertionError("Claude called"))
+    assert heartbeat.run_heartbeat(m, NOW, [essay()], think=think, fast=fast) == "quiet (Jev)"
+    assert len(fast.calls) == 1 and "ECON: Module 3 essay" in fast.calls[0]
+    assert "Jev looks" in heartbeat.status(m, NOW)
+
+
+def test_jev_looks_more_often_than_claude_would():
+    m = Memory(":memory:")
+    fast = jev(False, 0.9)
+    heartbeat.run_heartbeat(m, NOW, [essay()], think=thinker(QUIET), fast=fast)
+    assert heartbeat.run_heartbeat(m, later(11), [essay(20, "new")], think=thinker(QUIET), fast=fast) == "quiet (Jev)"
+
+
+def test_jev_yes_or_unsure_hands_it_to_claude_who_makes_the_call():
+    for fast in (jev(True, 0.9, "high"), jev(False, 0.5)):
+        m = Memory(":memory:")
+        think = thinker(SAY)
+        assert heartbeat.run_heartbeat(m, NOW, [essay()], think=think, fast=fast) == "sent"
+        assert "fast first look" in think.calls[0]
+
+
+def test_jev_down_means_claude_looks():
+    m = Memory(":memory:")
+    think = thinker(QUIET)
+    assert heartbeat.run_heartbeat(m, NOW, [essay()], think=think, fast=jev(False, fail=True)) == "quiet"
+    assert len(think.calls) == 1
 
 
 def test_force_runs_even_when_nothing_changed():
@@ -141,9 +217,3 @@ def test_its_own_logs_dont_count_as_change():
     heartbeat.set_paused(m, False)
     m.log("answered", "1.2s total")
     assert heartbeat.snapshot(m, NOW, [essay()]) == first
-
-
-def test_status_line():
-    m = Memory(":memory:")
-    heartbeat.run_heartbeat(m, NOW, [essay()], think=thinker(QUIET))
-    assert "on; today 1/5 runs, 0/2 messages" in heartbeat.status(m, NOW)

@@ -95,9 +95,10 @@ SELF_APPROVE_CONFIDENCE = float(os.getenv("SELF_APPROVE_CONFIDENCE", "0.8"))
 # Thinking heartbeat: each tick, a cheap look at deadlines, mail and open loops; texts only when worth it.
 HEARTBEAT = os.getenv("HEARTBEAT", "1") == "1"
 HEARTBEAT_MIN_INTERVAL_MIN = int(os.getenv("HEARTBEAT_MIN_INTERVAL_MIN", "30"))
+HEARTBEAT_JEV_INTERVAL_MIN = int(os.getenv("HEARTBEAT_JEV_INTERVAL_MIN", "10"))  # Jev's first look is cheap
 HEARTBEAT_MAX_RUNS_PER_DAY = int(os.getenv("HEARTBEAT_MAX_RUNS_PER_DAY", "24"))  # cost cap
-HEARTBEAT_MAX_MSGS_PER_DAY = int(os.getenv("HEARTBEAT_MAX_MSGS_PER_DAY", "3"))
-HEARTBEAT_MIN_MSG_GAP_MIN = int(os.getenv("HEARTBEAT_MIN_MSG_GAP_MIN", "90"))
+# Not a quota: JARVIS judges how much it has said. This only stops a broken loop.
+HEARTBEAT_RUNAWAY_PER_DAY = int(os.getenv("HEARTBEAT_RUNAWAY_PER_DAY", "10"))
 HEARTBEAT_MODEL = os.getenv("HEARTBEAT_MODEL", "haiku")
 
 # JARVIS's own browser profile (logins Elijah made himself). Outside the repo; never sent anywhere.
