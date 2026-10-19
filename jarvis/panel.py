@@ -21,7 +21,9 @@ import re
 import subprocess
 import tempfile
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from jarvis import config
 from jarvis.memory import Memory
@@ -44,28 +46,145 @@ let statePath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1]
     : NSHomeDirectory() + "/Library/Application Support/JARVIS/panel/state.json"
 let ackPath = (statePath as NSString).deletingLastPathComponent + "/ack.json"
 
-final class Panel: NSObject, NSWindowDelegate {
+// Flat glass, hard edges, hairlines. One accent, amber, and only for what needs him soon.
+let line = NSColor.white.withAlphaComponent(0.18)
+let amber = NSColor(srgbRed: 1.0, green: 0.69, blue: 0.0, alpha: 1)
+
+func ago(_ t: Double) -> String {
+    let m = max(0, Int(Date().timeIntervalSince1970 - t)) / 60
+    return m < 60 ? "\(m) min ago" : m < 1440 ? "\(m / 60) hr ago" : "\(m / 1440) days ago"
+}
+
+// One line: the title. Under it, only once the content is over 15 minutes old, how long ago it was
+// synced (amber past an hour). A close mark while the pointer is over the bar; dragging it moves the window.
+final class Bar: NSView {
+    let title = NSTextField(labelWithString: "")
+    let status = NSTextField(labelWithString: "")
+    let close = NSButton(title: "", target: nil, action: nil)
+    var onClose: () -> Void = {}
+    var onHeight: () -> Void = {}
+    var syncedAt: Double? = nil
+    var stale: Bool { syncedAt.map { Date().timeIntervalSince1970 - $0 > 900 } ?? false }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        title.lineBreakMode = .byTruncatingTail
+        status.lineBreakMode = .byTruncatingTail
+        close.isBordered = false
+        close.attributedTitle = NSAttributedString(string: "×", attributes: [
+            .font: NSFont.systemFont(ofSize: 17, weight: .light), .foregroundColor: NSColor.white.withAlphaComponent(0.7)])
+        close.target = self
+        close.action = #selector(closeClicked)
+        close.alphaValue = 0
+        for v in [title, status, close] as [NSView] { addSubview(v) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.tick() }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    var height: CGFloat { stale ? 48 : 34 }
+
+    override func layout() {
+        super.layout()
+        let h = bounds.height
+        title.frame = NSRect(x: 14, y: stale ? h - 25 : (h - 17) / 2, width: bounds.width - 52, height: 17)
+        status.frame = NSRect(x: 14, y: 8, width: bounds.width - 52, height: 14)
+        status.isHidden = !stale
+        close.frame = NSRect(x: bounds.width - 34, y: (h - 24) / 2, width: 24, height: 24)
+    }
+
+    func set(_ text: String, syncedAt: Double?) {
+        title.attributedStringValue = NSAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: NSColor.white])
+        self.syncedAt = syncedAt
+        tick()
+    }
+
+    func tick() {
+        let was = status.isHidden
+        if let at = syncedAt {
+            let old = Date().timeIntervalSince1970 - at > 3600
+            status.attributedStringValue = NSAttributedString(string: "Synced \(ago(at))", attributes: [
+                .font: NSFont.systemFont(ofSize: 11), .foregroundColor: old ? amber : NSColor.white.withAlphaComponent(0.5)])
+        }
+        if was == stale { onHeight() }  // crossed the 15-minute mark: the bar grows a line
+        needsLayout = true
+    }
+
+    override func mouseEntered(with event: NSEvent) { close.animator().alphaValue = 1 }
+    override func mouseExited(with event: NSEvent) { close.animator().alphaValue = 0 }
+    override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
+    @objc func closeClicked() { onClose() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.white.withAlphaComponent(0.14).setFill()
+        NSRect(x: 0, y: 0, width: bounds.width, height: 1).fill()
+    }
+}
+
+final class Panel: NSObject, NSWindowDelegate, WKNavigationDelegate {
     var window: NSPanel!
+    var root: NSView!
     var web: WKWebView!
+    var bar: Bar!
     var seq = -1
     var lastMod: Date? = nil
+    var fit = false
 
     override init() {
         super.init()
-        let style: NSWindow.StyleMask = [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel]
-        window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 560, height: 400), styleMask: style,
-                         backing: .buffered, defer: true)
+        let style: NSWindow.StyleMask = [.borderless, .resizable, .nonactivatingPanel]
+        let frame = NSRect(x: 0, y: 0, width: 560, height: 400)
+        window = NSPanel(contentRect: frame, styleMask: style, backing: .buffered, defer: true)
         window.title = "JARVIS"
         window.level = .floating
         window.isReleasedWhenClosed = false
         window.hidesOnDeactivate = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.appearance = NSAppearance(named: .darkAqua)
         window.delegate = self
-        web = WKWebView(frame: window.contentView!.bounds, configuration: WKWebViewConfiguration())
-        web.autoresizingMask = [.width, .height]
-        window.contentView!.addSubview(web)
+
+        root = NSView(frame: frame)
+        root.wantsLayer = true
+        root.layer!.cornerRadius = 0  // a screen, not a card
+        root.layer!.masksToBounds = true
+        root.layer!.borderWidth = 1
+        root.layer!.borderColor = line.cgColor
+        window.contentView = root
+        let glass = NSVisualEffectView(frame: frame)  // translucent: what's behind shows through, blurred
+        glass.material = .hudWindow
+        glass.blendingMode = .behindWindow
+        glass.state = .active
+        glass.autoresizingMask = [.width, .height]
+        root.addSubview(glass)
+        let tint = NSView(frame: frame)  // darkens what's behind, without coloring it
+        tint.wantsLayer = true
+        tint.layer!.backgroundColor = NSColor.black.withAlphaComponent(0.35).cgColor
+        tint.autoresizingMask = [.width, .height]
+        root.addSubview(tint)
+
+        bar = Bar(frame: .zero)
+        bar.onClose = { [unowned self] in self.window.orderOut(nil); self.ack(self.seq, "closed") }
+        bar.onHeight = { [unowned self] in if self.fit { self.fitToContent() } else { self.layout() } }
+        root.addSubview(bar)
+        web = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        web.setValue(false, forKey: "drawsBackground")  // let the glass show through the page
+        web.navigationDelegate = self
+        root.addSubview(web)
+        layout()
         Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in self.poll() }
     }
+
+    func layout() {
+        let b = root.bounds, h = bar.height
+        bar.frame = NSRect(x: 0, y: b.height - h, width: b.width, height: h)
+        web.frame = NSRect(x: 0, y: 0, width: b.width, height: b.height - h)
+    }
+    func windowDidResize(_ notification: Notification) { layout() }
 
     func poll() {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: statePath),
@@ -83,11 +202,14 @@ final class Panel: NSObject, NSWindowDelegate {
         }
         if newSeq == seq { return }
         seq = newSeq
-        place(obj["width"] as? Double ?? 560, obj["height"] as? Double ?? 400)
         window.title = obj["title"] as? String ?? "JARVIS"
+        bar.set(window.title, syncedAt: (obj["source"] as? [String: Any])?["at"] as? Double)
+        place(obj["width"] as? Double ?? 560, obj["height"] as? Double ?? 400)
         if let s = obj["url"] as? String, let u = URL(string: s), u.scheme == "https" || u.scheme == "http" {
+            fit = false
             web.load(URLRequest(url: u))
         } else {
+            fit = true
             web.loadHTMLString(obj["html"] as? String ?? "", baseURL: nil)
         }
         window.orderFrontRegardless()
@@ -97,6 +219,24 @@ final class Panel: NSObject, NSWindowDelegate {
     func place(_ w: Double, _ h: Double) {
         guard let screen = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame else { return }
         window.setFrame(NSRect(x: screen.maxX - w - 16, y: screen.maxY - h - 16, width: w, height: h), display: true)
+        layout()
+    }
+
+    // Our own pages size the window to what they hold (up to most of the screen's height); the top stays put.
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        if fit { fitToContent() }
+    }
+
+    func fitToContent() {
+        web.evaluateJavaScript("Math.ceil(document.body.getBoundingClientRect().height)") { [weak self] r, _ in
+            guard let self = self, let content = r as? Double else { return }
+            let f = self.window.frame
+            let room = (self.window.screen ?? NSScreen.main)?.visibleFrame.height ?? 800
+            let h = min(room * 0.75, max(80, CGFloat(content) + self.bar.height))
+            if abs(h - f.height) < 1 { self.layout(); return }
+            self.window.setFrame(NSRect(x: f.minX, y: f.maxY - h, width: f.width, height: h), display: true)
+            self.layout()
+        }
     }
 
     func ack(_ s: Int, _ what: String) {
@@ -237,7 +377,7 @@ def resize(mem: Memory, step: int, wait=_wait_ack) -> str:
     size = max(0, min(int(st.get("size", DEFAULT_SIZE)) + step, len(SIZES) - 1))
     if size == st.get("size", DEFAULT_SIZE):
         return "That's as " + ("big" if step > 0 else "small") + " as it goes, sir."
-    _present(mem, {k: st[k] for k in ("title", "html", "url") if k in st} | {"size": size}, wait)
+    _present(mem, {k: st[k] for k in ("title", "html", "url", "source") if k in st} | {"size": size}, wait)
     return "Bigger, sir." if step > 0 else "Smaller, sir."
 
 
@@ -253,9 +393,22 @@ def back(mem: Memory, wait=_wait_ack) -> str:
 # ----- rendering -----
 CSP = ("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; "
        "style-src 'unsafe-inline'; script-src 'unsafe-inline'; font-src data:\">")
-STYLE = ("<style>html,body{margin:0;background:#101418;color:#e8eef2;font:15px -apple-system,Helvetica,sans-serif}"
-         "main{padding:18px 20px}h1{font-size:18px;margin:0 0 10px;color:#8fd3ff}ul{padding-left:18px;margin:0}"
-         "li{margin:4px 0}img{max-width:100%;max-height:100vh;display:block;margin:auto}svg{width:100%;height:auto}"
+STYLE = ("<style>:root{color-scheme:dark;--amber:#ffb000;--line:rgba(255,255,255,.1)}"
+         "html,body{margin:0;background:transparent;color:#fff;font:13px -apple-system,sans-serif}"
+         "body{display:flow-root}main{padding:0 0 8px}"
+         "ul{list-style:none;padding:0;margin:0}li{padding:5px 14px;border-top:1px solid var(--line)}"
+         "li:first-child{border-top:0}"
+         "h2{margin:0;padding:10px 14px 3px;font-size:12px;font-weight:600;color:rgba(255,255,255,.55)}"
+         "h2.today{color:var(--amber)}"
+         "li.row{display:flex;align-items:baseline;gap:8px;border:0;padding:4px 14px}"
+         ".title{flex:1;min-width:0}"
+         ".at{font-size:11px;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.6);white-space:nowrap}"
+         ".course{font-size:11px;color:rgba(255,255,255,.5);white-space:nowrap}"
+         ".dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:5px;vertical-align:1px}"
+         ".done .title{text-decoration:line-through;color:rgba(255,255,255,.35)}.done .at{visibility:hidden}"
+         ".note{margin:8px 14px 0;color:rgba(255,255,255,.6);font-style:italic}"
+         ".empty{padding:10px 14px;color:rgba(255,255,255,.6)}"
+         "img{max-width:100%;max-height:100vh;display:block;margin:auto}svg{width:100%;height:auto;display:block}"
          "</style>")
 
 
@@ -267,7 +420,73 @@ def page(body: str, title: str = "") -> str:
 
 def card(title: str, lines: list[str]) -> dict:
     items = "".join(f"<li>{htmllib.escape(str(x))}</li>" for x in lines[:20])
-    return {"title": title[:80], "html": page(f"<main><h1>{htmllib.escape(title)}</h1><ul>{items}</ul></main>", title)}
+    return {"title": title[:80], "html": page(f"<main><ul>{items}</ul></main>", title)}  # the bar shows the title
+
+
+COURSE_COLORS = ["#7fb2ff", "#86d6a0", "#f0a0c8", "#c3a8ff", "#8fd8d8"]
+
+
+def _clock(due: datetime) -> str:
+    """Due at the end of the day is the usual case and goes unsaid; anything else gets its time."""
+    return "" if (due.hour, due.minute) == (23, 59) else f"{due:%-I:%M %p}"
+
+
+def deadlines(mem: Memory, now: datetime | None = None) -> dict:
+    """What's due this week (through Sunday; from Saturday on, through next Sunday), grouped by day, with
+    what's already done struck through, plus work Canvas marks missing. Read from what the background sync
+    already saved (Canvas's feed and /weekly's list), so it's instant."""
+    from jarvis.canvas import COURSE_CODE, course_name, from_feed, from_memory, merge, spoken_course
+    tz = ZoneInfo(config.TIMEZONE)
+    now = now or datetime.now(tz)
+    feed = config.DATA_DIR / "canvas_feed.ics"
+    canvas_items, typed_items = from_feed(feed.read_bytes(), tz) if feed.exists() else [], from_memory(mem)
+    items = merge(canvas_items, typed_items)
+    if feed.exists():
+        source = {"label": "Canvas", "at": feed.stat().st_mtime}
+    else:
+        stamps = [datetime.fromisoformat(r["updated_at"]).timestamp() for r in mem.deadlines()]
+        source = {"label": "Weekly plan", "at": max(stamps, default=now.timestamp())}
+    # Say classes the way he does: what he typed in /weekly for that class, else its subject.
+    codes = {d.course for d in items if COURSE_CODE.fullmatch(d.course)}
+    typed = {course_name(d.course, codes): d.course for d in typed_items}
+    names = sorted({spoken_course(d.course, typed) for d in items if d.kind == "due"})
+    color = {n: COURSE_COLORS[i % len(COURSE_COLORS)] for i, n in enumerate(names)}
+
+    today = datetime.combine(now.date(), datetime.min.time(), tz)
+    span = 6 - now.weekday() + (7 if now.weekday() >= 5 else 0)  # days after today the list runs to
+    end = today + timedelta(days=span + 1)
+    monday = today - timedelta(days=now.weekday())
+    # Past due: only what Canvas says is missing, or what's marked done. The feed can't see submissions,
+    # so anything else that has passed is most likely handed in, and calling it late would be a guess.
+    items = [d for d in items if d.kind == "due" and d.due < end
+             and (d.due >= now or d.status == "missing" or (d.done and d.due >= monday))]
+    groups: dict[str, list] = {}
+    for d in items:
+        n = (d.due.astimezone(tz).date() - now.date()).days
+        day = d.due.astimezone(tz).date()
+        name = ("Missing" if not d.done else "Done earlier this week") if n < 0 else (
+            "Today" if n == 0 else "Tomorrow" if n == 1 else f"Next {day:%A}" if n >= 7 else f"{day:%A}")
+        groups.setdefault(name, []).append(d)
+    order = sorted(groups, key=lambda k: (k == "Done earlier this week", k != "Missing", min(d.due for d in groups[k])))
+    parts = []
+    for name in order:
+        rows = "".join(
+            f'<li class="row{" done" if d.done else ""}"><span class="title">{htmllib.escape(d.title)}</span>'
+            f'<span class="at">{_clock(d.due.astimezone(tz))}</span><span class="course">'
+            f'<i class="dot" style="background:{color[spoken_course(d.course, typed)]}"></i>'
+            f'{htmllib.escape(spoken_course(d.course, typed))}</span></li>'
+            for d in sorted(groups[name], key=lambda d: (d.done, d.due)))
+        today_class = ' class="today"' if name == "Today" and any(not d.done for d in groups[name]) else ""
+        parts.append(f"<h2{today_class}>{name}</h2><ul>{rows}</ul>")
+    open_by_day = {k: sum(1 for d in v if not d.done) for k, v in groups.items() if k not in ("Missing", "Done earlier this week")}
+    heavy = sorted(open_by_day.items(), key=lambda kv: -kv[1])
+    if heavy and heavy[0][1] >= 3 and (len(heavy) == 1 or heavy[1][1] < heavy[0][1]):
+        parts.append(f'<p class="note">{heavy[0][0]}\'s the heavy one, sir.</p>')
+    left = sum(1 for d in items if not d.done)
+    when = "by next Sunday" if span > 6 else "this week"
+    title = f"{left} due {when}" if left else f"Nothing left {when}"
+    body = f"<main>{''.join(parts)}</main>" if parts else '<main><p class="empty">Nothing due, sir.</p></main>'
+    return {"title": title, "html": page(body, title), "source": source}
 
 
 def image(path: str, mem: Memory | None = None) -> dict:
@@ -283,7 +502,6 @@ def image(path: str, mem: Memory | None = None) -> dict:
     mime = IMAGE_TYPES[full.suffix.lower()]
     title = full.name
     if (m := re.match(r"screen-(\d{8})-(\d{6})", full.stem)):  # "your screenshot from Sun 3:55 PM"
-        from datetime import datetime
         title = f"your screenshot from {datetime.strptime(m[1] + m[2], '%Y%m%d%H%M%S'):%a %-I:%M %p}"
     return {"title": title, "html": page(f"<img src=\"data:{mime};base64,{data}\" alt=\"{htmllib.escape(title)}\">", title)}
 
@@ -394,16 +612,17 @@ def plot(expr: str, x_min: float = -10, x_max: float = 10, title: str = "") -> d
         pen = "L"
     grid = []
     if x_min < 0 < x_max:
-        grid.append(f'<line x1="{sx(0):.1f}" y1="0" x2="{sx(0):.1f}" y2="{H}" stroke="#4a5560"/>')
+        grid.append(f'<line x1="{sx(0):.1f}" y1="0" x2="{sx(0):.1f}" y2="{H}" stroke="rgba(95,215,255,.45)"/>')
     if lo < 0 < hi:
-        grid.append(f'<line x1="0" y1="{sy(0):.1f}" x2="{W}" y2="{sy(0):.1f}" stroke="#4a5560"/>')
-    labels = [f'<text x="4" y="14" fill="#8a96a0" font-size="12">y max {hi - pad:.3g}</text>',
-              f'<text x="4" y="{H - 6}" fill="#8a96a0" font-size="12">y min {lo + pad:.3g}</text>',
-              f'<text x="{W - 4}" y="{H - 6}" fill="#8a96a0" font-size="12" text-anchor="end">x {x_min:g} to {x_max:g}</text>']
+        grid.append(f'<line x1="0" y1="{sy(0):.1f}" x2="{W}" y2="{sy(0):.1f}" stroke="rgba(95,215,255,.45)"/>')
+    labels = [f'<text x="4" y="14" fill="#5fd7ff" fill-opacity=".7" font-size="11" font-family="ui-monospace,Menlo">y max {hi - pad:.3g}</text>',
+              f'<text x="4" y="{H - 6}" fill="#5fd7ff" fill-opacity=".7" font-size="11" font-family="ui-monospace,Menlo">y min {lo + pad:.3g}</text>',
+              f'<text x="{W - 4}" y="{H - 6}" fill="#5fd7ff" fill-opacity=".7" font-size="11" font-family="ui-monospace,Menlo" text-anchor="end">x {x_min:g} to {x_max:g}</text>']
     label = title or f"y = {expr}"
     svg = (f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg">{"".join(grid)}'
-           f'<path d="{" ".join(path)}" fill="none" stroke="#8fd3ff" stroke-width="2.5"/>{"".join(labels)}</svg>')
-    return {"title": label[:80], "html": page(f"<main><h1>{htmllib.escape(label)}</h1>{svg}</main>", label)}
+           f'<path d="{" ".join(path)}" fill="none" stroke="#5fd7ff" stroke-width="2"/>'
+           f'{"".join(labels)}</svg>')
+    return {"title": label[:80], "html": page(f"<main>{svg}</main>", label)}
 
 
 def show(mem: Memory, action: dict, wait=_wait_ack) -> str:
@@ -425,6 +644,8 @@ def render(mem: Memory, action: dict) -> dict:
         content = image(str(action.get("path") or "latest"), mem)
         if title:
             content["title"] = title[:80]
+    elif kind == "deadlines":
+        content = deadlines(mem)
     elif kind == "card":
         lines = action.get("lines") or []
         content = card(title or "JARVIS", [str(x) for x in lines] if isinstance(lines, list) else [str(lines)])
@@ -433,7 +654,7 @@ def render(mem: Memory, action: dict) -> dict:
     elif kind == "url":
         content = web(str(action.get("url") or ""))
     else:
-        raise ValueError(f"can't show kind {kind!r} (plot, image, card, html or url)")
+        raise ValueError(f"can't show kind {kind!r} (plot, image, deadlines, card, html or url)")
     return content
 
 

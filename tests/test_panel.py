@@ -82,3 +82,30 @@ def test_screenshot_titles_are_spoken_nicely(tmp_path, monkeypatch):
     monkeypatch.setattr(attachments, "SHOTS_DIR", tmp_path)
     (tmp_path / "screen-20261018-155546.png").write_bytes(b"\x89PNG\r\n\x1a\nx")
     assert panel.image("latest")["title"] == "your screenshot from Sun 3:55 PM"
+
+
+def test_deadlines_this_week_grouped_by_day(monkeypatch, tmp_path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from jarvis.canvas import import_deadlines
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)  # no Canvas feed cached: the weekly list only
+    tz = ZoneInfo(config.TIMEZONE)
+    now = datetime(2026, 10, 19, 10, 0, tzinfo=tz)  # a Monday
+    m = Memory(":memory:")
+    import_deadlines(m, [{"course": "English", "title": "Read ch. 4", "due": "2026-10-22 10:30"},
+                         {"course": "English", "title": "Essay", "due": "2026-10-22"},
+                         {"course": "English", "title": "Poem", "due": "2026-10-22"},
+                         {"course": "Econ", "title": "Problem set", "due": "2026-10-25"},
+                         {"course": "English", "title": "Wiki entry", "due": "2026-10-20"},
+                         {"course": "English", "title": "Old essay", "due": "2026-10-12"},
+                         {"course": "Econ", "title": "Quiz", "due": "2026-10-19 09:00", "done": True},
+                         {"course": "English", "title": "Next Monday", "due": "2026-10-26"}], tz)
+    out = panel.deadlines(m, now)
+    html = out["html"]
+    assert html.index("Tomorrow") < html.index("Wiki entry") < html.index("Thursday") < html.index("Sunday")
+    assert "Old essay" not in html and "Next Monday" not in html  # passed (status unknown) / not this week
+    assert "10:30 AM" in html and "11:59" not in html  # end of day goes unsaid
+    assert '<li class="row done"><span class="title">Quiz' in html  # finished work stays, struck through
+    assert "Thursday's the heavy one, sir." in html and "·" not in html
+    assert out["title"] == "5 due this week" and out["source"]["label"] == "Weekly plan"
+    assert panel.deadlines(m, datetime(2026, 10, 24, 10, 0, tzinfo=tz))["title"] == "2 due by next Sunday"

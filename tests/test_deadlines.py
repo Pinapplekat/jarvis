@@ -52,3 +52,27 @@ def test_done_deadlines_dont_alert():
     assert raise_deadline_alerts(m, from_memory(m), now) == 1
     (alert,) = m.undelivered_alerts()
     assert alert["level"] == "high" and "Module 3" in alert["message"]
+
+
+def test_merge_gives_one_name_per_class_and_drops_hand_copies_of_canvas_work():
+    from jarvis.canvas import Deadline, course_name
+    assert course_name("English", {"ENGL&101", "CMST&101"}) == "ENGL&101"
+    assert course_name("Econ", {"ENGL&101"}) == "Econ"  # no Canvas class to match: left as typed
+    canvas = [Deadline("canvas:1", "ENGL&101", "Exploratory/Lyric Essay Reflection",
+                       datetime(2026, 10, 26, 10, 30, tzinfo=TZ), None, "unknown", False)]
+    m = Memory(":memory:")
+    import_deadlines(m, [
+        {"course": "English", "title": "Exploratory/Lyric Essay Reflection", "due": "2026-10-19", "done": True},
+        {"course": "English", "title": "Discord discussion response", "due": "2026-10-21"},
+        {"course": "English", "title": "Exploratory/Lyric Essay Reflection", "due": "2026-12-01"},  # a later one
+    ], TZ)
+    merged = merge(canvas, from_memory(m))
+    assert [(d.course, d.title[:8], d.due.day) for d in merged] == [
+        ("ENGL&101", "Discord ", 21), ("ENGL&101", "Explorat", 26), ("ENGL&101", "Explorat", 1)]
+    assert merged[1].key == "canvas:1" and merged[1].done  # Canvas's date, the hand-kept "done"
+
+
+def test_spoken_course_names():
+    from jarvis.canvas import spoken_course
+    assert spoken_course("ENGL&101") == "English" and spoken_course("CMST&101") == "Communication"
+    assert spoken_course("ENGL&101", {"ENGL&101": "Writing"}) == "Writing" and spoken_course("Econ") == "Econ"

@@ -2,7 +2,7 @@
 
 import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -214,10 +214,59 @@ def import_deadlines(mem: Memory, items: list[dict], tz: ZoneInfo, source: str =
     return len(items)
 
 
+def course_name(course: str, codes: set[str]) -> str:
+    """One name per class: a hand-typed 'English' becomes Canvas's 'ENGL&101' when exactly one Canvas
+    course has that subject. Anything else is left as typed."""
+    if COURSE_CODE.fullmatch(course):
+        return course
+    word = course.strip().upper()
+    hits = {c for c in codes if (subj := re.match(r"[A-Z]+", c)[0]) and len(word) >= 3
+            and (word.startswith(subj) or subj.startswith(word[:4]))}
+    return hits.pop() if len(hits) == 1 else course
+
+
+SUBJECTS = {"ENGL": "English", "CMST": "Communication", "ECON": "Econ", "MATH": "Math", "PSYC": "Psychology",
+            "BIOL": "Biology", "CHEM": "Chemistry", "HIST": "History", "PHYS": "Physics", "SOC": "Sociology",
+            "PHIL": "Philosophy", "ART": "Art", "CS": "CS", "CSC": "CS", "MUSC": "Music", "SPAN": "Spanish"}
+
+
+def spoken_course(course: str, typed: dict[str, str] | None = None) -> str:
+    """'ENGL&101' -> what he calls it: his own name for it from /weekly if there is one, else the subject."""
+    if typed and course in typed:
+        return typed[course]
+    m = re.match(r"([A-Z]+)\s?&?\s?\d", course)
+    return SUBJECTS.get(m[1], course) if m else course
+
+
+def _plain_title(title: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", re.sub(r"\([^)]*\)", "", title.lower())).split())
+
+
+def same_work(a: Deadline, b: Deadline) -> bool:
+    """The same assignment listed twice: same class, same title give or take a note in brackets or a
+    trailing word, due within a week of each other."""
+    ta, tb = _plain_title(a.title), _plain_title(b.title)
+    close = abs(a.due - b.due) <= timedelta(days=7)
+    return a.course == b.course and close and min(len(ta), len(tb)) >= 6 and (ta.startswith(tb) or tb.startswith(ta))
+
+
 def merge(primary: list[Deadline], overrides: list[Deadline]) -> list[Deadline]:
-    """Overrides replace primary items with the same key."""
+    """Overrides replace primary items with the same key. Class names are made to agree, and a hand-added
+    item that repeats one Canvas already has is dropped: Canvas's date wins, the hand-kept 'done' carries over."""
+    codes = {d.course for d in primary + overrides if COURSE_CODE.fullmatch(d.course)}
+    primary = [replace(d, course=course_name(d.course, codes)) for d in primary]
+    overrides = [replace(d, course=course_name(d.course, codes)) for d in overrides]
     by_key = {d.key: d for d in primary}
     by_key.update({d.key: d for d in overrides})
+    for o in overrides:
+        if o.key.startswith("canvas:") or o.kind != "due":
+            continue
+        twin = next((d for d in by_key.values() if d.key.startswith("canvas:") and d.kind == "due"
+                     and same_work(d, o)), None)
+        if twin:
+            del by_key[o.key]
+            if o.done and not twin.done:
+                by_key[twin.key] = replace(twin, status="submitted")
     return sorted(by_key.values(), key=lambda d: d.due)
 
 
