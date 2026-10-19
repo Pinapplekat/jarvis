@@ -233,13 +233,25 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
     phone calls.
     `on_first(sentence)` fires as soon as the reply's first sentence has streamed in;
     `on_text(so_far)` gets all of the streaming reply text (the desk mic speaks it as it comes)."""
+    from jarvis import timing
+    own = timing.ensure("phone" if phone else "voice_note" if spoken else "telegram")
+    try:
+        return _answer_timed(mem, text, on_progress, spoken, warm, on_first, on_text, phone, send_photo)
+    finally:
+        if own:
+            timing.finish(mem)
+
+
+def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_first, on_text, phone: bool,
+                  send_photo) -> str:
     import time
 
-    from jarvis import judge, router
+    from jarvis import judge, router, timing
     from jarvis.canvas import format_digest, from_memory
     from jarvis.chat import FirstSentence, respond
     hit = router.media_command(text) if config.SIRI else None
     if hit:  # "pause", "skip", "volume 40": done at once, no model round trip
+        timing.mark("instant", 0)
         return _media_fast(mem, text, hit, spoken=spoken, phone=phone)
     now = _now_local()
     started = time.time()
@@ -248,6 +260,7 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
                          on_error=lambda e: mem.log("route_failed", str(e)[:200]))
     blocks = route.blocks
     routed = time.time() - started
+    timing.mark("route", routed)
     runner, model, temp = _runner_for(route, warm)
     first = FirstSentence(on_first) if on_first else None
     feeds = [f for f in (first.feed if first else None, on_text) if f]
@@ -261,10 +274,12 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
         deadlines_text = format_digest(deadlines, now, days=14)
     message = (f"(on the phone, transcribed) {text}" if phone
                else f"(said out loud, transcribed) {text}" if spoken else text)
+    inbox = _inbox_text(mem) if "inbox" in blocks else ""
+    activity = _activity(mem) if "activity" in blocks else ""
     asked = time.time()
+    timing.mark("context", asked - started - routed)
     reply = respond(mem, message, now, deadlines_text, runner=runner, on_progress=on_progress,
-                    inbox_text=_inbox_text(mem) if "inbox" in blocks else "",
-                    activity_text=_activity(mem) if "activity" in blocks else "", blocks=blocks,
+                    inbox_text=inbox, activity_text=activity, blocks=blocks,
                     on_text=stream, spotter=_page_spotter(), send_photo=send_photo,
                     peek=(route.look, route.look_why), judge=judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])))
     total = time.time() - started
@@ -355,10 +370,13 @@ def _listen(mem: Memory) -> None:
 
     def on_text(update):
         from jarvis.status import set_state
+        from jarvis import timing
         set_state("telegram", "working", detail="answering a voice note" if update.via_voice else "answering")
+        timing.start("voice_note" if update.via_voice else "telegram")
         try:
             _on_text(update)
         finally:
+            timing.finish(mem)
             set_state("telegram", "idle")
 
     def _on_text(update):
@@ -441,6 +459,7 @@ def _listen(mem: Memory) -> None:
     announcer = Announcer(tg, mem)
 
     print(f"Listening as chat {config.TELEGRAM_CHAT_ID}", flush=True)
+    outage = Outage()
     while True:
         try:
             deliver_reminders(mem, announcer, _now_local())
@@ -450,10 +469,39 @@ def _listen(mem: Memory) -> None:
             # Short long-poll so reminders go out within ~25s of their time.
             handle_updates(mem, tg, int(config.TELEGRAM_CHAT_ID), on_text, wait=25, on_button=on_button,
                            transcribe=_transcribe, on_location=on_location)
-        except Exception as e:  # network blips, Telegram hiccups: wait and reconnect
-            print(f"listen error: {e}", flush=True)
-            mem.log("listen_error", str(e)[:300])
-            time.sleep(10)
+            if (note := outage.ok()):
+                print(note, flush=True)
+                mem.log("listen_error", note)
+        except Exception as e:  # network blips, Telegram hiccups: wait (backing off) and reconnect
+            wait, log = outage.failed(str(e))
+            if log:
+                print(f"listen error: {e}", flush=True)
+                mem.log("listen_error", str(e)[:300])
+            time.sleep(wait)
+
+
+class Outage:
+    """Backoff for the Telegram loop while the network is down: 5 s, doubling to 2 min, and only the
+    first error of an outage (and every 20th) is logged, plus one line when it's back."""
+
+    def __init__(self, first: float = 5.0, most: float = 120.0, clock=None):
+        import time
+        self.first, self.most, self.clock = first, most, clock or time.time
+        self.failures, self.since = 0, None
+
+    def failed(self, error: str = "") -> tuple[float, bool]:
+        if self.failures == 0:
+            self.since = self.clock()
+        self.failures += 1
+        wait = min(self.most, self.first * 2 ** (self.failures - 1))
+        return wait, self.failures == 1 or self.failures % 20 == 0
+
+    def ok(self) -> str | None:
+        if not self.failures:
+            return None
+        note = f"Telegram back after {self.failures} failed polls over {self.clock() - self.since:.0f}s"
+        self.failures, self.since = 0, None
+        return note
 
 
 def _phone_ready() -> bool:
@@ -1072,6 +1120,15 @@ def main() -> None:
     if args.cmd == "latency":
         print(latency_summary([e["content"] for e in mem.db.execute(
             "SELECT content FROM events WHERE kind IN ('answered', 'first_audio') ORDER BY id DESC LIMIT ?", (args.last,))]))
+        from jarvis.timing import summary
+        rows = []
+        for (content,) in mem.db.execute("SELECT content FROM events WHERE kind = 'timing' ORDER BY id DESC LIMIT ?",
+                                         (args.last,)):
+            try:
+                rows.append(json.loads(content))
+            except ValueError:
+                pass
+        print("\n" + summary(rows))
         return
     if args.cmd == "ears":
         from jarvis import speech
@@ -1088,7 +1145,8 @@ def main() -> None:
         Ears(answer=lambda text, on_text=None: _spoken_confirmation(mem, text)
              or _answer(mem, text, spoken=True, warm=warm, on_text=on_text),
              transcribe=speech.transcribe, log=log, after_reply=after_reply,
-             timing=lambda ms: mem.log("first_audio", f"time_to_first_audio={ms}ms")).run_forever()
+             timing=lambda ms: mem.log("first_audio", f"time_to_first_audio={ms}ms"),
+             on_turn=lambda steps: mem.log("timing", json.dumps(steps))).run_forever()
         return
     if args.cmd == "projects":
         from jarvis import projects

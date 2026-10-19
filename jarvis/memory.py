@@ -3,6 +3,11 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# Bookkeeping events (timings, network blips, archives) that only crowd the model's context.
+NOISY_EVENTS = {"answered", "first_audio", "timing", "listen_error", "fact_archived", "canvas_sync", "spoke",
+                "warm_fallback", "jev_fallback", "route_failed", "screen_peek", "tick_error", "watch_error",
+                "inspect", "web_open", "reported", "report_compose_failed", "telegram_retry"}
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS facts (
     id INTEGER PRIMARY KEY,
@@ -577,5 +582,6 @@ class Memory:
             for p in self.projects()
         ]
         lines.append("\n# Recent events")
-        lines += [f"- {e['at']} {e['kind']}: {e['content']}" for e in self.recent_events()]
+        events = [e for e in self.recent_events(120) if e["kind"] not in NOISY_EVENTS][:20]
+        lines += [f"- {e['at']} {e['kind']}: {e['content'][:300]}" for e in events]
         return "\n".join(lines)

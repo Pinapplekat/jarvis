@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from jarvis import config
+from jarvis import config, timing
 from jarvis.memory import Memory
 from jarvis.attention import explain_recent
 from jarvis.journal import journal_for_prompt
@@ -679,6 +679,7 @@ class FirstSentence:
     def feed(self, text_so_far: str) -> None:
         if self.sentence is None and (split := split_first_sentence(text_so_far)):
             self.sentence, self.at = tidy(split[0]), time.time()
+            timing.since_start("first_text")
             self.on_first(self.sentence)
 
 
@@ -719,7 +720,9 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
     if peek is not None:
         if peek[0]:
             on_progress()
-        if (seen := peek_at_screen(mem, message, peek, vision)):
+        with timing.step("peek"):
+            seen = peek_at_screen(mem, message, peek, vision)
+        if seen:
             findings.append((PEEK_LABEL, seen))
 
     def look(actions: list[dict]) -> None:
@@ -850,15 +853,17 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
         open_urls(find_urls(message))
         for round_ in range(MAX_ROUNDS):
             stream = {"on_text": on_text} if on_text and round_ == 0 else {}
-            out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
-                                                          activity_text, blocks, findings), **stream)
+            with timing.step(f"model_{round_ + 1}"):
+                out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
+                                                              activity_text, blocks, findings), **stream)
             asked_to_look = next((a for a in out.get("actions") or [] if a.get("type") == "look_at_screen"), None)
             if asked_to_look is not None:
                 # The look's text answer is the reply. The image is input only: the vision call has no
                 # tools and can't propose actions, so nothing on the screen can do anything.
                 on_progress()
                 try:
-                    answer = look_at_screen(message, str(asked_to_look.get("question") or "")[:300], vision)
+                    with timing.step("vision"):
+                        answer = look_at_screen(message, str(asked_to_look.get("question") or "")[:300], vision)
                     mem.log("screenshot", "looked at his screen privately (not sent; picture deleted)")
                 except Exception as e:
                     answer = f"I couldn't see your screen just now, sir ({str(e)[:120]})."
@@ -878,8 +883,9 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                     findings.append(("your last look-ups", "(nothing new came back: they were repeats or "
                                      "not possible. Answer now with what you know, and don't say you're "
                                      "checking or will report back.)"))
-                    out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
-                                                             activity_text, blocks, findings))
+                    with timing.step("model_retry"):
+                        out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
+                                                                 activity_text, blocks, findings))
                 break
     except Exception as e:
         reply = f"Sorry, I couldn't think just now ({e})."
@@ -887,7 +893,8 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
         reply = str(out.get("reply") or "").strip() or "(no reply)"
         actions = [a for a in out.get("actions") or [] if a.get("type") not in GATHER]
         said: list[str] = []
-        problems = apply_actions(mem, actions, now.tzinfo, ran, send_photo=send_photo, said=said)
+        with timing.step("actions"):
+            problems = apply_actions(mem, actions, now.tzinfo, ran, send_photo=send_photo, said=said)
         if said:
             reply += "\n\n" + " ".join(said)
         if problems:

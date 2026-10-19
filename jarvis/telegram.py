@@ -1,5 +1,6 @@
 """Minimal Telegram Bot API client. Polls for updates, so no public webhook is needed."""
 
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -8,6 +9,8 @@ import httpx
 from jarvis import config
 
 MAX_TEXT = 4000  # Telegram's limit is 4096
+RETRY_DELAYS = (1.0, 3.0)  # quick retries for a network blip before giving up on a call
+IDEMPOTENT = {"getUpdates", "getMe", "getFile", "sendChatAction"}
 
 
 @dataclass
@@ -50,13 +53,22 @@ class TelegramClient:
         self._base = f"https://api.telegram.org/bot{token}"
         self.chat_id = chat_id
         self.http = httpx.Client(timeout=httpx.Timeout(30, read=75))  # read > longest long-poll
+        self._sleep = time.sleep
 
     def _call(self, method: str, **payload) -> dict | list:
         # Errors are rebuilt without the request URL: it contains the bot token.
-        try:
-            r = self.http.post(f"{self._base}/{method}", json=payload)
-        except httpx.HTTPError as e:
-            raise TelegramError(f"{method}: {type(e).__name__}") from None
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            try:
+                r = self.http.post(f"{self._base}/{method}", json=payload)
+                break
+            except httpx.HTTPError as e:
+                # A connection that never opened can't have delivered anything, so it's always safe to
+                # try again; a dropped one only for calls that change nothing (never a double message).
+                safe = isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)) or (
+                    method in IDEMPOTENT and isinstance(e, (httpx.ReadError, httpx.RemoteProtocolError)))
+                if not safe or attempt == len(RETRY_DELAYS):
+                    raise TelegramError(f"{method}: {type(e).__name__}") from None
+                self._sleep(RETRY_DELAYS[attempt])
         body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
         if not body.get("ok"):
             raise TelegramError(f"{method} failed ({r.status_code}): {body.get('description', '')}")

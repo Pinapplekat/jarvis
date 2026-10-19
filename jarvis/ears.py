@@ -97,16 +97,18 @@ class Ears:
     def __init__(self, answer: Callable[..., str], transcribe: Callable[[np.ndarray], str],
                  log=print, play: Callable[[str], None] | None = None, voice=None,
                  report: Callable | None = None, timing: Callable[[int], None] | None = None,
-                 after_reply: Callable[[], object] | None = None):
+                 after_reply: Callable[[], object] | None = None, on_turn: Callable[[dict], None] | None = None):
         """`answer(text, on_text)` streams the reply's text so far into `on_text`; `voice` is a
         SpeakQueue, so each sentence is spoken as soon as it's written. `report` publishes
         state for the menu bar indicator; `timing(ms)` gets the time to first audio;
-        `after_reply()` runs once each answer is over (it passes on helper reports that waited)."""
+        `after_reply()` runs once each answer is over (it passes on helper reports that waited);
+        `on_turn(steps)` gets each turn's per-step timings (jarvis.timing)."""
         self.answer, self.transcribe, self.log = answer, transcribe, log
         self.report = report or _report
         self.play = play or (lambda path: subprocess.Popen(["afplay", path]))
         self.timing = timing or (lambda ms: None)
         self.after_reply = after_reply or (lambda: None)
+        self.on_turn = on_turn or (lambda steps: None)
         self.voice = voice
         self.noise = deque(maxlen=50)  # recent chunk levels while idle (~4 s)
         self._wake = None
@@ -172,8 +174,12 @@ class Ears:
                     self.play(MISS)  # woke but heard nothing
                 return
             self.report("working", detail="thinking")
-            text = self.transcribe(audio.astype(np.float32) / 32768.0)
+            from jarvis import timing
+            timing.start("desk")
+            with timing.step("transcribe"):
+                text = self.transcribe(audio.astype(np.float32) / 32768.0)
             if not text:
+                timing.finish()
                 self.play(MISS)
                 return
             self.log(f"heard: {text[:120]}")
@@ -235,10 +241,18 @@ class Ears:
         if monitor:
             finished.set()
             monitor.join()  # after a barge-in, this waits until he's finished his sentence
+        from jarvis import timing
+        extra = {}
         if voice.first_audio_at:
             ms = int((voice.first_audio_at - heard_at) * 1000)
             self.log(f"time_to_first_audio={ms}ms")
             self.timing(ms)
+            extra["first_audio"] = round(ms / 1000, 3)  # from the end of his speech
+        if (steps := timing.finish(**extra)):
+            try:
+                self.on_turn(steps)
+            except Exception as e:
+                self.log(f"timing: {e}")
         return reply
 
     def _barge_in_watch(self, read_chunk, finished: threading.Event, cut: threading.Event,
