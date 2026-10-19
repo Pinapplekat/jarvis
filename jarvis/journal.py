@@ -75,7 +75,7 @@ def material(mem: Memory, day: date, tz) -> str:
         "Windows used (in order):\n" + ("\n".join(windows[-80:]) or "(none)"),
         "Terminal:\n" + ("\n".join(terminal[-80:]) or "(none)"),
         "Git:\n" + ("\n".join(git) or "(none)"),
-        "Other events (emails sent, reminders, alerts, approvals...):\n" + ("\n".join(events[-60:]) or "(none)"),
+        "Other events (emails sent, texts, calls, timers, alarms, music, reminders, alerts, approvals...):\n" + ("\n".join(events[-60:]) or "(none)"),
     ])[:40_000]
 
 

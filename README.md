@@ -44,7 +44,7 @@ The first run triggers a macOS prompt to let your terminal control Mail. **The b
 
 ## Approvals and alerts (Telegram, free)
 
-Anything risky (an email to someone else, a high-risk command) arrives in Telegram as a plain question, "is that what you meant?", with the exact recipients and text or the exact command, plus **Approve / Reject** (or **Run / Reject**) buttons as a shortcut. If you're at the Mac, JARVIS asks out loud too.
+Anything risky (an email to someone else, a text or call, a high-risk command) arrives in Telegram as a plain question, "is that what you meant?", with the exact recipients and text or the exact command, plus **Approve / Reject** (or **Run / Reject**) buttons as a shortcut. If you're at the Mac, JARVIS asks out loud too.
 
 - **Answer in words:** a clear "yes" (also "yep, go ahead", "do it", "send it", or a voice note saying so; at the desk mic or on a call too) does what the button does; a clear "no" cancels. Something that starts like an answer but isn't clear ("yes but make it shorter") cancels that item, says so, and goes to chat. A bare "yes" means the one thing waiting; with several waiting, JARVIS names them and asks you to tap the one you mean. "ok" with nothing waiting is just conversation.
 - **Safeguards:** only your chat is obeyed; a reply only counts for questions sent before it; command requests lapse after `COMMAND_APPROVAL_MINUTES` (30); text in pages, emails or files can never answer for you.
@@ -216,6 +216,17 @@ To turn it on yourself (from this folder):
 4. `uv run jarvis schedule install`
 
 To turn it off: remove `JARVIS_REPO` from `.env` and run `uv run jarvis schedule install`.
+
+## Texts, calls, alarms, timers and music
+
+Ask like you'd ask Siri: "text Mom I'm running late", "call Dana", "set a timer for 10 minutes", "wake me at 7:30", "play some Daft Punk".
+
+- **Texts and calls wait for your yes.** They arrive in Telegram like an email draft, with the exact name, number and text plus **Approve / Reject**; a typed or spoken yes works too. The yes covers exactly that number and text: any change afterwards voids it. Unanswered requests lapse after `COMMAND_APPROVAL_MINUTES` (30). An approved text goes out at once through Messages (iMessage); a call opens FaceTime with the number (`tel:` link, through your iPhone if Continuity calling is on), where macOS may ask you to click Call.
+- **Names to numbers:** a number in your saved facts ("remember Mom's number is 206-555-0100") or your Contacts. No match, or more than one, and JARVIS asks you which instead of guessing.
+- **Alarms, timers and music just happen,** with a one-line confirmation. Timers and alarms become a JARVIS reminder (spoken at the Mac, sent to Telegram). For a real Clock timer or alarm, make a Shortcut that starts a timer from its input (seconds) or sets an alarm from its input (`HH:MM`), and set `SIRI_TIMER_SHORTCUT` / `SIRI_ALARM_SHORTCUT` to its name; if it fails, the reminder is used. Music plays the best match for a song, artist or playlist from your Music library.
+- **Safety:** the chat model only proposes these; text in pages, emails or files can't trigger or approve one. Each one is logged and ends up in the nightly journal.
+- **Permissions:** the first time, macOS asks whether the background job may control Messages, Music and Contacts (Privacy & Security → Automation; Contacts under Contacts). Your terminal needs the same for the test command.
+- **Try it:** `jarvis siri-test timer 5m`, `jarvis siri-test alarm 07:30`, `jarvis siri-test music "Get Lucky" --kind song`, `jarvis siri-test contact Mom` (shows the number it would use). Texts and calls have no test command: they only go through an approval. `SIRI=0` turns all of this off.
 
 ## Pictures to your phone
 

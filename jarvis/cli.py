@@ -540,6 +540,8 @@ def _tick(mem: Memory) -> int:
     def lapse(action_id, payload):  # a task waiting on it carries on (the listener picks it up)
         requeue(mem, payload, action_id, "(the approval request expired before Elijah answered)")
     step("commands", lambda: f"expired {expire_commands(mem, on_expired=lapse)}")  # before any new buttons go out
+    from jarvis import siri
+    step("texts-calls", lambda: f"expired {siri.expire(mem)}, sent {siri.process_approved(mem)}")  # backstop: a yes runs at once
     if tg:
         # Incoming messages and button presses are handled by `jarvis listen`, not here:
         # Telegram allows only one reader of updates at a time.
@@ -691,6 +693,10 @@ def main() -> None:
     wa.add_argument("--minutes", type=int, default=30, help="for timeline")
     sy = sub.add_parser("say", help="Speak text in JARVIS's voice (ignores presence and quiet hours)")
     sy.add_argument("text")
+    st = sub.add_parser("siri-test", help="Try a Siri-style action: timer 5m, alarm 07:30, music QUERY, contact NAME")
+    st.add_argument("action", choices=["timer", "alarm", "music", "contact"])
+    st.add_argument("arg")
+    st.add_argument("--kind", default="any", choices=["song", "artist", "playlist", "any"], help="for music")
 
     al = sub.add_parser("alert", help="Raise an alert (delivered on next tick)")
     al.add_argument("message")
@@ -813,6 +819,20 @@ def main() -> None:
         sent, failed = process_approved(mem)
         print(f"Sent {sent}, failed {failed}")
         sys.exit(1 if failed else 0)
+    if args.cmd == "siri-test":  # texts and calls aren't here: they only go out through an approval
+        from jarvis import siri
+        try:
+            if args.action == "timer":
+                print(siri.set_timer(mem, siri.parse_duration(args.arg)))
+            elif args.action == "alarm":
+                print(siri.set_alarm(mem, siri.parse_alarm(args.arg, _now_local())))
+            elif args.action == "music":
+                print(siri.music(mem, args.arg, args.kind))
+            else:
+                print("%s: %s" % siri.resolve_contact(mem, args.arg))
+        except ValueError as e:
+            sys.exit(str(e))
+        return
     if args.cmd == "call-test":
         from jarvis.calls import TwilioCaller
         TwilioCaller().call("Voice calls are working.")

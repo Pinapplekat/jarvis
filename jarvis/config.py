@@ -123,6 +123,11 @@ COMMANDS = os.getenv("COMMANDS", "1") == "1"                # terminal commands 
 COMMAND_APPROVAL_MINUTES = int(os.getenv("COMMAND_APPROVAL_MINUTES", "30"))  # unanswered requests expire
 JOB_STALL_MINUTES = int(os.getenv("JOB_STALL_MINUTES", "10"))  # ping once if a background job prints nothing this long
 
+# Siri-style actions: texts and calls wait for Elijah's yes; alarms, timers and music just run.
+SIRI = os.getenv("SIRI", "1") == "1"
+SIRI_TIMER_SHORTCUT = os.getenv("SIRI_TIMER_SHORTCUT", "")  # a Shortcut that starts a Clock timer (input: seconds)
+SIRI_ALARM_SHORTCUT = os.getenv("SIRI_ALARM_SHORTCUT", "")  # a Shortcut that sets a Clock alarm (input: HH:MM)
+
 # Location: points from locations you share in Telegram, kept on this Mac; place names come
 # from OpenStreetMap Nominatim (rounded, cached coordinates are the only thing sent).
 LOCATION = os.getenv("LOCATION", "1") == "1"

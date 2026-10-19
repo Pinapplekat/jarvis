@@ -1,4 +1,4 @@
-"""Confirmations for risky actions: email drafts and high-risk commands.
+"""Confirmations for risky actions: email drafts, texts and calls, and high-risk commands.
 
 Each one goes to Telegram as a plain-words question ("is that what you meant?") with buttons
 as a shortcut. A clear typed or spoken yes ("yes", "go ahead", a voice note saying "yes, send
@@ -20,6 +20,8 @@ from jarvis.telegram import TelegramClient, Update
 
 MAX_BODY_PREVIEW = 1500
 OFFSET_KEY = "telegram_offset"
+SIRI_KINDS = ("send_text", "make_call")   # texts and calls: high risk, his yes on the exact recipient and text
+DECIDED_HERE = ("send_email", *SIRI_KINDS)  # approved by _decide (commands go through their own buttons)
 
 # 'yes 3' / 'no #4': the id form, still accepted (ids are never shown, but buttons carry them).
 REPLY = re.compile(
@@ -62,6 +64,9 @@ def describe(action) -> str:
     p = json.loads(action["payload"])
     if action["kind"] == "send_email":
         return f"the email to {', '.join(p['to'])} (\"{p['subject'][:60]}\")"
+    if action["kind"] in SIRI_KINDS:
+        from jarvis.siri import describe as describe_siri
+        return describe_siri(action)
     from jarvis.terminal import describe_action
     return f"running {describe_action(p)}"
 
@@ -85,6 +90,15 @@ def notify_pending(mem: Memory, tg: TelegramClient, say: Callable[[str], None] |
     from jarvis.terminal import notify_commands
     count = notify_commands(mem, tg, say=say)
     for action in mem.unnotified_actions():
+        if action["kind"] in SIRI_KINDS:
+            from jarvis.siri import format_request
+            aid = action["id"]
+            tg.send(format_request(action), buttons=[("Approve ✅", f"approve:{aid}"), ("Reject ✖️", f"reject:{aid}")])
+            if say:
+                say(f"Sir, {describe(action)} is waiting for your OK. Is that what you meant? It's in Telegram.")
+            mem.mark_notified(aid)
+            count += 1
+            continue
         if action["kind"] != "send_email":
             continue
         aid = action["id"]
@@ -98,18 +112,21 @@ def notify_pending(mem: Memory, tg: TelegramClient, say: Callable[[str], None] |
 
 
 # ----- deciding -----
-def _open(mem: Memory, written_at: datetime, kinds=("send_email", "run_command")) -> list:
+def _open(mem: Memory, written_at: datetime, kinds=(*DECIDED_HERE, "run_command")) -> list:
     from jarvis.terminal import _expired
     now = datetime.now(timezone.utc)
     return [a for kind in kinds for a in mem.pending_actions(kind=kind)
             if a["notified_at"] and datetime.fromisoformat(a["notified_at"]) <= written_at
-            and not (kind == "run_command" and _expired(a, now))]
+            and not (kind != "send_email" and _expired(a, now))]  # commands, texts and calls lapse
 
 
 def _decide(mem: Memory, approve: bool, action_id: int | None, written_at: datetime) -> tuple[bool, str]:
-    """Apply a decision on an email draft. Returns (changed, message for the user)."""
+    """Apply a decision on an email draft, text or call. Returns (changed, message for the user).
+    An approved text or call goes out at once, bound to exactly what he was shown."""
+    from jarvis import siri
     from jarvis.mailrelay import approve as approve_email
-    open_drafts = _open(mem, written_at, kinds=("send_email",))
+    siri.expire(mem)
+    open_drafts = _open(mem, written_at, kinds=DECIDED_HERE)
     if action_id is None:
         if len(open_drafts) != 1:
             which = "; ".join(describe(a) for a in open_drafts) or "none"
@@ -119,11 +136,15 @@ def _decide(mem: Memory, approve: bool, action_id: int | None, written_at: datet
         action = mem.get_action(action_id)
         return False, f"That one can't be changed now ({action['status'] if action else 'not found'})."
     action = mem.get_action(action_id)
-    if approve:
+    if approve and action["kind"] in SIRI_KINDS:
+        siri.approve(mem, action_id)
+    elif approve:
         approve_email(mem, action_id)
     else:
         mem.resolve_action(action_id, "rejected")
     mem.log("approval", f"#{action_id} {'approved' if approve else 'rejected'} via Telegram")
+    if approve and action["kind"] in SIRI_KINDS:
+        return True, f"Approved {describe(action)}. {siri.execute(mem, action_id)}"
     if approve:
         return True, f"Approved {describe(action)}. Sending when your Mac is awake."
     return True, f"Cancelled {describe(action)}."
@@ -153,7 +174,7 @@ def confirm_by_words(mem: Memory, text: str, written_at: datetime,
         if len(items) != 1:
             return None  # can't tell which; let chat sort it out
         item = items[0]
-        if item["kind"] == "send_email":
+        if item["kind"] in DECIDED_HERE:
             mem.resolve_action(item["id"], "rejected")
         else:
             on_command("cmd_reject", item["id"])
@@ -164,7 +185,7 @@ def confirm_by_words(mem: Memory, text: str, written_at: datetime,
         return Confirmed("Which one, sir? Waiting for your OK: " + "; ".join(describe(a) for a in items)
                          + ". Tap the button on the one you mean.")
     item = items[0]
-    if item["kind"] == "send_email":
+    if item["kind"] in DECIDED_HERE:
         return Confirmed(_decide(mem, answer == "yes", item["id"], written_at)[1])
     toast = on_command("cmd_run" if answer == "yes" else "cmd_reject", item["id"])
     if toast in ("Already handled",) or toast.startswith("Expired"):
