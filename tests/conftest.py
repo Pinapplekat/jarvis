@@ -23,6 +23,10 @@ def _no_real_logs_or_state(monkeypatch, tmp_path):
     from jarvis import browser, selfedit, speech, tasks, terminal
     monkeypatch.setattr(speech, "LIVE", tmp_path / "speaking-test.json")
     monkeypatch.setattr(speech, "CONVO", tmp_path / "conversation-test.json")
+    from jarvis import panel
+    monkeypatch.setattr(panel, "PANEL_DIR", tmp_path / "panel-test")
+    monkeypatch.setattr(panel, "STATE", tmp_path / "panel-test" / "state.json")
+    monkeypatch.setattr(panel, "ACK", tmp_path / "panel-test" / "ack.json")
     from jarvis import voice
     monkeypatch.setattr(voice, "ANNOUNCE_PID", tmp_path / "announcing-test.pid")
     monkeypatch.setattr(terminal, "AUDIT", tmp_path / "commands-test.jsonl")

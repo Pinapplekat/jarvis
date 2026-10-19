@@ -20,7 +20,7 @@ COPY_EXCLUDES = [".git", ".venv", ".venv.nosync", "__pycache__", ".pytest_cache"
 LOG_DIR = Path.home() / "Library/Logs/JARVIS"
 AGENTS = Path.home() / "Library/LaunchAgents"
 TICK, LISTEN, WATCH, EARS = "com.jarvis.tick", "com.jarvis.listen", "com.jarvis.watch", "com.jarvis.ears"
-MENUBAR, PHONE = "com.jarvis.menubar", "com.jarvis.phone"
+MENUBAR, PHONE, PANEL = "com.jarvis.menubar", "com.jarvis.phone", "com.jarvis.panel"
 LOG = LOG_DIR / "tick.log"
 
 
@@ -89,7 +89,7 @@ def deploy(uv: str) -> None:
 
 
 def install(interval: int = 300, listen: bool = True, watch: bool = True, ears: bool = True,
-            menubar: bool = True, phone: bool = False) -> None:
+            menubar: bool = True, phone: bool = False, panel: bool = False) -> None:
     uv = shutil.which("uv")
     if not uv:
         raise SystemExit("uv not found on PATH")
@@ -130,11 +130,24 @@ def install(interval: int = 300, listen: bool = True, watch: bool = True, ears: 
         })
     else:
         _unload(MENUBAR)
+    if panel:
+        from jarvis import config, panel as screen_panel
+        screen_panel.build()  # its own app: never touches JARVIS Senses or JARVIS Ears
+        _load(PANEL, {
+            "Label": PANEL,
+            "ProgramArguments": [str(screen_panel.EXECUTABLE), str(screen_panel.STATE)],
+            "RunAtLoad": True,
+            "KeepAlive": {"SuccessfulExit": False},
+            "StandardOutPath": str(LOG_DIR / "panel.log"),
+            "StandardErrorPath": str(LOG_DIR / "panel.log"),
+        })
+    else:
+        _unload(PANEL)
 
 
 def uninstall() -> bool:
     removed = False
-    for label in (TICK, LISTEN, WATCH, EARS, MENUBAR, PHONE):
+    for label in (TICK, LISTEN, WATCH, EARS, MENUBAR, PHONE, PANEL):
         removed |= _unload(label)
         (AGENTS / f"{label}.plist").unlink(missing_ok=True)
     return removed

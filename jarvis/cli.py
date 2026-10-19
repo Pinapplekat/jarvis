@@ -276,6 +276,10 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
     from jarvis import judge, router, timing
     from jarvis.canvas import format_digest, from_memory
     from jarvis.chat import FirstSentence, respond
+    from jarvis import panel
+    if config.PANEL and (op := router.panel_command(text, panel.visible())):  # "close that", "bigger", "show me the screenshot"
+        timing.mark("instant", 0)
+        return _instant(mem, text, ("panel", op), spoken=spoken, phone=phone)
     hit = router.media_command(text) if config.SIRI else None
     if hit:  # "pause", "skip", "volume 40": done at once, no model round trip
         timing.mark("instant", 0)
@@ -372,10 +376,16 @@ def _instant(mem: Memory, text: str, cmd: tuple, spoken: bool = False, phone: bo
             reply = siri.set_alarm(mem, siri.parse_alarm(cmd[1], now))
         elif kind == "model":
             reply = set_chat_model(mem, cmd[1])
+        elif kind == "panel":
+            from jarvis import panel
+            op = cmd[1]
+            reply = (panel.show(mem, {"kind": "image", "path": "latest"}) if op == "screenshot"
+                     else panel.PANEL_OPS[op](mem))
         else:
             reply = siri.music(mem, cmd[1], "any")
     except Exception as e:  # never leave him without an answer, and never claim it worked
-        what = {"timer": "set the timer", "alarm": "set the alarm", "play": "play that"}.get(kind, "do that")
+        what = {"timer": "set the timer", "alarm": "set the alarm", "play": "play that",
+                "panel": "show that"}.get(kind, "do that")
         reply = f"Sorry, sir, I couldn't {what}: {str(e)[:150]}"
     mem.log("instant", f"{kind}: {reply[:150]}")
     mem.add_chat("assistant", reply)
@@ -938,10 +948,11 @@ def main() -> None:
             listen = bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
             phone = _phone_ready()
             schedule.install(args.minutes * 60, listen=listen, watch=config.WATCH, ears=config.EARS,
-                             menubar=config.MENUBAR, phone=phone)
+                             menubar=config.MENUBAR, phone=phone, panel=config.PANEL)
             print(f"tick: every {args.minutes} min. listen: {'always on' if listen else 'skipped (Telegram not set up)'}."
                   f" watch: {'on' if config.WATCH else 'off'}. ears: {'on' if config.EARS else 'off'}."
-                  f" phone: {'on' if phone else 'off'}. Logs: {schedule.LOG_DIR}")
+                  f" phone: {'on' if phone else 'off'}. panel: {'on' if config.PANEL else 'off'}."
+                  f" Logs: {schedule.LOG_DIR}")
         elif args.action == "uninstall":
             print("Removed" if schedule.uninstall() else "Wasn't scheduled")
         elif args.action == "run-now":

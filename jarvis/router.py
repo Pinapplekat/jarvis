@@ -190,3 +190,30 @@ def instant_command(text: str) -> tuple | None:
             return None
         return ("play", q) if len(q) <= 100 else None
     return None
+
+
+# The panel (JARVIS's own screen). "go back" / "bigger" only mean the panel while it's showing.
+_PANEL_SHOT = re.compile(r"(?:show|bring\s+up|put\s+up|open)\s+(?:me\s+)?(?:the\s+|that\s+|my\s+)?(?:last\s+|latest\s+)?"
+                         r"screen\s?shot(?:\s+(?:from\s+)?(?:earlier|before|again))?(?:\s+on\s+(?:the|your)\s+(?:screen|panel))?", re.I)
+_PANEL_OPS = [
+    (re.compile(r"(?:close|hide|dismiss|clear)\s+(?:that|it|this|the\s+panel|the\s+window|your\s+screen)|close\s+panel", re.I), "close"),
+    (re.compile(r"(?:make\s+(?:it|that)\s+)?(?:bigger|larger)|zoom\s+in|enlarge\s+(?:it|that)", re.I), "bigger"),
+    (re.compile(r"(?:make\s+(?:it|that)\s+)?smaller|zoom\s+out|shrink\s+(?:it|that)", re.I), "smaller"),
+    (re.compile(r"go\s+back|(?:show\s+(?:me\s+)?)?(?:the\s+)?previous\s+one|back", re.I), "back"),
+]
+
+
+def panel_command(text: str, showing: bool) -> str | None:
+    """'close' | 'bigger' | 'smaller' | 'back' (only while the panel shows something) | 'screenshot'."""
+    t = re.sub(r"[.!?]+$", "", " ".join(str(text).replace("’", "'").split())).strip()
+    for _ in range(3):
+        t = _POLITE.sub("", t).strip(" ,")
+    if not t or len(t) > 80:
+        return None
+    if _PANEL_SHOT.fullmatch(t):
+        return "screenshot"
+    if showing:
+        for pattern, op in _PANEL_OPS:
+            if pattern.fullmatch(t):
+                return op
+    return None

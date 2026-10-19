@@ -40,8 +40,8 @@ def test_early_peek_respects_idle_and_lock(tmp_path):
 def test_discard_deletes_an_unused_capture(tmp_path):
     early = EarlyPeek(idle=lambda: 1, locked=lambda: False, capture=fake_capture(tmp_path))
     early.discard()
-    for _ in range(50):
-        if not (tmp_path / "shot.jpg").exists():
+    for _ in range(250):  # the capture and the delete both run in the background
+        if early._captured.is_set() and not (tmp_path / "shot.jpg").exists():
             break
         time.sleep(0.02)
     assert not (tmp_path / "shot.jpg").exists()

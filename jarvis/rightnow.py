@@ -100,6 +100,9 @@ def for_prompt(mem: Memory, now: datetime, idle: Callable[[], float | None] | No
                             "something changed):\n" + "\n".join(told))
         if (off := brushed_off(mem, now)):
             sections.append("Things he brushed off (stay off those topics unless urgent):\n" + "\n".join(off))
+        from jarvis import panel
+        if (shown := panel.describe()):
+            sections.append(shown)
         model = mem.get_kv("chat_model")
         if model:
             sections.append(f"Chat model he chose: {json.loads(model).get('model', '?')}")

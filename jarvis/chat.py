@@ -184,6 +184,13 @@ now", "I'll send it") without the action for it here.
   "context", queue the song to look for; nothing for the rest. "play" resumes; to start something new
   use play_music. Runs at once; reply with nothing or a couple of words ("Right away, sir.");
   JARVIS adds the one-line result (e.g. "Paused." or what's playing).
+- show: {{"type":"show","kind":"plot"|"image"|"card"|"html"|"url", ...}} puts something on your own floating
+  panel in the top-right corner of his screen, at once. plot: "expr" (a formula in x like "sin(x) + 2"),
+  optional "x_min"/"x_max" and "title". image: "path" (a screenshot from your folder, or "latest"). card:
+  "title" and "lines" (a short list: deadlines, stats). html: "html" (a self-contained page you write, e.g.
+  an SVG chart; it can't load anything from the internet) and "title". url: "url" (a web page). Use it when
+  he says "show me ..." at the desk. Reply in a few words ("Here it is, sir."); JARVIS confirms once it's up.
+- panel: {{"type":"panel","op":"close"|"bigger"|"smaller"|"back"}} for what's on that panel.
 - deploy_build: {{"type":"deploy_build","id":optional plan id}} when he asks you to deploy a finished build
   ("deploy it", "ship it"). It doesn't deploy: it checks a build is ready and asks him to say "yes, deploy
   it"; only those words deploy it. You can do this by voice or text; never send him to a button for it.
@@ -782,6 +789,16 @@ def apply_actions(mem: Memory, actions: list[dict], tz, ran: set[str] = frozense
                     playing = siri.music(mem, str(a["query"]), str(a.get("kind") or "any"))
                     if said is not None:
                         said.append(playing)
+            elif kind in ("show", "panel"):
+                from jarvis import panel
+                if kind == "show":
+                    done = panel.show(mem, a)
+                else:
+                    if a.get("op") not in panel.PANEL_OPS:
+                        raise ValueError(f"unknown panel op {a.get('op')!r}")
+                    done = panel.PANEL_OPS[a["op"]](mem)
+                if said is not None:
+                    said.append(done)
             elif kind == "deploy_build":
                 from jarvis.deployvoice import offer
                 asked = offer(mem, int(a["id"]) if str(a.get("id") or "").isdigit() else None)
