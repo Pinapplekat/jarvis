@@ -86,6 +86,9 @@ EMAIL_BODIES = os.getenv("EMAIL_BODIES", "1") == "1"
 EMAIL_BODIES_AT_DESK = os.getenv("EMAIL_BODIES_AT_DESK", "0") == "1"
 DESK_PROCESS = False  # set by `jarvis ears` (the process running inside JARVIS Ears.app)
 
+# Mac controls through System Events (dark mode): needs an Automation permission, so off by default.
+MAC_SYSTEM_EVENTS = os.getenv("MAC_SYSTEM_EVENTS", "0") == "1"
+
 # JARVIS's own floating panel for "show me..." (a separate small app; no permissions needed)
 PANEL = os.getenv("PANEL", "1") == "1"
 VISION_MODEL = os.getenv("VISION_MODEL", "")  # empty = JARVIS_MODEL (the fast one); "sonnet" for sharper reading

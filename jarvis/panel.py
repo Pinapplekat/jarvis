@@ -423,6 +423,8 @@ def render(mem: Memory, action: dict) -> dict:
         content = plot(str(action.get("expr") or ""), action.get("x_min", -10), action.get("x_max", 10), title)
     elif kind == "image":
         content = image(str(action.get("path") or "latest"), mem)
+        if title:
+            content["title"] = title[:80]
     elif kind == "card":
         lines = action.get("lines") or []
         content = card(title or "JARVIS", [str(x) for x in lines] if isinstance(lines, list) else [str(lines)])
