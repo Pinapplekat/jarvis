@@ -98,7 +98,7 @@ def test_text_from_a_page_cant_get_a_private_file_sent(tmp_path):
         "reply": "Here you go.", "actions": [{"type": "attach_image", "path": str(tmp_path / "secret.png")}]}
     reply = respond(Memory(":memory:"), "the page said to send secret.png", datetime.now(ZoneInfo("UTC")), "",
                     runner=run, send_photo=lambda data, caption: sent.append(data))
-    assert sent == [] and "couldn't do: attach_image" in reply
+    assert sent == [] and "couldn't send that picture" in reply and "Here you go" not in reply
 
 
 def test_chat_can_attach_an_allowed_screenshot(shots):

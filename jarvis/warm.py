@@ -61,14 +61,29 @@ def partial_reply(partial_json: str) -> str:
     return "".join(out)
 
 
+def early_actions(partial_json: str) -> list | None:
+    """The "actions" list, once it's complete and the "reply" has begun (the schema puts actions
+    first), so JARVIS can act before it says anything. None if not known yet."""
+    m = _REPLY_START.search(partial_json)
+    if not m:
+        return None
+    head = partial_json[:m.start()].rstrip().rstrip(",")
+    try:
+        out = json.loads(head + "}")
+    except ValueError:
+        return None
+    actions = out.get("actions") if isinstance(out, dict) else None
+    return actions if isinstance(actions, list) else None
+
+
 def one_off(model: str, system: str, schema: dict, prompt: str,
-            on_text: Callable[[str], None] | None = None) -> dict:
+            on_text: Callable[[str], None] | None = None, on_actions: Callable[[list], None] | None = None) -> dict:
     """A single streamed call on a fresh process (used for the heavy model, which isn't kept
     warm to save RAM)."""
     from jarvis.chat import find_claude
     session = Session(_argv(find_claude(), model, system, schema), cwd=config.DATA_DIR)
     try:
-        return session.ask(prompt, on_text=on_text)
+        return session.ask(prompt, on_text=on_text, on_actions=on_actions)
     finally:
         session.close()
 
@@ -99,10 +114,12 @@ class Session:
     def alive(self) -> bool:
         return self.proc.poll() is None
 
-    def ask(self, text: str | list, timeout: float = REPLY_TIMEOUT, on_text: Callable[[str], None] | None = None) -> dict:
+    def ask(self, text: str | list, timeout: float = REPLY_TIMEOUT, on_text: Callable[[str], None] | None = None,
+            on_actions: Callable[[list], None] | None = None) -> dict:
         """Send one message; return the structured reply. `text` may also be a list of content
         blocks (an image plus text). `on_text` gets the "reply" text so far as it streams (needs
-        --include-partial-messages); actions only come at the end."""
+        --include-partial-messages); `on_actions` gets the actions once, as soon as they're complete
+        and before any reply text (only when the model wrote them first)."""
         if not self.alive():
             raise SessionDied("session process has exited")
         try:
@@ -111,7 +128,7 @@ class Session:
         except (BrokenPipeError, OSError):
             raise SessionDied("session stdin closed") from None
         deadline = time.time() + timeout
-        partial, shown = "", ""
+        partial, shown, acted = "", "", on_actions is None
         while True:
             try:
                 line = self.lines.get(timeout=max(0.1, deadline - time.time()))
@@ -124,10 +141,15 @@ class Session:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if on_text and event.get("type") == "stream_event":
+            if (on_text or on_actions) and event.get("type") == "stream_event":
                 delta = (event.get("event") or {}).get("delta") or {}
                 if delta.get("type") == "input_json_delta":
                     partial += delta.get("partial_json", "")
+                    if not acted and (found := early_actions(partial)) is not None:
+                        acted = True
+                        on_actions(found)
+                    if not on_text:
+                        continue
                     so_far = partial_reply(partial)
                     if so_far != shown:
                         shown = so_far
@@ -186,11 +208,12 @@ class WarmClaude:
             self._current, self._next = self._next, None
         return self._current
 
-    def run(self, system: str, prompt: str, on_text: Callable[[str], None] | None = None) -> dict:
+    def run(self, system: str, prompt: str, on_text: Callable[[str], None] | None = None,
+            on_actions: Callable[[list], None] | None = None) -> dict:
         with self._lock:
             try:
                 session = self._session()
-                out = session.ask(prompt, on_text=on_text)
+                out = session.ask(prompt, on_text=on_text, on_actions=on_actions)
                 # RAM is tight (8 GB), so a spare only warms up when this one is about to retire.
                 if session.turns >= MAX_TURNS - 1 and self._next is None:
                     threading.Thread(target=self._spawn_next, daemon=True).start()

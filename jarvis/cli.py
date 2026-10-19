@@ -219,9 +219,9 @@ def _runner_for(route, warm):
         return warm.run, config.JARVIS_MODEL, "warm"
     model = config.JARVIS_HEAVY_MODEL if route.heavy else config.JARVIS_MODEL
 
-    def run(system, prompt, on_text=None):
+    def run(system, prompt, on_text=None, on_actions=None):
         try:
-            return one_off(model, system, REPLY_SCHEMA, prompt, on_text)
+            return one_off(model, system, REPLY_SCHEMA, prompt, on_text, on_actions)
         except SessionDied:
             return run_claude(system, prompt, model=model)
     return run, model, "cold"

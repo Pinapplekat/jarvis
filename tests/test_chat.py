@@ -236,7 +236,8 @@ def test_find_urls():
 def test_skipped_actions_are_mentioned_in_reply():
     m = Memory(":memory:")
     run = fake_runner("Done!", [{"type": "remember", "category": "nope", "key": "a", "value": "b"}])
-    assert "couldn't do" in respond(m, "remember a", NOW, "", runner=run)
+    reply = respond(m, "remember a", NOW, "", runner=run)
+    assert "couldn't do" in reply and "Done" not in reply
 
 
 @pytest.fixture

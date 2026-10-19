@@ -59,7 +59,11 @@ Voice:
 - Longer only when he asks for detail or the content needs it (an email draft, a list
   of readings).
 
-You can't do anything directly. To change something, put actions in "actions":
+You can't do anything directly. To change something, put actions in "actions". Always write "actions"
+before "reply": your actions are carried out before your reply is said, and any that fail are reported
+for you, so never claim in the reply that something worked, is running or is waiting unless an action
+in this same answer does it. Never say you're doing or will do something ("I'm drafting it", "checking
+now", "I'll send it") without the action for it here.
 - remember: {{"type":"remember","category":one of {FACT_CATEGORIES},"key":short_snake_case,"value":"..."}}
 - forget: {{"type":"forget","category":"...","key":"..."}}
 - note: {{"type":"note","content":"...","project":optional existing project name}}
@@ -264,13 +268,14 @@ Rules:
 - If nothing needs doing, "actions" is [].
 """
 
+# Actions come first: JARVIS performs them before it speaks, so the words can't claim what didn't happen.
 REPLY_SCHEMA = {
     "type": "object",
     "properties": {
-        "reply": {"type": "string"},
         "actions": {"type": "array", "items": {"type": "object"}},
+        "reply": {"type": "string"},
     },
-    "required": ["reply", "actions"],
+    "required": ["actions", "reply"],
 }
 
 Runner = Callable[[str, str], dict]
@@ -693,6 +698,26 @@ def remainder(reply: str, first: str | None) -> str | None:
     return None
 
 
+EARLY_UNSAFE = set(GATHER) | {"run_command"}  # rounds with these aren't final, so nothing is done early
+
+
+def _accepts(fn, name: str) -> bool:
+    import inspect
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _busy(mem: Memory) -> bool:
+    """Is a task really running or waiting (so "it's running" can be true)?"""
+    try:
+        return bool(mem.db.execute("SELECT 1 FROM tasks WHERE status IN ('queued','running','waiting')").fetchone())
+    except sqlite3.Error:
+        return False
+
+
 def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             runner: Runner = run_claude, fetcher: Callable[[str], Page] = fetch_page,
             on_progress: Callable[[], None] = lambda: None, inbox_text: str = "(not checked)",
@@ -717,6 +742,24 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
     findings: list[tuple[str, str]] = []
     looked: set[str] = set()   # inspections and auto commands done (keys), so none repeat
     ran: set[str] = set()      # auto commands run, by argv
+    from jarvis import honesty
+    pending_now, busy_now = bool(mem.pending_actions()), _busy(mem)
+    gate = honesty.Gate(on_text, pending_now, busy_now) if on_text else None
+    early: dict = {}
+
+    def on_actions(acts: list) -> None:
+        """The actions arrived before the reply text: do them now (if this is the real answer), so
+        what gets said can be checked against what actually happened."""
+        if gate:
+            gate.actions_known(acts)
+        if any(not isinstance(a, dict) or a.get("type") in EARLY_UNSAFE for a in acts):
+            return
+        said: list[str] = []
+        with timing.step("actions"):
+            problems = apply_actions(mem, acts, now.tzinfo, ran, send_photo=send_photo, said=said)
+        early.update(problems=problems, said=said)
+        if problems and gate:
+            gate.failed = True  # nothing more goes out early; the final reply says what happened
     if peek is not None:
         if peek[0]:
             on_progress()
@@ -852,7 +895,9 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
     try:
         open_urls(find_urls(message))
         for round_ in range(MAX_ROUNDS):
-            stream = {"on_text": on_text} if on_text and round_ == 0 else {}
+            stream = {"on_text": gate.feed} if gate and round_ == 0 else {}
+            if stream and _accepts(runner, "on_actions"):
+                stream["on_actions"] = on_actions
             with timing.step(f"model_{round_ + 1}"):
                 out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
                                                               activity_text, blocks, findings), **stream)
@@ -867,7 +912,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                     mem.log("screenshot", "looked at his screen privately (not sent; picture deleted)")
                 except Exception as e:
                     answer = f"I couldn't see your screen just now, sir ({str(e)[:120]})."
-                out = {"reply": answer, "actions": out.get("actions") or []}
+                out = {"reply": answer, "actions": out.get("actions") or [], "vision": True}
                 break
             wanted = [str(a.get("url", "")) for a in out.get("actions") or [] if a.get("type") == "open_url"]
             before = len(requested) + len(looked)
@@ -890,15 +935,45 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
     except Exception as e:
         reply = f"Sorry, I couldn't think just now ({e})."
     else:
-        reply = str(out.get("reply") or "").strip() or "(no reply)"
+        reply = str(out.get("reply") or "").strip()
         actions = [a for a in out.get("actions") or [] if a.get("type") not in GATHER]
-        said: list[str] = []
-        with timing.step("actions"):
-            problems = apply_actions(mem, actions, now.tzinfo, ran, send_photo=send_photo, said=said)
+        if early:  # already done as soon as they arrived (this was the first and final round)
+            problems, said = early["problems"], early["said"]
+        else:
+            said = []
+            with timing.step("actions"):
+                problems = apply_actions(mem, actions, now.tzinfo, ran, send_photo=send_photo, said=said)
+        kinds = {str(a.get("type")) for a in out.get("actions") or [] if isinstance(a, dict)}
+        if out.get("vision"):  # the look's own answer: it can't take actions or promise any
+            if problems:
+                reply += "\n\n" + honesty.failure_line(problems)
+        elif gate and gate.sent and gate.kinds is None:
+            # Streamed before its actions were known (it wrote the reply first): what's been said
+            # can't be unsaid, so only add what failed.
+            if problems:
+                reply += "\n\n" + honesty.failure_line(problems)
+        else:
+            cleaned, dropped = honesty.clean(reply, kinds, problems, pending_now, busy_now)
+            if dropped:
+                mem.log("unbacked_claim", "; ".join(d[:120] for d in dropped)[:400])
+            if dropped and not cleaned and round_ < MAX_ROUNDS:
+                # All it said was a promise with nothing behind it: ask once more for a real answer.
+                findings.append(("your draft reply", f"(It said \"{dropped[0][:150]}\" but had no action that does "
+                                 "it. Answer again: include the action that does it, or just say what you can tell "
+                                 "him now, without promising anything.)"))
+                with timing.step("model_honest_retry"):
+                    out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
+                                                             activity_text, blocks, findings))
+                retry = [a for a in out.get("actions") or [] if a.get("type") not in GATHER]
+                problems = apply_actions(mem, retry, now.tzinfo, ran, send_photo=send_photo, said=said)
+                kinds = {str(a.get("type")) for a in out.get("actions") or [] if isinstance(a, dict)}
+                again = str(out.get("reply") or "").strip()
+                cleaned, _ = honesty.clean(again, kinds, problems, pending_now, busy_now)
+                cleaned = cleaned or again
+            reply = cleaned
+        reply = reply or "(no reply)"
         if said:
             reply += "\n\n" + " ".join(said)
-        if problems:
-            reply += "\n\n(couldn't do: " + "; ".join(problems) + ")"
         for p in pages:
             mem.log("web_open", f"{p.url}: {p.error or p.title or 'ok'}")
     reply = tidy(reply)
