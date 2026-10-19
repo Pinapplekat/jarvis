@@ -28,27 +28,39 @@ class FakeMac:
     def __init__(self, installed=True, playing=(TRACK, "Get Lucky", "Daft Punk"), before=None):
         self.calls, self.installed, self.playing, self.before, self.played = [], installed, playing, before, False
         self.music, self.apple_music = None, False  # what the Music app answers; whether it was asked
+        self.search_plays, self.clicks_play, self.ui_error = False, True, ""  # keyless Spotify desktop path
+        self.catalog, self.catalog_playing = [], None  # catalog search hits; what Music plays after the click
 
     def __call__(self, argv, **kw):
         self.calls.append((argv, kw.get("input")))
-        out, code = "", 0
+        out, code, err, script = "", 0, "", kw.get("input") or ""
         if argv[:2] == ["open", "-Ra"]:
             code = 0 if self.installed else 1
-        elif argv[0] == "osascript" and 'tell application "Music"' in (kw.get("input") or ""):
+        elif argv[0] == "osascript" and 'tell application "Music"' in script:
             self.apple_music = True
-            out = applemusic.FS.join(self.music) if self.music else ""
-        elif argv[0] == "osascript" and "play track" in (kw.get("input") or ""):
-            self.played = True
+            if "open location" in script:
+                out = applemusic.FS.join(self.catalog_playing) if self.catalog_playing else "stopped"
+            else:
+                out = applemusic.FS.join(self.music) if self.music else ""
+        elif argv[0] == "osascript" and 'tell process "Spotify"' in script:
+            if self.ui_error:
+                code, err = 1, self.ui_error
+            else:
+                out, self.played = "clicked", self.played or self.clicks_play
+        elif argv[0] == "osascript" and "play track" in script:
+            self.played = self.search_plays if argv[-1].startswith("spotify:search:") else True
         elif argv[0] == "osascript":
             now = self.playing if self.played else self.before
             out = spotify.FS.join(now[1:] + now[:1]) if now else ""
-        return subprocess.CompletedProcess(argv, code, out, "")
+        return subprocess.CompletedProcess(argv, code, out, err)
 
 
 @pytest.fixture
 def mac(monkeypatch):
     fake = FakeMac()
     monkeypatch.setattr(spotify.subprocess, "run", fake)
+    catalog = lambda request: httpx.Response(200, json={"results": fake.catalog})
+    monkeypatch.setattr(applemusic, "_client", lambda: httpx.Client(transport=httpx.MockTransport(catalog)))
     monkeypatch.setattr(spotify.time, "sleep", lambda s: None)
     monkeypatch.setattr(spotify, "PLAY_WAIT", 0.05)
     monkeypatch.setattr(config, "SPOTIFY_CLIENT_ID", "id")
@@ -118,12 +130,68 @@ def test_no_match(mac, monkeypatch):
     assert not mac.played
 
 
-def test_without_keys_opens_search_and_says_so(mac, monkeypatch):
+@pytest.fixture
+def keyless(mac, monkeypatch):
     monkeypatch.setattr(config, "SPOTIFY_CLIENT_ID", "")
-    with pytest.raises(spotify.SpotifyError, match="SPOTIFY_CLIENT_ID"):
-        spotify.play('lo-fi" & do shell script "rm -rf ~')
-    assert mac.calls[-1][0] == ["open", "spotify:search:lo-fi%22%20%26%20do%20shell%20script%20%22rm%20-rf%20~"]
-    assert not mac.played
+    monkeypatch.setattr(spotify, "search", lambda q, kind: pytest.fail("used the API without keys"))
+    return mac
+
+
+def test_without_keys_the_desktop_app_searches_and_plays(keyless):
+    assert spotify.play('lo-fi" & do shell script "rm -rf ~') == "Get Lucky by Daft Punk"
+    uri = "spotify:search:lo-fi%22%20%26%20do%20shell%20script%20%22rm%20-rf%20~"
+    assert ["open", uri] in [c[0] for c in keyless.calls]  # the query only ever goes in encoded
+    assert ["osascript", "-", uri] in [c[0] for c in keyless.calls]
+    scripts = [c for c in keyless.calls if c[0][0] == "osascript"]
+    assert all("rm -rf" not in (c[1] or "") for c in scripts)
+    ui = next(c[1] for c in scripts if 'tell process "Spotify"' in (c[1] or ""))
+    assert 'tell process "Music"' not in ui and "if not frontmost then error" in ui  # targets Spotify only
+
+
+def test_without_keys_a_search_uri_that_plays_skips_the_clicking(keyless):
+    keyless.search_plays = True
+    assert spotify.play("study lo-fi") == "Get Lucky by Daft Punk"
+    assert not any('tell process "Spotify"' in (c[1] or "") for c in keyless.calls)
+
+
+def test_without_keys_nothing_starting_is_a_failure(keyless):
+    keyless.clicks_play = False
+    with pytest.raises(spotify.SpotifyError, match="nothing started"):
+        spotify.play("study lo-fi")
+    assert any("to pause" in (c[1] or "") for c in keyless.calls)
+
+
+def test_without_keys_missing_accessibility_is_explained(keyless):
+    keyless.ui_error = "System Events got an error: osascript is not allowed assistive access. (-25211)"
+    with pytest.raises(spotify.SpotifyError, match="Accessibility permission"):
+        spotify.play("study lo-fi")
+
+
+def test_keyless_spotify_success_never_touches_apple_music(keyless):
+    out = siri.music(Memory(":memory:"), "study lo-fi", "playlist")
+    assert out == "Playing Get Lucky by Daft Punk on Spotify."
+    assert not keyless.apple_music
+
+
+def test_keyless_spotify_fail_falls_back_to_the_apple_music_catalog(keyless):
+    keyless.clicks_play = False
+    keyless.catalog = [{"trackName": "Lofi Study", "artistName": "Chill Beats",
+                        "trackViewUrl": "https://music.apple.com/us/album/lofi-study/123?i=456&uo=4"}]
+    keyless.catalog_playing = ("Lofi Study", "Chill Beats")
+    out = siri.music(Memory(":memory:"), "study lo-fi", "playlist")
+    assert out.startswith("Spotify couldn't play it (") and "nothing started" in out
+    assert out.endswith("so I played Lofi Study by Chill Beats on Apple Music.")
+    opened = next(c for c in keyless.calls if "open location" in (c[1] or ""))
+    assert opened[0] == ["osascript", "-", "music://music.apple.com/us/album/lofi-study/123?i=456&uo=4"]
+
+
+def test_keyless_both_failing_says_why(keyless):
+    keyless.ui_error = "osascript is not allowed assistive access. (-25211)"
+    with pytest.raises(ValueError) as e:
+        siri.music(Memory(":memory:"), "study lo-fi")
+    msg = str(e.value)
+    assert "on Spotify (" in msg and "Accessibility permission" in msg
+    assert "Apple Music (nothing in the Music library or the Apple Music catalog matches 'study lo-fi')" in msg
 
 
 def test_query_cant_inject_applescript(mac, monkeypatch):
@@ -224,7 +292,7 @@ def test_both_failing_is_reported_cleanly(mac, monkeypatch):
         siri.music(Memory(":memory:"), "zzzqqq", "song")
     msg = str(e.value)
     assert "couldn't play 'zzzqqq' on Spotify" in msg and "found nothing" in msg
-    assert "Apple Music (nothing in the Music library matches 'zzzqqq')" in msg
+    assert "Apple Music (nothing in the Music library or the Apple Music catalog matches 'zzzqqq')" in msg
 
 
 def test_apple_music_query_cant_inject_applescript(mac):
@@ -243,3 +311,21 @@ def test_apple_music_errors(mac, monkeypatch):
                         lambda *a, **k: subprocess.CompletedProcess(a[0], 1, "", "Not authorized to send Apple events"))
     with pytest.raises(applemusic.AppleMusicError, match="Not authorized"):
         applemusic.play("lo-fi")
+
+
+def test_apple_music_catalog_refuses_odd_links_and_wrong_songs(mac):
+    mac.catalog = [{"trackName": "x", "trackViewUrl": 'https://evil.example/x" & quit'},
+                   {"trackName": "Lofi Study", "artistName": "Chill Beats",
+                    "trackViewUrl": "https://music.apple.com/us/album/lofi-study/123?i=456"}]
+    mac.catalog_playing = ("Old Song", "Old Band")  # the click resumed something else
+    with pytest.raises(applemusic.AppleMusicError, match="didn't start it"):
+        applemusic.play("study lo-fi")
+    opened = [c[0] for c in mac.calls if "open location" in (c[1] or "")]
+    assert opened == [["osascript", "-", "music://music.apple.com/us/album/lofi-study/123?i=456"]]
+    assert any("to pause" in (c[1] or "") and "Music" in (c[1] or "") for c in mac.calls)
+
+
+def test_apple_music_library_match_skips_the_catalog(mac, monkeypatch):
+    mac.music = ("track", "", "Get Lucky", "Daft Punk")
+    monkeypatch.setattr(applemusic, "catalog", lambda q: pytest.fail("searched the catalog"))
+    assert applemusic.play("get lucky") == "Get Lucky by Daft Punk"

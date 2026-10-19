@@ -4,7 +4,9 @@ The model only proposes a query and a kind (song, artist, playlist or any). Spot
 (SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET, client-credentials: no login to his account) picks the
 best match, and the Spotify app plays its URI through AppleScript, which gets the URI as an argument,
 never as script text. Success is only reported once Spotify's player says it's actually playing.
-Without the keys, Spotify's search page is opened and the failure is reported as such.
+Without the keys, the desktop app does the search (play_via_desktop): it's asked to play the search
+URI (some versions start the top result), otherwise its search page is opened and System Events
+clicks the top result's Play button, only ever inside Spotify (needs Accessibility permission).
 """
 
 import re
@@ -44,6 +46,38 @@ tell application "Spotify"
 end tell
 """
 
+# Run with Spotify's search page open: clicks the first "Play <name>" button (the top result's; the
+# player bar's own button is just "Play"). Keys and clicks only go to Spotify, and only while it's in front.
+SEARCH_PLAY_SCRIPT = """
+tell application "Spotify" to activate
+delay 3
+tell application "System Events"
+    tell process "Spotify"
+        set frontmost to true
+        delay 0.5
+        if not frontmost then error "Spotify isn't in front, so I didn't click anything"
+        try
+            set value of attribute "AXManualAccessibility" to true
+        end try
+        repeat with e in (entire contents of window 1)
+            set d to ""
+            try
+                if class of e is button then set d to (description of e) as text
+            end try
+            considering case
+                set hit to d starts with "Play "
+            end considering
+            if hit then
+                if not frontmost then error "Spotify lost focus, so I didn't click anything"
+                click e
+                return "clicked"
+            end if
+        end repeat
+    end tell
+end tell
+error "couldn't find a Play button on Spotify's search page"
+"""
+
 _token: tuple[str, float] = ("", 0.0)
 
 
@@ -59,11 +93,29 @@ def _client() -> httpx.Client:
     return httpx.Client(timeout=10)
 
 
+def explain(stderr: str) -> str:
+    """An AppleScript error, plus which macOS permission is missing when that's the cause."""
+    why = stderr.strip()[:200] or "AppleScript failed"
+    if "assistive access" in why or "-25211" in why or "-1719" in why:
+        return "System Events needs Accessibility permission (Privacy & Security → Accessibility)"
+    if "Not authorized to send Apple events" in why or "-1743" in why:
+        return "Not authorized to send Apple events (Privacy & Security → Automation)"
+    return why
+
+
 def _osascript(script: str, *args: str, timeout: int = 20) -> str:
     r = subprocess.run(["osascript", "-", *args], input=script, capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
-        raise SpotifyError(r.stderr.strip()[:200] or "AppleScript failed")
+        raise SpotifyError(explain(r.stderr))
     return r.stdout.rstrip("\n")
+
+
+def _pause() -> None:
+    """So a late start can't play over the Apple Music backup."""
+    try:
+        _osascript('tell application "Spotify" to pause', timeout=10)
+    except (SpotifyError, subprocess.TimeoutExpired):
+        pass
 
 
 def installed() -> bool:
@@ -133,10 +185,10 @@ def player() -> tuple[str, str] | None:
     return uri, f"{name} by {artist}" if artist else name
 
 
-def started(uri: str, before: tuple[str, str] | None, step: float = 0.5) -> str:
+def started(uri: str, before: tuple[str, str] | None, step: float = 0.5, wait: float | None = None) -> str:
     """'Song by Artist' once Spotify is really playing what was asked (that exact song, or for an
-    artist or playlist, something other than what was already on); '' if not within PLAY_WAIT seconds."""
-    deadline = time.monotonic() + PLAY_WAIT
+    artist, playlist or search, something other than what was already on); '' if not within PLAY_WAIT seconds."""
+    deadline = time.monotonic() + (PLAY_WAIT if wait is None else wait)
     while True:
         now = player()
         if now and (now[0] == uri if uri.startswith("spotify:track:") else now != before):
@@ -146,15 +198,41 @@ def started(uri: str, before: tuple[str, str] | None, step: float = 0.5) -> str:
         time.sleep(step)
 
 
+def play_via_desktop(query: str) -> str:
+    """No API keys: the Spotify app searches and starts its top result. Returns what's playing;
+    raises SpotifyError (after pausing Spotify) when nothing new starts."""
+    before = player()
+    uri = "spotify:search:" + quote(query, safe="")
+    try:
+        _osascript(PLAY_SCRIPT, uri, timeout=30)
+        track = started(uri, before, wait=PLAY_WAIT / 2)
+    except (SpotifyError, subprocess.TimeoutExpired):
+        track = ""
+    if track:
+        return track
+    open_search(query)
+    try:
+        _osascript(SEARCH_PLAY_SCRIPT, timeout=60)
+    except subprocess.TimeoutExpired:
+        _pause()
+        raise SpotifyError("Spotify's search page didn't answer in time")
+    except SpotifyError as e:
+        _pause()
+        raise SpotifyError(f"couldn't start a search result: {e}")
+    track = started(uri, before)
+    if not track:
+        _pause()
+        raise SpotifyError(f"Spotify's search for {query!r} opened but nothing started playing")
+    return track
+
+
 def play(query: str, kind: str = "any") -> str:
     """Finds and plays the best Spotify match. Returns what's playing; raises NoMatch when Spotify has
     nothing for it and SpotifyError when Spotify is unavailable or fails."""
     if not installed():
         raise SpotifyError("the Spotify app isn't installed on this Mac")
     if not (config.SPOTIFY_CLIENT_ID and config.SPOTIFY_CLIENT_SECRET):
-        open_search(query)
-        raise SpotifyError("I opened Spotify's search for it, but I can't pick and start a result without "
-                           "SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET set")
+        return play_via_desktop(query)
     uri, what = best(search(query, kind), query, kind)
     if not URI.fullmatch(uri):
         raise SpotifyError(f"Spotify returned an odd link ({uri[:60]!r})")
@@ -162,9 +240,6 @@ def play(query: str, kind: str = "any") -> str:
     _osascript(PLAY_SCRIPT, uri, timeout=30)
     track = started(uri, before)
     if not track:
-        try:  # so a late start can't play over the Apple Music backup
-            _osascript('tell application "Spotify" to pause', timeout=10)
-        except (SpotifyError, subprocess.TimeoutExpired):
-            pass
+        _pause()
         raise SpotifyError(f"Spotify didn't start playing {what}")
     return what if what == track else f"{what}, starting with {track}"
