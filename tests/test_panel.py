@@ -142,3 +142,18 @@ def test_menu_bar_request_is_taken_once_and_only_when_fresh():
     assert panel.take_request() is None
     panel.REQUEST.write_text(json.dumps({"kind": "rm -rf", "at": time.time()}))
     assert panel.take_request() is None
+
+
+def test_helpers_tabs_group_and_count_by_kind(monkeypatch):
+    from jarvis import helpers
+    base = {"where": "", "state": "", "busy": False, "waiting": False, "now": "", "steps": [], "asked": "", "said": "", "plan": []}
+    monkeypatch.setattr(helpers, "board", lambda mem, now=None: [
+        {**base, "kind": "session", "name": "a"}, {**base, "kind": "session", "name": "b"},
+        {**base, "kind": "job", "name": "c"}, {**base, "kind": "build", "name": "d"}])
+    out = panel.helpers_view(None, show="code")
+    assert out["filter"] == "code" and 'data-filter="code"' in out["html"]
+    assert 'data-f="code" class="on">Claude Code<span class="n">2</span>' in out["html"]
+    assert '>All<span class="n">4</span>' in out["html"] and '>Tasks<span class="n">1</span>' in out["html"]
+    assert out["html"].count('data-group="code"') == 2 and 'data-group="tasks"' in out["html"]
+    assert "applyFilter" in out["html"] and "applyFilter" not in out["body"]  # the live swap keeps the script
+    assert panel.helpers_view(None, show="nonsense")["filter"] == "all"

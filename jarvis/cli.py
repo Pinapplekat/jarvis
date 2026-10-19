@@ -16,8 +16,9 @@ def _now_local():
 def _messenger():
     if not (config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID):
         return None
+    from jarvis.inbox import Mirror
     from jarvis.telegram import TelegramClient
-    return TelegramClient()
+    return Mirror(TelegramClient())  # everything sent is also on the Mac, in the inbox app
 
 
 def _caller():
@@ -499,81 +500,89 @@ def _listen(mem: Memory) -> None:
     import threading
     turn = threading.Lock()  # Telegram and the HUD share the warm session: one answer at a time
 
-    def on_text(update):
-        from jarvis.status import set_state
-        from jarvis import timing
-        with turn:
-            set_state("telegram", "working", detail="answering a voice note" if update.via_voice else "answering")
-            timing.start("voice_note" if update.via_voice else "telegram")
-            try:
-                _on_text(update)
-            finally:
-                timing.finish(mem)
-                set_state("telegram", "idle")
+    def handlers(mem, tg, source="telegram"):
+        """Chat and buttons, bound to one database connection and one way of replying: Telegram's,
+        or the inbox app's (its own thread, so its own connection)."""
+        def on_text(update):
+            from jarvis.status import set_state
+            from jarvis import timing
+            with turn:
+                set_state(source, "working", detail="answering a voice note" if update.via_voice else "answering")
+                timing.start("voice_note" if update.via_voice else "telegram")
+                try:
+                    _on_text(update)
+                finally:
+                    timing.finish(mem)
+                    set_state(source, "idle")
 
+        def _on_text(update):
+            if (toggle := HEARTBEAT_TOGGLE.match(update.text or "")):
+                from jarvis import heartbeat
+                off = toggle["verb"].lower() in ("pause", "stop", "mute", "silence")
+                heartbeat.set_paused(mem, off)
+                tg.send("Heartbeat paused, sir; I'll only speak when spoken to (reminders and alerts still come)."
+                        if off else "Heartbeat back on, sir.")
+                return
+            is_stop, stop_id = tasks.parse_stop(update.text)
+            if is_stop and mem.db.execute("SELECT 1 FROM tasks WHERE status IN ('queued','running','waiting')").fetchone():
+                tg.send(tasks.stop(mem, stop_id))
+                for t in tasks.recent(mem, 3):  # show it as stopped in its progress message too
+                    if t["status"] == "stopped" and t["message_id"]:
+                        try:
+                            tg.edit(t["message_id"], tasks.progress_text(t))
+                        except Exception:
+                            pass
+                        break
+                return
+            tg.typing()
+            sent = {}
+
+            def first_out(sentence):  # typed chat: send the first sentence now, the rest as its own message
+                if not update.via_voice:
+                    sent["id"], sent["text"] = tg.send(sentence), sentence
+
+            reply = _answer(mem, update.text, on_progress=tg.typing, spoken=update.via_voice, warm=warm,
+                            on_first=first_out, send_photo=tg.send_photo)
+            if sent:  # buttons and plans below must still go out, so no early return
+                _send_rest(tg, reply, sent["text"])
+            elif update.via_voice:  # answer a voice note with a voice note (walks, AirPods)
+                from jarvis.speech import voice_note
+                tg.action("record_voice")
+                try:
+                    tg.send_voice(voice_note(reply), caption=reply if len(reply) <= 1000 else "")
+                    if len(reply) > 1000:
+                        _send_rest(tg, reply)
+                except Exception as e:  # never lose the answer over audio trouble
+                    mem.log("voice_note_failed", str(e)[:200])
+                    _send_rest(tg, reply)
+            else:
+                _send_rest(tg, reply)
+            notify_pending(mem, tg, say=_say_if_present)  # drafts and risky commands: the question, right away
+            tasks.start_queued(mem, worker)  # a task started in this chat begins at once
+            if mem.self_edits("drafting"):
+                tg.typing()
+                plans.draft_plans(mem, tg)
+
+        def on_button(verb, edit_id):
+            if verb.startswith("cmd_"):
+                from jarvis import terminal
+                return terminal.handle_button(mem, tg, verb, edit_id, on_done=_carry_on(worker))
+            if verb.startswith("plan_"):
+                on_approved = (lambda i: selfedit.queue_approved(mem, tg, i)) if selfedit.enabled() else None
+                return plans.handle_button(mem, verb, edit_id, on_approved)
+            return selfedit.handle_button(mem, tg, verb, edit_id)
+        return on_text, on_button
+
+    on_text, on_button = handlers(mem, tg)
     if config.HUD:
         threading.Thread(target=_serve_hud, args=(tg, warm, turn), daemon=True).start()
+    if config.INBOX:  # the Telegram chat on the Mac, buttons and all (jarvis/inbox.py)
+        threading.Thread(target=_serve_inbox, args=(tg, handlers), daemon=True).start()
     if config.PANEL:  # "Show Helpers" from the menu bar, and the helpers view kept live while it's up
         from jarvis import panel
         threading.Thread(target=panel.serve_live, args=(lambda: Memory(config.DB_PATH),),
                          kwargs={"log": lambda s: print(s, flush=True)}, daemon=True).start()
 
-    def _on_text(update):
-        if (toggle := HEARTBEAT_TOGGLE.match(update.text or "")):
-            from jarvis import heartbeat
-            off = toggle["verb"].lower() in ("pause", "stop", "mute", "silence")
-            heartbeat.set_paused(mem, off)
-            tg.send("Heartbeat paused, sir; I'll only speak when spoken to (reminders and alerts still come)."
-                    if off else "Heartbeat back on, sir.")
-            return
-        is_stop, stop_id = tasks.parse_stop(update.text)
-        if is_stop and mem.db.execute("SELECT 1 FROM tasks WHERE status IN ('queued','running','waiting')").fetchone():
-            tg.send(tasks.stop(mem, stop_id))
-            for t in tasks.recent(mem, 3):  # show it as stopped in its progress message too
-                if t["status"] == "stopped" and t["message_id"]:
-                    try:
-                        tg.edit(t["message_id"], tasks.progress_text(t))
-                    except Exception:
-                        pass
-                    break
-            return
-        tg.typing()
-        sent = {}
-
-        def first_out(sentence):  # typed chat: send the first sentence now, the rest as its own message
-            if not update.via_voice:
-                sent["id"], sent["text"] = tg.send(sentence), sentence
-
-        reply = _answer(mem, update.text, on_progress=tg.typing, spoken=update.via_voice, warm=warm,
-                        on_first=first_out, send_photo=tg.send_photo)
-        if sent:  # buttons and plans below must still go out, so no early return
-            _send_rest(tg, reply, sent["text"])
-        elif update.via_voice:  # answer a voice note with a voice note (walks, AirPods)
-            from jarvis.speech import voice_note
-            tg.action("record_voice")
-            try:
-                tg.send_voice(voice_note(reply), caption=reply if len(reply) <= 1000 else "")
-                if len(reply) > 1000:
-                    _send_rest(tg, reply)
-            except Exception as e:  # never lose the answer over audio trouble
-                mem.log("voice_note_failed", str(e)[:200])
-                _send_rest(tg, reply)
-        else:
-            _send_rest(tg, reply)
-        notify_pending(mem, tg, say=_say_if_present)  # drafts and risky commands: the question, right away
-        tasks.start_queued(mem, worker)  # a task started in this chat begins at once
-        if mem.self_edits("drafting"):
-            tg.typing()
-            plans.draft_plans(mem, tg)
-
-    def on_button(verb, edit_id):
-        if verb.startswith("cmd_"):
-            from jarvis import terminal
-            return terminal.handle_button(mem, tg, verb, edit_id, on_done=_carry_on(worker))
-        if verb.startswith("plan_"):
-            on_approved = (lambda i: selfedit.queue_approved(mem, tg, i)) if selfedit.enabled() else None
-            return plans.handle_button(mem, verb, edit_id, on_approved)
-        return selfedit.handle_button(mem, tg, verb, edit_id)
 
     def on_location(update):
         """Stored quietly; only a fresh share (not each live update) gets a short reply."""
@@ -622,6 +631,36 @@ def _listen(mem: Memory) -> None:
             time.sleep(wait)
 
 
+def _serve_inbox(tg, handlers) -> None:
+    """Buttons pressed and messages typed in the inbox app (jarvis/inbox.py), on their own thread."""
+    from datetime import datetime, timezone
+    from jarvis import inbox
+    from jarvis.approvals import _handle, notify_pending
+    from jarvis.telegram import Update
+    mem = Memory(config.DB_PATH)  # SQLite connections stay on the thread that opened them
+    inbox.seed(mem)
+
+    def handle(req: dict) -> None:
+        mac = inbox.MacChat(tg)
+        on_text, on_button = handlers(mem, mac, source="inbox")
+        now = datetime.now(timezone.utc)
+        if req.get("type") == "button":
+            local_id, data = int(req.get("id") or 0), str(req.get("data") or "")
+            msg = inbox.open_button(local_id, data)
+            if not msg:
+                return  # already answered, or not a real button: nothing to do
+            mac.local_id = local_id
+            u = Update(update_id=0, sender_id=0, sent_at=now, callback_id="inbox", callback_data=data,
+                       message_id=msg.get("tg_id"), message_text=msg["text"])
+            _handle(mem, mac, u, on_text, on_button)
+            inbox.resolve(local_id)  # whatever the result, its buttons are spent
+        elif req.get("type") == "text" and (text := str(req.get("text") or "").strip()[:inbox.MAX_TEXT]):
+            inbox.record("you", text, via="Mac")
+            _handle(mem, mac, Update(update_id=0, sender_id=0, sent_at=now, text=text), on_text, on_button)
+        notify_pending(mem, tg, say=None)  # anything new that needs his OK: in Telegram and here
+    inbox.serve(handle, log=lambda s: print(s, flush=True))
+
+
 def _serve_hud(tg, warm, turn) -> None:
     """Answer what he types into the HUD on his Mac (jarvis/hud.py), on its own thread."""
     from jarvis import hud, timing
@@ -634,8 +673,11 @@ def _serve_hud(tg, warm, turn) -> None:
             set_state("hud", "working", detail="answering")
             timing.start("hud")
             try:
+                from jarvis import inbox
+                inbox.record("you", text, via="HUD")
                 reply = _answer(mem, f"(typed in the HUD on his Mac) {text}", warm=warm, on_text=on_text,
                                 send_photo=tg.send_photo)
+                inbox.record("jarvis", reply, via="HUD")
             finally:
                 timing.finish(mem)
                 set_state("hud", "idle")
@@ -915,6 +957,7 @@ def main() -> None:
     hp = sub.add_parser("helpers", help="What JARVIS sees of its helpers: build, Claude Code sessions on this Mac")
     hp.add_argument("which", nargs="?", default="", help="words from a session's title for detail")
     hp.add_argument("--panel", action="store_true", help="put every helper on the panel, kept live")
+    hp.add_argument("--only", default="all", choices=["all", "code", "commands", "tasks"], help="with --panel: which tab")
     si = sub.add_parser("send-image", help="Send an image to your Telegram (same folder checks as JARVIS uses)")
     si.add_argument("path")
     si.add_argument("--caption", default="")
@@ -1015,11 +1058,13 @@ def main() -> None:
             listen = bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
             phone = _phone_ready()
             schedule.install(args.minutes * 60, listen=listen, watch=config.WATCH, ears=config.EARS,
-                             menubar=config.MENUBAR, phone=phone, panel=config.PANEL, hud=config.HUD and listen)
+                             menubar=config.MENUBAR, phone=phone, panel=config.PANEL, hud=config.HUD and listen,
+                             inbox=config.INBOX and listen)
             print(f"tick: every {args.minutes} min. listen: {'always on' if listen else 'skipped (Telegram not set up)'}."
                   f" watch: {'on' if config.WATCH else 'off'}. ears: {'on' if config.EARS else 'off'}."
                   f" phone: {'on' if phone else 'off'}. panel: {'on' if config.PANEL else 'off'}."
                   f" hud: {'on (⌥Space)' if config.HUD and listen else 'off'}."
+                  f" inbox: {'on' if config.INBOX and listen else 'off'}."
                   f" Logs: {schedule.LOG_DIR}")
         elif args.action == "uninstall":
             print("Removed" if schedule.uninstall() else "Wasn't scheduled")
@@ -1243,7 +1288,7 @@ def main() -> None:
         from jarvis import helpers
         if args.panel:
             from jarvis import panel
-            print(panel.show(mem, {"type": "show", "kind": "helpers"}))
+            print(panel.show(mem, {"type": "show", "kind": "helpers", "show": args.only}))
             return
         print(helpers.detail(mem, args.which) if args.which else helpers.for_prompt(mem, max_age=0))
         return

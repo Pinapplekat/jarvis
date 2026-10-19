@@ -2,7 +2,8 @@
 "Hey Jarvis", listening, speaking, or off, and while it works, what it's doing (a white icon per
 action: a camera for a screenshot, a pin for location...; see status.ACTIONS). It only reads the
 status file that jarvis/status.py writes; it has no other access. Its menu can open the typing HUD
-(jarvis/hud.py) and put the helpers on the panel. Rebuilt only when its source changes."""
+(jarvis/hud.py) put the helpers on the panel, and open the inbox
+(jarvis/inbox.py), with an amber dot while something there waits for his OK. Rebuilt only when its source changes."""
 
 import hashlib
 import plistlib
@@ -19,6 +20,8 @@ import AppKit
 let statusPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1]
     : NSHomeDirectory() + "/Library/Application Support/JARVIS/status.json"
 let logsPath = NSHomeDirectory() + "/Library/Logs/JARVIS"
+let feedPath = (statusPath as NSString).deletingLastPathComponent + "/inbox/feed.json"
+let amber = NSColor(srgbRed: 1.0, green: 0.69, blue: 0.0, alpha: 1)
 
 // Every icon is white; only its shape says what's happening. Off is dimmed.
 struct Look { let symbol: String; let fallback: String; let label: String; let alpha: CGFloat }
@@ -38,7 +41,10 @@ final class Indicator: NSObject {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let stateLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     let detailLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    let inboxItem = NSMenuItem(title: "Open Inbox", action: nil, keyEquivalent: "i")
     var shown = ""
+    var waiting = 0
+    var feedMod: Date? = nil
 
     override init() {
         super.init()
@@ -47,6 +53,9 @@ final class Indicator: NSObject {
         type.keyEquivalentModifierMask = [.option]
         type.target = self
         menu.addItem(type)
+        inboxItem.action = #selector(openInbox)
+        inboxItem.target = self
+        menu.addItem(inboxItem)
         let helpers = NSMenuItem(title: "Show Helpers", action: #selector(showHelpers), keyEquivalent: "h")
         helpers.target = self
         menu.addItem(helpers)
@@ -101,21 +110,22 @@ final class Indicator: NSObject {
             state = "waiting"
             detail = "Telegram and alerts are idle"
         }
+        readWaiting()
         let look = looks[state]!
         let title = label.flatMap { $0.isEmpty ? nil : $0 } ?? look.label
-        let key = state + (symbol ?? "") + title + detail
+        let key = state + (symbol ?? "") + title + detail + "\(waiting)"
         if key != shown {
             shown = key
             let image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: "JARVIS: " + title) }
                 ?? NSImage(systemSymbolName: look.symbol, accessibilityDescription: "JARVIS: " + title)
             if let image = image {
-                item.button?.image = white(image, alpha: look.alpha)
+                item.button?.image = white(image, alpha: look.alpha, dot: waiting > 0)
                 item.button?.title = ""
             } else {
                 item.button?.image = nil
                 item.button?.title = look.fallback
             }
-            item.button?.toolTip = "JARVIS: " + title
+            item.button?.toolTip = "JARVIS: " + title + (waiting > 0 ? " (\(waiting) waiting for your OK)" : "")
             stateLine.title = "JARVIS: " + title
         }
         let f = DateFormatter()
@@ -125,17 +135,47 @@ final class Indicator: NSObject {
 
     // White, always: the color is drawn into the image (not a template, which macOS would paint black on a
     // light menu bar and ignore any tint).
-    func white(_ symbol: NSImage, alpha: CGFloat) -> NSImage {
+    // An amber dot in the corner when something waits for his OK in the inbox.
+    func white(_ symbol: NSImage, alpha: CGFloat, dot: Bool = false) -> NSImage {
         let src = symbol.withSymbolConfiguration(.init(pointSize: 14, weight: .medium)) ?? symbol
-        let out = NSImage(size: src.size, flipped: false) { rect in
-            src.draw(in: rect)
+        let size = NSSize(width: src.size.width + (dot ? 5 : 0), height: src.size.height)
+        let out = NSImage(size: size, flipped: false) { rect in
+            let glyph = NSRect(origin: .zero, size: src.size)
+            src.draw(in: glyph)
             NSColor.white.withAlphaComponent(alpha).set()
-            rect.fill(using: .sourceAtop)
+            glyph.fill(using: .sourceAtop)
+            if dot {
+                amber.set()
+                NSBezierPath(ovalIn: NSRect(x: rect.maxX - 6, y: rect.maxY - 6, width: 6, height: 6)).fill()
+            }
             return true
         }
         out.isTemplate = false
         out.accessibilityDescription = symbol.accessibilityDescription
         return out
+    }
+
+    func readWaiting() {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: feedPath),
+              let mod = attrs[.modificationDate] as? Date, mod != feedMod else { return }
+        feedMod = mod
+        if let d = FileManager.default.contents(atPath: feedPath),
+           let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
+            waiting = o["waiting"] as? Int ?? 0
+            inboxItem.title = waiting > 0 ? "Open Inbox \u{2014} \(waiting) waiting" : "Open Inbox"
+        }
+    }
+
+    @objc func openInbox() {
+        let app = NSHomeDirectory() + "/Applications/JARVIS Inbox.app"
+        if !NSRunningApplication.runningApplications(withBundleIdentifier: "com.jarvis.inbox").isEmpty {
+            DistributedNotificationCenter.default().postNotificationName(
+                NSNotification.Name("com.jarvis.inbox.show"), object: nil, userInfo: nil, deliverImmediately: true)
+        } else if FileManager.default.fileExists(atPath: app) {
+            let config = NSWorkspace.OpenConfiguration()
+            config.arguments = ["--show"]
+            NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: app), configuration: config)
+        }
     }
 
     @objc func showHelpers() {

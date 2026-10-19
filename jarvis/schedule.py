@@ -21,6 +21,7 @@ LOG_DIR = Path.home() / "Library/Logs/JARVIS"
 AGENTS = Path.home() / "Library/LaunchAgents"
 TICK, LISTEN, WATCH, EARS = "com.jarvis.tick", "com.jarvis.listen", "com.jarvis.watch", "com.jarvis.ears"
 MENUBAR, PHONE, PANEL, HUD = "com.jarvis.menubar", "com.jarvis.phone", "com.jarvis.panel", "com.jarvis.hud"
+INBOX = "com.jarvis.inbox"
 LOG = LOG_DIR / "tick.log"
 
 
@@ -89,7 +90,8 @@ def deploy(uv: str) -> None:
 
 
 def install(interval: int = 300, listen: bool = True, watch: bool = True, ears: bool = True,
-            menubar: bool = True, phone: bool = False, panel: bool = False, hud: bool = False) -> None:
+            menubar: bool = True, phone: bool = False, panel: bool = False, hud: bool = False,
+            inbox: bool = False) -> None:
     uv = shutil.which("uv")
     if not uv:
         raise SystemExit("uv not found on PATH")
@@ -156,11 +158,24 @@ def install(interval: int = 300, listen: bool = True, watch: bool = True, ears: 
         })
     else:
         _unload(HUD)
+    if inbox:
+        from jarvis import inbox as chat_inbox
+        chat_inbox.build()  # its own app; `jarvis listen` handles what's pressed and typed in it
+        _load(INBOX, {
+            "Label": INBOX,
+            "ProgramArguments": [str(chat_inbox.EXECUTABLE), str(chat_inbox.INBOX_DIR)],
+            "RunAtLoad": True,
+            "KeepAlive": {"SuccessfulExit": False},
+            "StandardOutPath": str(LOG_DIR / "inbox.log"),
+            "StandardErrorPath": str(LOG_DIR / "inbox.log"),
+        })
+    else:
+        _unload(INBOX)
 
 
 def uninstall() -> bool:
     removed = False
-    for label in (TICK, LISTEN, WATCH, EARS, MENUBAR, PHONE, PANEL, HUD):
+    for label in (TICK, LISTEN, WATCH, EARS, MENUBAR, PHONE, PANEL, HUD, INBOX):
         removed |= _unload(label)
         (AGENTS / f"{label}.plist").unlink(missing_ok=True)
     return removed
@@ -174,7 +189,7 @@ def status(log_lines: int = 5) -> str:
     keep = ("state =", "run interval", "last exit code", "runs =", "pid =")
     out = []
     for label, command in ((TICK, "tick"), (LISTEN, "listen"), (WATCH, "watch"), (EARS, "ears"), (PHONE, "phone"),
-                           (PANEL, "panel"), (HUD, "hud")):
+                           (PANEL, "panel"), (HUD, "hud"), (INBOX, "inbox")):
         if not is_loaded(label):
             out.append(f"{command}: not installed (jarvis schedule install)")
             continue

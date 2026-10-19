@@ -562,7 +562,8 @@ def check_health(mem: Memory, tg) -> str:
 def main(argv: list[str]) -> None:
     """Entry for the detached workers: build | deploy <id>."""
     from jarvis.telegram import TelegramClient
-    mem, tg = Memory(config.DB_PATH), TelegramClient()
+    from jarvis.inbox import Mirror
+    mem, tg = Memory(config.DB_PATH), Mirror(TelegramClient())  # Deploy/Discard can be pressed on the Mac too
     if argv[0] == "build":
         build_queued(mem, tg)
     elif argv[0] == "deploy":

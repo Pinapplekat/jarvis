@@ -97,6 +97,7 @@ SCREEN_CLICK = os.getenv("SCREEN_CLICK", "0") == "1"
 PANEL = os.getenv("PANEL", "1") == "1"
 # Type to JARVIS on the Mac: the HUD (⌥Space), a separate small app; `jarvis listen` answers it
 HUD = os.getenv("HUD", "1") == "1"
+INBOX = os.getenv("INBOX", "1") == "1"  # the Telegram chat on the Mac, with working buttons (JARVIS Inbox.app)
 VISION_MODEL = os.getenv("VISION_MODEL", "")  # empty = JARVIS_MODEL (the fast one); "sonnet" for sharper reading
 
 # Self-editing: the git repo JARVIS improves (your project folder), the model that writes

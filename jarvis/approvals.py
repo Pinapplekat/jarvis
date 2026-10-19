@@ -221,6 +221,9 @@ def handle_updates(mem: Memory, tg: TelegramClient, allowed_user: int,
             if not u.text:
                 tg.send("Didn't catch that, sir. Mind trying again?")
                 continue
+        if u.text:  # his side of the conversation, for the inbox on the Mac
+            from jarvis import inbox
+            inbox.record("you", u.text, via="voice note" if u.via_voice else "")
         changed += _handle(mem, tg, u, on_text, on_button)
     return changed
 

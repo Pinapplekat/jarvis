@@ -123,7 +123,7 @@ final class Bar: NSView {
     }
 }
 
-final class Panel: NSObject, NSWindowDelegate, WKNavigationDelegate {
+final class Panel: NSObject, NSWindowDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     var window: NSPanel!
     var root: NSView!
     var web: WKWebView!
@@ -171,7 +171,9 @@ final class Panel: NSObject, NSWindowDelegate, WKNavigationDelegate {
         bar.onClose = { [unowned self] in self.window.orderOut(nil); self.ack(self.seq, "closed") }
         bar.onHeight = { [unowned self] in if self.fit { self.fitToContent() } else { self.layout() } }
         root.addSubview(bar)
-        web = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        let config = WKWebViewConfiguration()
+        config.userContentController.add(self, name: "fit")  // a page whose height changed (a helpers tab)
+        web = WKWebView(frame: .zero, configuration: config)
         web.setValue(false, forKey: "drawsBackground")  // let the glass show through the page
         web.navigationDelegate = self
         root.addSubview(web)
@@ -207,7 +209,8 @@ final class Panel: NSObject, NSWindowDelegate, WKNavigationDelegate {
             seq = newSeq
             window.title = obj["title"] as? String ?? "JARVIS"
             bar.set(window.title, syncedAt: nil)
-            web.evaluateJavaScript("document.body.innerHTML = \(arr)[0]") { [weak self] _, _ in self?.fitToContent() }
+            web.evaluateJavaScript("document.body.innerHTML = \(arr)[0]; window.applyFilter && applyFilter()") {
+                [weak self] _, _ in self?.fitToContent() }
             ack(newSeq, "shown")
             return
         }
@@ -235,6 +238,10 @@ final class Panel: NSObject, NSWindowDelegate, WKNavigationDelegate {
     // Our own pages size the window to what they hold (up to most of the screen's height); the top stays put.
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         if fit { fitToContent() }
+    }
+
+    func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
+        if fit && window.isVisible { fitToContent() }
     }
 
     func fitToContent() {
@@ -387,7 +394,7 @@ def resize(mem: Memory, step: int, wait=_wait_ack) -> str:
     size = max(0, min(int(st.get("size", DEFAULT_SIZE)) + step, len(SIZES) - 1))
     if size == st.get("size", DEFAULT_SIZE):
         return "That's as " + ("big" if step > 0 else "small") + " as it goes, sir."
-    _present(mem, {k: st[k] for k in ("title", "html", "url", "source", "body", "live") if k in st} | {"size": size}, wait)
+    _present(mem, {k: st[k] for k in ("title", "html", "url", "source", "body", "live", "filter") if k in st} | {"size": size}, wait)
     return "Bigger, sir." if step > 0 else "Smaller, sir."
 
 
@@ -519,11 +526,42 @@ HELPER_STYLE = ("<style>.helper{padding:9px 14px 10px;border-top:1px solid var(-
                 "</style>")
 
 
-def helpers_view(mem: Memory | None, now: float | None = None) -> dict:
+# The helpers view's tabs: which kinds each shows. Picking one is done in the page; it sticks across refreshes.
+HELPER_GROUPS = {"all": ("All", None), "code": ("Claude Code", ("session",)),
+                 "commands": ("Commands", ("job",)), "tasks": ("Tasks", ("task", "build"))}
+HELPER_TABS_STYLE = ("<style>nav.tabs{display:flex;gap:2px;padding:8px 10px 6px;border-bottom:1px solid var(--line);"
+                     "position:sticky;top:0;background:rgba(20,20,20,.55);backdrop-filter:blur(12px);z-index:1}"
+                     "nav.tabs button{all:unset;cursor:default;font-size:12px;padding:3px 9px;color:rgba(255,255,255,.55);"
+                     "border:1px solid transparent}nav.tabs button:hover{color:#fff}"
+                     "nav.tabs button.on{color:#fff;border-color:rgba(255,255,255,.28)}"
+                     "nav.tabs .n{margin-left:5px;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.4)}"
+                     ".helper.hidden,.empty.hidden{display:none}</style>")
+HELPER_SCRIPT = """<script>
+window.jarvisFilter = window.jarvisFilter || document.body.dataset.filter || 'all';
+window.applyFilter = function () {
+  var f = window.jarvisFilter, shown = 0;
+  document.querySelectorAll('nav.tabs button').forEach(function (b) { b.classList.toggle('on', b.dataset.f === f); });
+  document.querySelectorAll('.helper').forEach(function (h) {
+    var on = f === 'all' || h.dataset.group === f; h.classList.toggle('hidden', !on); if (on) shown++; });
+  var none = document.querySelector('.empty.filtered'); if (none) none.classList.toggle('hidden', shown > 0);
+  if (window.webkit && webkit.messageHandlers && webkit.messageHandlers.fit) webkit.messageHandlers.fit.postMessage(1);
+};
+document.addEventListener('click', function (ev) {
+  var b = ev.target.closest('nav.tabs button'); if (!b) return;
+  window.jarvisFilter = b.dataset.f; window.applyFilter();
+});
+window.applyFilter();
+</script>"""
+
+
+def helpers_view(mem: Memory | None, now: float | None = None, show: str = "all") -> dict:
     """Every helper (JARVIS's tasks, jobs and build, and Claude Code sessions on this Mac): where it
-    runs and exactly what it's doing. Kept live while it's up (serve_live)."""
+    runs and exactly what it's doing, with tabs for All, Claude Code, Commands and Tasks (`show` picks
+    the first one). Kept live while it's up (serve_live)."""
     from jarvis import helpers
     board = helpers.board(mem, now)
+    show = show if show in HELPER_GROUPS else "all"
+    group_of = {k: g for g, (_, kinds) in HELPER_GROUPS.items() if kinds for k in kinds}
     e = htmllib.escape
     parts = []
     for h in board:
@@ -544,13 +582,18 @@ def helpers_view(mem: Memory | None, now: float | None = None) -> dict:
             lines.append(f'<div class="line steps"><span class="k">{"Output" if h["kind"] == "job" else "Said"}</span>'
                          f'{e(h["said"][-220:])}</div>')
         cls = "helper" + (" waiting" if h["waiting"] else "" if h["busy"] else " quiet")
-        parts.append(f'<section class="{cls}"><div class="head"><span class="name"><i class="dot{" busy" if h["busy"] else ""}" '
+        parts.append(f'<section class="{cls}" data-group="{group_of.get(h["kind"], "tasks")}"><div class="head"><span class="name"><i class="dot{" busy" if h["busy"] else ""}" '
                      f'style="background:{dot}"></i>{e(h["name"])}</span><span class="state">{e(state)}</span></div>'
                      f'{"".join(lines)}</section>')
     busy = sum(1 for h in board if h["busy"])
     title = (f"{len(board)} helper{'s' if len(board) != 1 else ''}, {busy} working" if board else "No helpers running")
-    body = HELPER_STYLE + (f"<main>{''.join(parts)}</main>" if parts else '<main><p class="empty">Nothing running, sir.</p></main>')
-    return {"title": title, "html": page(body, title), "body": body, "live": "helpers"}
+    counts = {g: sum(1 for h in board if not kinds or h["kind"] in kinds) for g, (_, kinds) in HELPER_GROUPS.items()}
+    tabs = "".join(f'<button data-f="{g}" class="{"on" if g == show else ""}">{label}<span class="n">{counts[g]}</span></button>'
+                   for g, (label, _) in HELPER_GROUPS.items())
+    body = (HELPER_STYLE + HELPER_TABS_STYLE + f'<nav class="tabs">{tabs}</nav><main>{"".join(parts)}'
+            '<p class="empty filtered hidden">Nothing of that kind running, sir.</p></main>')
+    html = page(body + HELPER_SCRIPT, title).replace("<body>", f'<body data-filter="{show}">', 1)
+    return {"title": title, "html": html, "body": body, "live": "helpers", "filter": show}
 
 
 def image(path: str, mem: Memory | None = None) -> dict:
@@ -711,7 +754,7 @@ def render(mem: Memory, action: dict) -> dict:
     elif kind == "deadlines":
         content = deadlines(mem)
     elif kind == "helpers":
-        content = helpers_view(mem)
+        content = helpers_view(mem, show=str(action.get("show") or "all").lower())
     elif kind == "card":
         lines = action.get("lines") or []
         content = card(title or "JARVIS", [str(x) for x in lines] if isinstance(lines, list) else [str(lines)])
@@ -738,7 +781,7 @@ def refresh(mem: Memory | None) -> bool:
     st = current()
     if st.get("live") != "helpers" or not visible():
         return False
-    content = helpers_view(mem)
+    content = helpers_view(mem, show=st.get("filter", "all"))
     if content["body"] == st.get("body"):
         return False
     _write({**st, **content, "refresh": True})

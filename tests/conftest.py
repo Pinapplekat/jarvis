@@ -36,6 +36,10 @@ def _no_real_logs_or_state(monkeypatch, tmp_path):
     monkeypatch.setattr(voice, "ANNOUNCE_PID", tmp_path / "announcing-test.pid")
     monkeypatch.setattr(terminal, "AUDIT", tmp_path / "commands-test.jsonl")
     monkeypatch.setattr(tasks, "TASKS_DIR", tmp_path / "tasks-test")
+    from jarvis import inbox
+    monkeypatch.setattr(inbox, "INBOX_DIR", tmp_path / "inbox-test")
+    monkeypatch.setattr(inbox, "FEED", tmp_path / "inbox-test" / "feed.json")
+    monkeypatch.setattr(inbox, "REQUESTS", tmp_path / "inbox-test" / "requests")
     from jarvis import jobs
     monkeypatch.setattr(jobs, "JOBS_DIR", tmp_path / "jobs-test")
     monkeypatch.setattr(selfedit, "BUILD_DIR", tmp_path / "build-test")
