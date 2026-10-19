@@ -33,7 +33,8 @@ FEED = INBOX_DIR / "feed.json"
 REQUESTS = INBOX_DIR / "requests"
 KEEP = 300             # messages kept in the feed
 STALE_AFTER = 2 * 86400  # buttons left unanswered this long are dropped
-TYPING_FOR = 8.0       # seconds "JARVIS is typing" shows after a typing signal
+TYPING_FOR = 8.0
+STREAM_EVERY = 0.08    # seconds between streamed writes of a reply       # seconds "JARVIS is typing" shows after a typing signal
 MAX_TEXT = 4000
 _lock = threading.Lock()
 
@@ -71,7 +72,7 @@ def _editing():
 
 
 def record(who: str, text: str, buttons: list[tuple[str, str]] | None = None, tg_id: int | None = None,
-           via: str = "") -> int:
+           via: str = "", streaming: bool = False) -> int:
     """Add a message ('jarvis' or 'you'). Returns its local id. Never raises: the feed is a mirror."""
     try:
         with _editing() as data:
@@ -79,7 +80,7 @@ def record(who: str, text: str, buttons: list[tuple[str, str]] | None = None, tg
             data["next_id"] = mid + 1
             data["messages"].append({"id": mid, "who": who, "text": str(text)[:MAX_TEXT], "via": via,
                                      "buttons": [[str(l), str(d)] for l, d in (buttons or [])],
-                                     "tg_id": tg_id, "at": time.time(), "note": ""})
+                                     "tg_id": tg_id, "at": time.time(), "note": "", "streaming": streaming})
             if who == "jarvis":
                 data["typing_until"] = 0
         return mid
@@ -103,6 +104,23 @@ def resolve(local_id: int | None = None, tg_id: int | None = None, note: str = "
                     break
     except OSError:
         pass
+
+
+def update(local_id: int, text: str, streaming: bool = True) -> None:
+    """New text for a message that's still being written (or, with streaming=False, its final text)."""
+    try:
+        with _editing() as data:
+            for m in reversed(data["messages"]):
+                if m["id"] == local_id:
+                    m["text"], m["streaming"] = str(text)[:MAX_TEXT], streaming
+                    break
+            data["typing_until"] = 0
+    except OSError:
+        pass
+
+
+def read_text(local_id: int) -> str:
+    return next((m["text"] for m in read().get("messages", []) if m["id"] == local_id), "")
 
 
 def typing() -> None:
@@ -185,6 +203,26 @@ class MacChat:
     def __init__(self, tg, local_id: int | None = None):
         self._tg = tg            # the real (mirrored) client, for editing Telegram messages and photos
         self.local_id = local_id
+        self.draft = 0           # the reply being written, shown as it streams
+        self.wrote = 0.0
+
+    def stream(self, so_far: str) -> None:
+        """The reply so far: one message that fills in as it's written (at most every STREAM_EVERY)."""
+        if not self.draft:
+            self.draft = record("jarvis", so_far, via="Mac", streaming=True)
+        elif time.time() - self.wrote >= STREAM_EVERY:
+            update(self.draft, so_far)
+        else:
+            return
+        self.wrote = time.time()
+
+    def finish(self, reply: str) -> None:
+        """The whole reply (checked, actions done): it replaces what streamed."""
+        if self.draft:
+            update(self.draft, reply, streaming=False)
+            self.draft = 0
+        else:
+            record("jarvis", reply, via="Mac")
 
     def send(self, text: str, buttons: list[tuple[str, str]] | None = None) -> int:
         if buttons:  # a question for his OK goes to Telegram too, in case he walks away; both copies work
@@ -310,7 +348,20 @@ function dayName(t) {
   return n === 0 ? 'Today' : n === 1 ? 'Yesterday' : d.toLocaleDateString([], {weekday: 'long', month: 'short', day: 'numeric'});
 }
 function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+// While a reply streams only its text changes: update that one bubble instead of redrawing the chat.
+function shape(data) {
+  return JSON.stringify((data.messages || []).map(function (m, i, all) {
+    return [m.id, i === all.length - 1 ? '' : m.text, m.buttons, m.note, m.streaming]; }));
+}
 function render(data) {
+  var msgs0 = data.messages || [], tail = msgs0[msgs0.length - 1];
+  if (last && tail && tail.streaming && shape(data) === shape(last)) {
+    var bubbles = feed.querySelectorAll('.msg .text'), atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
+    if (bubbles.length) { bubbles[bubbles.length - 1].textContent = tail.text; }
+    last = data; tick();
+    if (atEnd) feed.scrollTop = feed.scrollHeight;
+    return;
+  }
   last = data;
   var msgs = data.messages || [], atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
   feed.textContent = '';
@@ -349,7 +400,8 @@ function render(data) {
   if (atBottom) feed.scrollTop = feed.scrollHeight;
 }
 function tick() {
-  document.getElementById('typing').className = last && (last.typing_until || 0) * 1000 > Date.now() ? 'on' : '';
+  var msgs = (last && last.messages) || [], streaming = msgs.length && msgs[msgs.length - 1].streaming;
+  document.getElementById('typing').className = !streaming && last && (last.typing_until || 0) * 1000 > Date.now() ? 'on' : '';
 }
 setInterval(tick, 1000);
 function grow() { box.style.height = 'auto'; box.style.height = Math.min(box.scrollHeight, 120) + 'px'; }
@@ -486,7 +538,7 @@ final class Inbox: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNavigat
             window.setFrame(NSRect(x: s.maxX - 420 - 16, y: s.minY + 16, width: 420, height: h), display: false)
         }
         window.setFrameAutosaveName("JARVISInbox")
-        Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { _ in self.poll() }
+        Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { _ in self.poll() }  // replies stream in
         DistributedNotificationCenter.default().addObserver(
             self, selector: #selector(showFromMenu), name: NSNotification.Name("com.jarvis.inbox.show"), object: nil)
     }

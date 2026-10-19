@@ -947,12 +947,15 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             on_progress: Callable[[], None] = lambda: None, inbox_text: str = "(not checked)",
             activity_text: str = "(not observed)", blocks: frozenset[str] | None = None,
             on_text: Callable[[str], None] | None = None,
+            on_draft: Callable[[str], None] | None = None,
             spotter: Callable[[Page], list[str]] | None = None,
             browser: Callable | None = None, send_photo: Callable[[bytes, str], None] | None = None,
             judge=None, vision: Vision | None = None, peek: tuple[bool, str] | None = None,
             idle: Callable[[], float | None] | None = None,
             peek_wait: Callable[[Memory], str | None] | None = None) -> str:
-    """`on_text` (optional) receives the reply text as it streams, first round only; actions
+    """`on_draft` (optional) receives the reply as it's written, word by word and every round, for
+    showing on a screen (it may be revised: a later round replaces it, a dropped promise disappears).
+    `on_text` (optional) receives the reply text as it streams, first round only; actions
     are still only applied once the complete reply has arrived. `browser(url, screenshot)`
     (jarvis.browser.browse by default) serves browse actions; `send_photo(png, caption)` shares
     screenshots in Telegram. `judge` (Jev/Haiku) lets JARVIS approve a high-risk command itself
@@ -970,7 +973,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
     ran: set[str] = set()      # auto commands run, by argv
     from jarvis import honesty
     pending_now, busy_now = bool(mem.pending_actions()), _busy(mem)
-    gate = honesty.Gate(on_text, pending_now, busy_now) if on_text else None
+    gate = honesty.Gate(on_text, pending_now, busy_now, display=on_draft) if on_text or on_draft else None
     early: dict = {}
 
     def progress(kind: str) -> None:  # the menu bar and HUD show what's being done; Telegram shows typing
@@ -1169,6 +1172,11 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             stream = {"on_text": gate.feed} if gate and round_ == 0 else {}
             if stream and _accepts(runner, "on_actions"):
                 stream["on_actions"] = on_actions
+            if round_ > 0 and on_draft:  # after a lookup the real answer streams onto the screen too
+                later = honesty.Gate(None, pending_now, busy_now, display=on_draft)  # only checks, never acts early
+                stream = {"on_text": later.feed}
+                if _accepts(runner, "on_actions"):
+                    stream["on_actions"] = later.actions_known
             status.show_action("thinking")
             with timing.step(f"model_{round_ + 1}"):
                 out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,

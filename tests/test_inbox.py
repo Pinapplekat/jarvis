@@ -78,3 +78,15 @@ def test_unanswered_buttons_lapse():
     with inbox._editing() as data:
         data["messages"][0]["at"] -= inbox.STALE_AFTER + 1
     assert inbox.open_button(lid, "se_deploy:1") is None and inbox.read()["waiting"] == 0
+
+
+def test_a_reply_typed_for_on_the_mac_streams_into_one_message_then_settles(monkeypatch):
+    monkeypatch.setattr(inbox, "STREAM_EVERY", 0)
+    mac = inbox.MacChat(inbox.Mirror(FakeTelegram()))
+    mac.stream("Two")
+    mac.stream("Two things due")
+    [m] = messages()
+    assert m["text"] == "Two things due" and m["streaming"]
+    mac.finish("Two things due today, sir.")
+    [m] = messages()
+    assert m["text"] == "Two things due today, sir." and not m["streaming"]

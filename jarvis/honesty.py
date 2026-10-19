@@ -126,8 +126,11 @@ class Gate:
     sentences only, and once the reply's actions are known, only sentences they back. If an
     action has already failed, nothing more goes out early (the final reply says what happened)."""
 
-    def __init__(self, forward: Callable[[str], None], pending: bool = False, busy: bool = False):
+    def __init__(self, forward: Callable[[str], None] | None, pending: bool = False, busy: bool = False,
+                 display: Callable[[str], None] | None = None):
         self.forward, self.pending, self.busy = forward, pending, busy
+        self.display = display               # on-screen text (HUD, inbox): word by word, can be revised
+        self.shown = ""
         self.kinds: set[str] | None = None   # None until the actions are known
         self.failed = False
         self.sent = ""                       # everything passed on so far
@@ -138,13 +141,24 @@ class Gate:
     def feed(self, so_far: str) -> None:
         if self.failed:
             return
-        out = []
+        out, done = [], 0
         for start, end in sentence_spans(so_far):
+            done = end
             sentence = so_far[start:end]
             if self.kinds is not None and is_unbacked(sentence, self.kinds, self.pending, self.busy):
                 continue
             out.append(sentence)
         text = "".join(out)
-        if text != self.sent and text.startswith(self.sent):
+        if self.forward and text != self.sent and text.startswith(self.sent):
             self.sent = text
             self.forward(text)
+        if self.display:
+            # The sentence still being written shows too, once the actions are known and it doesn't (yet)
+            # promise anything they don't back. Text on a screen can be taken back; spoken words can't.
+            tail = so_far[done:]
+            if self.kinds is None or is_unbacked(tail, self.kinds, self.pending, self.busy):
+                tail = ""
+            live = (text + tail).strip()
+            if live and live != self.shown:
+                self.shown = live
+                self.display(live)

@@ -265,22 +265,23 @@ def _runner_for(route, warm, choice: str = "auto"):
 
 
 def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = False, warm=None,
-            on_first=None, on_text=None, phone: bool = False, send_photo=None) -> str:
+            on_first=None, on_text=None, phone: bool = False, send_photo=None, on_draft=None) -> str:
     """One chat turn with full context. Shared by Telegram (typed or voice), the desk mic and
     phone calls.
     `on_first(sentence)` fires as soon as the reply's first sentence has streamed in;
-    `on_text(so_far)` gets all of the streaming reply text (the desk mic speaks it as it comes)."""
+    `on_text(so_far)` gets all of the streaming reply text (the desk mic speaks it as it comes);
+    `on_draft(so_far)` gets it word by word, every round, for a screen (the HUD, the inbox)."""
     from jarvis import timing
     own = timing.ensure("phone" if phone else "voice_note" if spoken else "telegram")
     try:
-        return _answer_timed(mem, text, on_progress, spoken, warm, on_first, on_text, phone, send_photo)
+        return _answer_timed(mem, text, on_progress, spoken, warm, on_first, on_text, phone, send_photo, on_draft)
     finally:
         if own:
             timing.finish(mem)
 
 
 def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_first, on_text, phone: bool,
-                  send_photo) -> str:
+                  send_photo, on_draft=None) -> str:
     import time
 
     from jarvis import judge, router, timing
@@ -345,7 +346,7 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
     timing.mark("context", asked - started - routed)
     reply = respond(mem, message, now, deadlines_text, runner=runner, on_progress=on_progress,
                     inbox_text=inbox, activity_text=activity, blocks=blocks,
-                    on_text=stream, spotter=_page_spotter(), send_photo=send_photo, idle=_idle_reader(),
+                    on_text=stream, on_draft=on_draft, spotter=_page_spotter(), send_photo=send_photo, idle=_idle_reader(),
                     peek_wait=peek_wait, vision=warm_vision(), judge=judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])))
     total = time.time() - started
     first_at = f"{first.at - started:.1f}s" if first and first.at else "-"
@@ -536,14 +537,17 @@ def _listen(mem: Memory) -> None:
                 return
             tg.typing()
             sent = {}
+            streams = getattr(tg, "stream", None)  # the inbox app: one message that fills in as it's written
 
             def first_out(sentence):  # typed chat: send the first sentence now, the rest as its own message
                 if not update.via_voice:
                     sent["id"], sent["text"] = tg.send(sentence), sentence
 
             reply = _answer(mem, update.text, on_progress=tg.typing, spoken=update.via_voice, warm=warm,
-                            on_first=first_out, send_photo=tg.send_photo)
-            if sent:  # buttons and plans below must still go out, so no early return
+                            on_first=None if streams else first_out, on_draft=streams, send_photo=tg.send_photo)
+            if streams:
+                tg.finish(reply)
+            elif sent:  # buttons and plans below must still go out, so no early return
                 _send_rest(tg, reply, sent["text"])
             elif update.via_voice:  # answer a voice note with a voice note (walks, AirPods)
                 from jarvis.speech import voice_note
@@ -656,7 +660,11 @@ def _serve_inbox(tg, handlers) -> None:
             inbox.resolve(local_id)  # whatever the result, its buttons are spent
         elif req.get("type") == "text" and (text := str(req.get("text") or "").strip()[:inbox.MAX_TEXT]):
             inbox.record("you", text, via="Mac")
-            _handle(mem, mac, Update(update_id=0, sender_id=0, sent_at=now, text=text), on_text, on_button)
+            try:
+                _handle(mem, mac, Update(update_id=0, sender_id=0, sent_at=now, text=text), on_text, on_button)
+            finally:
+                if mac.draft:  # cut off mid-reply: keep what streamed, but stop showing it as being written
+                    inbox.update(mac.draft, inbox.read_text(mac.draft), streaming=False)
         notify_pending(mem, tg, say=None)  # anything new that needs his OK: in Telegram and here
     inbox.serve(handle, log=lambda s: print(s, flush=True))
 
@@ -675,7 +683,7 @@ def _serve_hud(tg, warm, turn) -> None:
             try:
                 from jarvis import inbox
                 inbox.record("you", text, via="HUD")
-                reply = _answer(mem, f"(typed in the HUD on his Mac) {text}", warm=warm, on_text=on_text,
+                reply = _answer(mem, f"(typed in the HUD on his Mac) {text}", warm=warm, on_draft=on_text,
                                 send_photo=tg.send_photo)
                 inbox.record("jarvis", reply, via="HUD")
             finally:

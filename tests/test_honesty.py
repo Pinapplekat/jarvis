@@ -149,3 +149,16 @@ def test_saying_it_checked_after_a_real_lookup_is_kept(monkeypatch):
                  {"actions": [], "reply": "I've checked: all the tests pass, sir."}])
     reply = respond(Memory(":memory:"), "do the tests pass?", NOW, "", runner=lambda s, p: next(outs))
     assert reply == "I've checked: all the tests pass, sir."
+
+
+def test_screen_text_streams_word_by_word_but_never_an_unbacked_promise():
+    from jarvis.honesty import Gate
+    spoken, shown = [], []
+    g = Gate(spoken.append, display=shown.append)
+    g.feed("Two things are")
+    assert shown == [] and spoken == []  # actions not known yet: nothing half-written shows
+    g.actions_known([])
+    g.feed("Two things are due")
+    assert shown[-1] == "Two things are due" and spoken == []  # on screen at once; spoken waits for the sentence
+    g.feed("Two things are due today. I'm checking")
+    assert shown[-1] == "Two things are due today." and spoken == ["Two things are due today. "]

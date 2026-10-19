@@ -27,7 +27,7 @@ HUD_DIR = config.DATA_DIR / "hud"
 REQUEST = HUD_DIR / "request.json"
 REPLY = HUD_DIR / "reply.json"
 MAX_AGE = 120        # a question older than this (JARVIS was down) isn't answered out of the blue
-STREAM_EVERY = 0.1   # seconds between streamed reply writes
+STREAM_EVERY = 0.06  # seconds between streamed reply writes
 
 SWIFT = r"""
 import AppKit
@@ -141,7 +141,7 @@ final class HUD: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         replyView.autoresizingMask = [.width]
         for v in [icon, field, divider, statusIcon, statusText, scroll] as [NSView] { root.addSubview(v) }
 
-        Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { _ in self.poll() }
+        Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { _ in self.poll() }  // replies stream in
         DistributedNotificationCenter.default().addObserver(
             self, selector: #selector(showFromMenu), name: NSNotification.Name("com.jarvis.hud.show"), object: nil)
         layout(replyHeight: 0)
