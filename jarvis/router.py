@@ -120,3 +120,59 @@ def route(message: str, recent: list[str], fast: Engine | None, on_error=None) -
         return finish(ALL, heavy_by_keywords(message), "keywords")
     blocks = {k for k in BLOCKS if _p_yes(answers[k]) >= INCLUDE_AT}
     return finish(blocks, _p_yes(answers["heavy"]) >= HEAVY_AT, "jev", screen_look(answers))
+
+
+# Other things that need no model at all: "play Daft Punk", "set a timer for 5 minutes", "wake me at 7:30",
+# "what time is it". Whole-message only, like media_command; anything vaguer goes to chat.
+_NUM_WORDS = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+              "eight": 8, "nine": 9, "ten": 10, "fifteen": 15, "twenty": 20, "thirty": 30, "forty": 40,
+              "forty-five": 45, "sixty": 60, "ninety": 90}
+_AMOUNT = r"(\d{1,3}|" + "|".join(sorted(map(re.escape, _NUM_WORDS), key=len, reverse=True)) + r")"
+_UNITS = r"(seconds?|secs?|minutes?|mins?|hours?|hrs?)"
+_TIMER = re.compile(rf"(?:set\s+|start\s+)?(?:a\s+|an\s+)?(?:timer\s+(?:for\s+)?{_AMOUNT}[\s-]*{_UNITS}"
+                    rf"|{_AMOUNT}[\s-]*{_UNITS}\s+timer)", re.I)
+_ALARM = re.compile(r"(?:set\s+(?:an?\s+)?alarm\s+(?:for|at)|wake\s+me(?:\s+up)?\s+at|alarm\s+(?:for|at))\s+"
+                    r"(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?", re.I)
+_PLAY = re.compile(r"(?:play|put\s+on|throw\s+on)\s+(?:some\s+|me\s+some\s+)?(?P<q>.+?)(?:\s+on\s+spotify)?", re.I)
+_TIME = re.compile(r"what(?:'s|\s+is)\s+the\s+time|what\s+time\s+is\s+it(?:\s+now)?|time\s+check", re.I)
+_DATE = re.compile(r"what(?:'s|\s+is)\s+(?:the\s+|today'?s\s+)?date(?:\s+today)?|what\s+day\s+is\s+(?:it|today)"
+                   r"|what(?:'s|\s+is)\s+today", re.I)
+_NOT_A_QUERY = {"it", "this", "that", "something", "music", "a song", "some music", "the music", "again", "",
+                "something else", "anything"}
+
+
+def _amount(word: str) -> int:
+    return int(word) if word.isdigit() else _NUM_WORDS[word.lower()]
+
+
+def instant_command(text: str) -> tuple | None:
+    """("play", query) | ("timer", seconds) | ("alarm", "HH:MM") | ("time",) | ("date",), or None."""
+    t = re.sub(r"[.!?]+$", "", " ".join(str(text).replace("’", "'").split())).strip()
+    for _ in range(3):
+        t = _POLITE.sub("", t).strip(" ,")
+    if not t or len(t) > 120:
+        return None
+    if _TIME.fullmatch(t):
+        return ("time",)
+    if _DATE.fullmatch(t):
+        return ("date",)
+    if m := _TIMER.fullmatch(t):
+        groups = [g for g in m.groups() if g]
+        n, unit = _amount(groups[0]), groups[1].lower()
+        seconds = n * (3600 if unit.startswith("h") else 60 if unit.startswith("m") else 1)
+        return ("timer", seconds) if 1 <= seconds <= 24 * 3600 else None
+    if m := _ALARM.fullmatch(t):
+        hour, minute, half = int(m[1]), int(m[2] or 0), (m[3] or "").replace(".", "").lower()
+        if not half and hour <= 12:
+            return None  # "alarm for 6": morning or evening is the model's call (or his)
+        if half:
+            if not 1 <= hour <= 12:
+                return None
+            hour = hour % 12 + (12 if half == "pm" else 0)
+        return ("alarm", f"{hour:02d}:{minute:02d}") if hour <= 23 and minute <= 59 else None
+    if m := _PLAY.fullmatch(t):
+        q = m["q"].strip(" ,")
+        if q.lower() in _NOT_A_QUERY or re.search(r"\b(?:video|youtube|movie|game|episode)\b", q, re.I):
+            return None
+        return ("play", q) if len(q) <= 100 else None
+    return None

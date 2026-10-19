@@ -253,6 +253,10 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
     if hit:  # "pause", "skip", "volume 40": done at once, no model round trip
         timing.mark("instant", 0)
         return _media_fast(mem, text, hit, spoken=spoken, phone=phone)
+    inst = router.instant_command(text)
+    if inst and (config.SIRI or inst[0] in ("time", "date")):  # "play X", timers, alarms, the time: no model
+        timing.mark("instant", 0)
+        return _instant(mem, text, inst, spoken=spoken, phone=phone)
     now = _now_local()
     started = time.time()
     recent = [f"{'Elijah' if h['role'] == 'user' else 'JARVIS'}: {h['text'][:300]}" for h in mem.chat_history(4)]
@@ -294,6 +298,32 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
 def _idle_reader():
     from jarvis.voice import idle_seconds
     return idle_seconds
+
+
+def _instant(mem: Memory, text: str, cmd: tuple, spoken: bool = False, phone: bool = False) -> str:
+    """A whole-message command that needs no model: done now, answered from the real result."""
+    from jarvis import siri
+    mem.add_chat("user", f"(on the phone, transcribed) {text}" if phone
+                 else f"(said out loud, transcribed) {text}" if spoken else text)
+    now = _now_local()
+    kind = cmd[0]
+    try:
+        if kind == "time":
+            reply = f"It's {now:%-I:%M %p}, sir."
+        elif kind == "date":
+            reply = f"It's {now:%A, %B %-d}, sir."
+        elif kind == "timer":
+            reply = siri.set_timer(mem, cmd[1])
+        elif kind == "alarm":
+            reply = siri.set_alarm(mem, siri.parse_alarm(cmd[1], now))
+        else:
+            reply = siri.music(mem, cmd[1], "any")
+    except Exception as e:  # never leave him without an answer, and never claim it worked
+        what = {"timer": "set the timer", "alarm": "set the alarm", "play": "play that"}.get(kind, "do that")
+        reply = f"Sorry, sir, I couldn't {what}: {str(e)[:150]}"
+    mem.log("instant", f"{kind}: {reply[:150]}")
+    mem.add_chat("assistant", reply)
+    return reply
 
 
 def _media_fast(mem: Memory, text: str, hit: tuple, spoken: bool = False, phone: bool = False) -> str:
