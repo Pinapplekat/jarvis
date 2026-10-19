@@ -184,6 +184,9 @@ now", "I'll send it") without the action for it here.
   "context", queue the song to look for; nothing for the rest. "play" resumes; to start something new
   use play_music. Runs at once; reply with nothing or a couple of words ("Right away, sir.");
   JARVIS adds the one-line result (e.g. "Paused." or what's playing).
+- deploy_build: {{"type":"deploy_build","id":optional plan id}} when he asks you to deploy a finished build
+  ("deploy it", "ship it"). It doesn't deploy: it checks a build is ready and asks him to say "yes, deploy
+  it"; only those words deploy it. You can do this by voice or text; never send him to a button for it.
 - switch_model: {{"type":"switch_model","model":"haiku"|"sonnet"|"opus"|"auto"}} when he asks you to use a
   different model for chat ("use Sonnet", "go back to Haiku", "pick the model yourself"). It's saved and
   takes effect from his next message; confirm in a few words. You can do this; never say you can't.
@@ -779,6 +782,11 @@ def apply_actions(mem: Memory, actions: list[dict], tz, ran: set[str] = frozense
                     playing = siri.music(mem, str(a["query"]), str(a.get("kind") or "any"))
                     if said is not None:
                         said.append(playing)
+            elif kind == "deploy_build":
+                from jarvis.deployvoice import offer
+                asked = offer(mem, int(a["id"]) if str(a.get("id") or "").isdigit() else None)
+                if said is not None:
+                    said.append(asked)
             elif kind == "switch_model":
                 from jarvis.cli import set_chat_model
                 done = set_chat_model(mem, str(a.get("model") or ""))

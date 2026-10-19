@@ -280,6 +280,11 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
     if hit:  # "pause", "skip", "volume 40": done at once, no model round trip
         timing.mark("instant", 0)
         return _media_fast(mem, text, hit, spoken=spoken, phone=phone)
+    from jarvis import deployvoice
+    if (deployed := deployvoice.answer(mem, text)):  # his explicit "yes, deploy it" to an open offer
+        mem.add_chat("user", text)
+        mem.add_chat("assistant", deployed)
+        return deployed
     inst = router.instant_command(text)
     if inst and (config.SIRI or inst[0] in ("time", "date", "model")):  # "play X", timers, alarms, the time: no model
         timing.mark("instant", 0)
