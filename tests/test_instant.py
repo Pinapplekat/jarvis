@@ -51,3 +51,31 @@ def test_a_failed_instant_play_says_so(monkeypatch):
 def test_the_time_needs_no_model(monkeypatch):
     monkeypatch.setattr(cli, "_now_local", lambda: datetime(2026, 10, 19, 14, 5, tzinfo=ZoneInfo("America/Los_Angeles")))
     assert cli._answer(Memory(":memory:"), "what time is it") == "It's 2:05 PM, sir."
+
+
+@pytest.mark.parametrize("text,model", [("use Sonnet", "sonnet"), ("go back to Haiku", "haiku"),
+                                        ("switch to the smart model", "sonnet"), ("pick the model yourself", "auto"),
+                                        ("Jarvis, use opus for now", "opus")])
+def test_model_switch_phrases(text, model):
+    assert instant_command(text) == ("model", model)
+
+
+def test_switching_models_by_voice_is_saved_and_used(monkeypatch):
+    from jarvis.router import Route
+    m = Memory(":memory:")
+    assert cli._answer(m, "use Sonnet", spoken=True).startswith("Switched to Sonnet")
+    assert cli.chat_model_choice(m) == "sonnet"
+    warm = type("W", (), {"run": lambda self, *a, **k: None})()
+    quick = Route(frozenset(), False, "jev")
+    assert cli._runner_for(quick, warm, "sonnet")[1:] == ("sonnet", "cold")
+    assert cli._runner_for(quick, warm, "auto")[1:] == ("haiku", "warm")
+    assert cli._answer(m, "go back to Haiku").startswith("Back to Haiku")
+    assert cli._runner_for(Route(frozenset(), True, "jev"), warm, "haiku")[1:] == ("haiku", "warm")
+
+
+def test_switch_model_action_from_chat():
+    from jarvis.chat import apply_actions
+    m, said = Memory(":memory:"), []
+    assert apply_actions(m, [{"type": "switch_model", "model": "sonnet"}], ZoneInfo("UTC"), said=said) == []
+    assert cli.chat_model_choice(m) == "sonnet" and said[0].startswith("Switched to Sonnet")
+    assert apply_actions(m, [{"type": "switch_model", "model": "gpt"}], ZoneInfo("UTC"))  # refused

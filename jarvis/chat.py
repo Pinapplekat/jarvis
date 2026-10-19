@@ -184,6 +184,9 @@ now", "I'll send it") without the action for it here.
   "context", queue the song to look for; nothing for the rest. "play" resumes; to start something new
   use play_music. Runs at once; reply with nothing or a couple of words ("Right away, sir.");
   JARVIS adds the one-line result (e.g. "Paused." or what's playing).
+- switch_model: {{"type":"switch_model","model":"haiku"|"sonnet"|"opus"|"auto"}} when he asks you to use a
+  different model for chat ("use Sonnet", "go back to Haiku", "pick the model yourself"). It's saved and
+  takes effect from his next message; confirm in a few words. You can do this; never say you can't.
 - label_place: {{"type":"label_place","id":place number,"name":"school"}} when he tells you what a
   place in <location> is (e.g. he answers "that's school" to your question about place #3). Short
   lowercase names: school, work, home, gym.
@@ -249,7 +252,8 @@ Rules:
 - Don't ask his permission in your reply for things you can just do (reads, screenshots, ordinary
   low or medium-risk commands): do them and tell him briefly what you did and what changed. Only his
   side of the line waits for his yes, and that question goes to him on its own.
-- .env (his settings and secrets) and the self-editing switch (JARVIS_REPO in .env) are his alone.
+- .env (his settings and secrets) and the self-editing switch (JARVIS_REPO in .env) are his alone
+  (switching your chat model is not in .env: use switch_model).
   You can't edit them and must never offer to; if he wants a setting changed, tell him the exact line
   to add and that he runs `uv run jarvis schedule install` afterwards.
 - Never promise to check, watch, report back or behave differently "from now on" unless something
@@ -775,6 +779,11 @@ def apply_actions(mem: Memory, actions: list[dict], tz, ran: set[str] = frozense
                     playing = siri.music(mem, str(a["query"]), str(a.get("kind") or "any"))
                     if said is not None:
                         said.append(playing)
+            elif kind == "switch_model":
+                from jarvis.cli import set_chat_model
+                done = set_chat_model(mem, str(a.get("model") or ""))
+                if said is not None:
+                    said.append(done)
             elif kind == "media_control":  # low risk: runs at once, op and value strictly checked
                 if not config.SIRI:
                     raise ValueError("music control is turned off (SIRI=0)")

@@ -210,14 +210,41 @@ def _page_spotter():
     return lambda page: spotting.spot(spotting.candidates(page.text), fast, context=f"web page: {page.title}")
 
 
-def _runner_for(route, warm):
+def chat_model_choice(mem: Memory) -> str:
+    """The chat model he picked by voice or text ("use Sonnet"): haiku | sonnet | opus | auto."""
+    try:
+        return json.loads(mem.get_kv("chat_model") or "{}").get("model") or "auto"
+    except ValueError:
+        return "auto"
+
+
+def set_chat_model(mem: Memory, model: str) -> str:
+    """Remember his model choice (a kv setting, never .env). Returns the one-line confirmation."""
+    from jarvis.router import chosen_model
+    name = chosen_model(model)
+    if not name:
+        raise ValueError(f"unknown model {model!r} (haiku, sonnet, opus or auto)")
+    mem.set_kv("chat_model", json.dumps({"model": name}))
+    mem.log("chat_model", name)
+    if name == "auto":
+        return "Back to choosing the model myself, sir: Haiku for quick replies, Sonnet for the heavy ones."
+    if name == config.JARVIS_MODEL:
+        return f"Back to {name.title()}, sir."
+    return f"Switched to {name.title()}, sir. Replies will be a little slower."
+
+
+def _runner_for(route, warm, choice: str = "auto"):
     """Quick replies: the warm Haiku session. Heavy ones: a streamed one-off Sonnet call (not
-    kept warm, to save RAM). Either falls back to a plain call if streaming fails."""
+    kept warm, to save RAM). Either falls back to a plain call if streaming fails. `choice` is the
+    model he picked himself (chat_model_choice), which wins over routing."""
     from jarvis.chat import REPLY_SCHEMA, run_claude
     from jarvis.warm import SessionDied, one_off
-    if not route.heavy and warm:
+    if choice and choice not in ("auto", config.JARVIS_MODEL):
+        model = choice
+    elif (choice == config.JARVIS_MODEL or not route.heavy) and warm:
         return warm.run, config.JARVIS_MODEL, "warm"
-    model = config.JARVIS_HEAVY_MODEL if route.heavy else config.JARVIS_MODEL
+    else:
+        model = config.JARVIS_HEAVY_MODEL if route.heavy and choice == "auto" else config.JARVIS_MODEL
 
     def run(system, prompt, on_text=None, on_actions=None):
         try:
@@ -254,7 +281,7 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
         timing.mark("instant", 0)
         return _media_fast(mem, text, hit, spoken=spoken, phone=phone)
     inst = router.instant_command(text)
-    if inst and (config.SIRI or inst[0] in ("time", "date")):  # "play X", timers, alarms, the time: no model
+    if inst and (config.SIRI or inst[0] in ("time", "date", "model")):  # "play X", timers, alarms, the time: no model
         timing.mark("instant", 0)
         return _instant(mem, text, inst, spoken=spoken, phone=phone)
     from jarvis.chat import EarlyPeek, warm_vision
@@ -275,7 +302,7 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
         early_peek.discard()
         mem.log("screen_peek", f"skipped: {route.look_why}")
         peek_wait = None
-    runner, model, temp = _runner_for(route, warm)
+    runner, model, temp = _runner_for(route, warm, chat_model_choice(mem))
     first = FirstSentence(on_first) if on_first else None
     feeds = [f for f in (first.feed if first else None, on_text) if f]
     stream = (lambda so_far: [f(so_far) for f in feeds]) if feeds else None
@@ -338,6 +365,8 @@ def _instant(mem: Memory, text: str, cmd: tuple, spoken: bool = False, phone: bo
             reply = siri.set_timer(mem, cmd[1])
         elif kind == "alarm":
             reply = siri.set_alarm(mem, siri.parse_alarm(cmd[1], now))
+        elif kind == "model":
+            reply = set_chat_model(mem, cmd[1])
         else:
             reply = siri.music(mem, cmd[1], "any")
     except Exception as e:  # never leave him without an answer, and never claim it worked

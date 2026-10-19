@@ -141,6 +141,18 @@ _NOT_A_QUERY = {"it", "this", "that", "something", "music", "a song", "some musi
                 "something else", "anything"}
 
 
+MODELS = {"haiku": "haiku", "sonnet": "sonnet", "opus": "opus", "fast": "haiku", "quick": "haiku",
+          "smart": "sonnet", "heavy": "sonnet", "smarter": "sonnet", "auto": "auto", "automatic": "auto"}
+_MODEL = re.compile(r"(?:(?:switch|change|go)\s+(?:back\s+)?to|use|go\s+back\s+to|back\s+to)\s+(?:the\s+)?"
+                    r"(?P<m>haiku|sonnet|opus|fast|quick|smart|smarter|heavy|auto|automatic)(?:\s+model)?"
+                    r"(?:\s+(?:for\s+(?:now|chat|replies|this))|\s+again)?"
+                    r"|(?:pick|choose)\s+the\s+model\s+(?:yourself|automatically)", re.I)
+
+
+def chosen_model(name: str) -> str | None:
+    return MODELS.get(str(name or "").strip().lower())
+
+
 def _amount(word: str) -> int:
     return int(word) if word.isdigit() else _NUM_WORDS[word.lower()]
 
@@ -152,6 +164,8 @@ def instant_command(text: str) -> tuple | None:
         t = _POLITE.sub("", t).strip(" ,")
     if not t or len(t) > 120:
         return None
+    if m := _MODEL.fullmatch(t):
+        return ("model", MODELS[m["m"].lower()] if m["m"] else "auto")
     if _TIME.fullmatch(t):
         return ("time",)
     if _DATE.fullmatch(t):
