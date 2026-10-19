@@ -207,3 +207,33 @@ def test_latency_summary_includes_first_audio():
     out = latency_summary(["time_to_first_audio=900ms", "time_to_first_audio=1500ms",
                            "2.0s total, first sentence 1.0s, model haiku warm"])
     assert "time to first audio median 1.2s" in out and "target 1s" in out
+
+
+def test_announcements_wait_while_he_is_talking_with_jarvis():
+    m, msg, spoken, later = Memory(":memory:"), FakeMessenger(), [], []
+    state = {"busy": True}
+    a = Announcer(msg, m, now=lambda: NOON, speaker=lambda t: spoken.append(t) or True,
+                  presence=lambda now: True, busy=lambda: state["busy"], defer=later.append,
+                  sleep=lambda s: state.update(busy=False))
+    a.send("The tests finished, sir.")
+    assert msg.sent == ["The tests finished, sir."] and spoken == []  # text goes at once; the voice waits
+    later[0]()
+    assert spoken == ["The tests finished, sir."]
+
+
+def test_the_same_words_are_not_spoken_twice_in_a_row():
+    m, msg, spoken = Memory(":memory:"), FakeMessenger(), []
+    a = Announcer(msg, m, now=lambda: NOON, speaker=lambda t: spoken.append(t) or True,
+                  presence=lambda now: True, busy=lambda: False)
+    a.send("Econ is due tonight, sir.")
+    a.send("Econ is due tonight, sir.")
+    assert spoken == ["Econ is due tonight, sir."] and len(msg.sent) == 2
+
+
+def test_conversation_flag_makes_the_desk_busy():
+    from jarvis import speech
+    assert not speech.busy()
+    speech.conversation_started()
+    assert speech.busy() and speech.in_conversation()
+    speech.conversation_ended()
+    assert not speech.busy()

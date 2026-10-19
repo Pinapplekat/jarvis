@@ -23,6 +23,8 @@ from jarvis.voice import speakable
 SAMPLE_RATE = 16000
 LIVE = config.DATA_DIR / "speaking.json"
 LIVE_MAX_SECONDS = 180  # a live reply never holds reports back longer than this
+CONVO = config.DATA_DIR / "conversation.json"  # the desk mic is mid-conversation (woken, follow-up open)
+CONVO_MAX_SECONDS = 60  # refreshed each turn; a crash can't leave it stuck
 _model = None
 _model_lock = threading.Lock()
 
@@ -42,22 +44,51 @@ def live_reply_ended() -> None:
         _write_live({"until": 0})  # can't remove it: at least make it stale
 
 
+def conversation_started(max_seconds: float = CONVO_MAX_SECONDS) -> None:
+    """He woke JARVIS at the desk (or just finished a turn and may follow up): announcements hold."""
+    _write_live({"pid": os.getpid(), "until": time.time() + max_seconds}, CONVO)
+
+
+def conversation_ended() -> None:
+    try:
+        CONVO.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        _write_live({"until": 0}, CONVO)
+
+
+def in_conversation(now: float | None = None) -> bool:
+    return _fresh(CONVO, now)
+
+
+def busy(now: float | None = None) -> bool:
+    """Is JARVIS talking with him at the desk right now (a live reply, or a conversation still open)?
+    Anything else that wants to speak waits until this is False."""
+    return is_speaking(now) or in_conversation(now)
+
+
 def is_speaking(now: float | None = None) -> bool:
     """Is JARVIS speaking a live reply right now (in any process)?"""
+    return _fresh(LIVE, now)
+
+
+def _fresh(path: Path, now: float | None = None) -> bool:
     try:
-        until = float(json.loads(LIVE.read_text()).get("until") or 0)
+        until = float(json.loads(path.read_text()).get("until") or 0)
     except (OSError, ValueError, AttributeError):
         return False
     return (now or time.time()) < until
 
 
-def _write_live(data: dict) -> None:
+def _write_live(data: dict, path: Path | None = None) -> None:
+    path = path or LIVE
     try:
-        LIVE.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=LIVE.parent, prefix=".speaking-")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".speaking-")
         with os.fdopen(fd, "w") as f:
             json.dump(data, f)
-        os.replace(tmp, LIVE)
+        os.replace(tmp, path)
     except OSError:
         pass  # never let the flag break speaking; reports just won't wait
 

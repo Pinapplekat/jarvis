@@ -50,6 +50,9 @@ def speakable(text: str, limit: int = MAX_SPOKEN) -> str:
 
 
 _speaking: subprocess.Popen | None = None  # the `say` started by speak(), so it can be stopped
+ANNOUNCE_PID = config.DATA_DIR / "announcing.pid"  # an announcement's `say`, so the desk mic can stop it
+HOLD_MAX_SECONDS = 300   # an announcement waits at most this long for a conversation to end
+REPEAT_WINDOW = 600      # the same words aren't said aloud twice within this many seconds
 
 
 def speak(text: str) -> bool:
@@ -60,6 +63,32 @@ def speak(text: str) -> bool:
         return False
     _speaking = subprocess.Popen(["say", "-v", config.VOICE_NAME, "-r", str(config.VOICE_RATE), spoken],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        ANNOUNCE_PID.write_text(str(_speaking.pid))
+    except (OSError, AttributeError):
+        pass
+    return True
+
+
+def stop_announcement() -> bool:
+    """Stop an announcement another JARVIS process is saying (he just woke JARVIS at the desk, so only
+    one voice talks). Only ever stops a `say` process. True if one was stopped."""
+    import signal
+    try:
+        pid = int(ANNOUNCE_PID.read_text().strip())
+    except (OSError, ValueError):
+        return False
+    try:
+        name = subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True,
+                              timeout=3).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if not name.endswith("say"):
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return False
     return True
 
 
@@ -214,12 +243,26 @@ def should_speak(now: datetime, idle: float | None = None) -> bool:
             and user_present(idle))
 
 
-class Announcer:
-    """A messenger that also speaks when Elijah is at the Mac. Wraps any `send(text)` messenger."""
+def _desk_busy() -> bool:
+    from jarvis.speech import busy
+    return busy()
 
-    def __init__(self, messenger, mem=None, now=None, speaker=speak, presence=should_speak):
+
+class Announcer:
+    """A messenger that also speaks when Elijah is at the Mac. Wraps any `send(text)` messenger.
+
+    One voice: while JARVIS is answering him at the desk (or the conversation is still open for a
+    follow-up), the spoken copy waits in the background until it's over, so two voices never
+    talk at once; the same words aren't spoken twice in a row; quiet hours and presence are checked
+    again when it's finally said."""
+
+    def __init__(self, messenger, mem=None, now=None, speaker=speak, presence=should_speak, busy=_desk_busy,
+                 defer=None, sleep=time.sleep):
         self.messenger, self.mem = messenger, mem
-        self._now, self._speak, self._presence = now or datetime.now, speaker, presence
+        self._now, self._speak, self._presence, self._busy = now or datetime.now, speaker, presence, busy
+        self._defer = defer or (lambda fn: threading.Thread(target=fn, daemon=True).start())
+        self._sleep = sleep
+        self._said: dict[str, float] = {}
 
     def send(self, text, buttons=None, spoken: str | None = None):
         """Text always goes to the messenger (if any); `spoken` (default: the text) is said
@@ -228,11 +271,35 @@ class Announcer:
         if self.messenger:
             result = self.messenger.send(text, buttons=buttons) if buttons else self.messenger.send(text)
         say = spoken or text
-        if self._presence(self._now()) and self._speak(say):
-            _report_speaking(speakable(say))
-            if self.mem:
-                self.mem.log("spoke", speakable(say)[:200])
+        if not self._presence(self._now()):
+            return result
+        if self._busy():
+            self._defer(lambda: self._say_when_free(say))
+        else:
+            self._say(say)
         return result
+
+    def _say_when_free(self, say: str) -> None:
+        waited = 0.0
+        while self._busy() and waited < HOLD_MAX_SECONDS:
+            self._sleep(1.0)
+            waited += 1.0
+        if self._busy() or not self._presence(self._now()):
+            if self.mem:
+                self.mem.log("spoke", f"(held, then skipped: still talking with him or he left) {speakable(say)[:150]}")
+            return
+        self._say(say)
+
+    def _say(self, say: str) -> None:
+        key, now = speakable(say), time.time()
+        self._said = {k: t for k, t in self._said.items() if now - t < REPEAT_WINDOW}
+        if key in self._said:
+            return
+        if self._speak(say):
+            self._said[key] = now
+            _report_speaking(key)
+            if self.mem:
+                self.mem.log("spoke", key[:200])
 
 
 def _report_speaking(text: str) -> None:

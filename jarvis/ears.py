@@ -158,7 +158,19 @@ class Ears:
 
     # ----- one conversation -----
     def converse(self, stream) -> None:
-        """Chime, then answer utterances until a follow-up window passes in silence."""
+        """Chime, then answer utterances until a follow-up window passes in silence. Meanwhile other
+        announcements hold (one voice), and one already playing is stopped."""
+        from jarvis.speech import conversation_ended, conversation_started
+        from jarvis.voice import stop_announcement
+        conversation_started()
+        stop_announcement()
+        try:
+            self._converse(stream)
+        finally:
+            conversation_ended()
+
+    def _converse(self, stream) -> None:
+        from jarvis.speech import conversation_started
         self.play(CHIME)
         self.report("listening")
         timeout, barged = START_TIMEOUT, None
@@ -188,6 +200,7 @@ class Ears:
             if not barged:
                 _drain(stream)
             self.report("listening", detail="follow-up")
+            conversation_started()  # the follow-up window counts as mid-conversation
             timeout = config.FOLLOW_UP_SECONDS
 
     def reply(self, text: str, heard_at: float, read_chunk: Callable[[], np.ndarray] | None = None) -> str:
