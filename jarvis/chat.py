@@ -792,13 +792,11 @@ def apply_actions(mem: Memory, actions: list[dict], tz, ran: set[str] = frozense
             elif kind in ("show", "panel"):
                 from jarvis import panel
                 if kind == "show":
-                    done = panel.show(mem, a)
+                    panel.show(mem, a)  # raises unless the panel app confirmed it's up, so the reply holds
                 else:
                     if a.get("op") not in panel.PANEL_OPS:
                         raise ValueError(f"unknown panel op {a.get('op')!r}")
-                    done = panel.PANEL_OPS[a["op"]](mem)
-                if said is not None:
-                    said.append(done)
+                    panel.PANEL_OPS[a["op"]](mem)
             elif kind == "deploy_build":
                 from jarvis.deployvoice import offer
                 asked = offer(mem, int(a["id"]) if str(a.get("id") or "").isdigit() else None)

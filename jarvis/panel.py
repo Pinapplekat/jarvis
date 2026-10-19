@@ -282,6 +282,9 @@ def image(path: str, mem: Memory | None = None) -> dict:
     data = base64.b64encode(full.read_bytes()).decode()
     mime = IMAGE_TYPES[full.suffix.lower()]
     title = full.name
+    if (m := re.match(r"screen-(\d{8})-(\d{6})", full.stem)):  # "your screenshot from Sun 3:55 PM"
+        from datetime import datetime
+        title = f"your screenshot from {datetime.strptime(m[1] + m[2], '%Y%m%d%H%M%S'):%a %-I:%M %p}"
     return {"title": title, "html": page(f"<img src=\"data:{mime};base64,{data}\" alt=\"{htmllib.escape(title)}\">", title)}
 
 

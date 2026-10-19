@@ -75,3 +75,10 @@ def test_voice_close_goes_through_the_instant_path(monkeypatch):
     monkeypatch.setattr(panel, "_wait_ack", fake_app)
     monkeypatch.setattr(panel, "PANEL_OPS", {**panel.PANEL_OPS, "close": lambda mem: panel.close(mem, wait=fake_app)})
     assert cli._answer(m, "close that", spoken=True) == "Closed, sir."
+
+
+def test_screenshot_titles_are_spoken_nicely(tmp_path, monkeypatch):
+    from jarvis import attachments
+    monkeypatch.setattr(attachments, "SHOTS_DIR", tmp_path)
+    (tmp_path / "screen-20261018-155546.png").write_bytes(b"\x89PNG\r\n\x1a\nx")
+    assert panel.image("latest")["title"] == "your screenshot from Sun 3:55 PM"
