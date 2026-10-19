@@ -348,7 +348,46 @@ function dayName(t) {
   return n === 0 ? 'Today' : n === 1 ? 'Yesterday' : d.toLocaleDateString([], {weekday: 'long', month: 'short', day: 'numeric'});
 }
 function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
-// While a reply streams only its text changes: update that one bubble instead of redrawing the chat.
+// A reply being written is typed out at an even pace, like the Claude app: what has arrived is
+// revealed a few characters a frame, faster when it falls behind, so chunks never land in lumps.
+var typer = null;  // {id, chars: target as characters, shown: how many are on screen}
+function common(a, b) { var i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++; return i; }
+function aim(m) {
+  var chars = Array.from(m.text || '');
+  if (!typer || typer.id !== m.id) {
+    if (!m.streaming) return;  // only replies seen while being written are typed out
+    if (typer) {  // a newer reply started: the older one shows in full
+      var old = feed.querySelector('.msg[data-id="' + typer.id + '"] .text');
+      if (old) old.textContent = typer.chars.join('');
+    }
+    typer = {id: m.id, chars: chars, shown: 0, done: false};
+  } else {
+    typer.shown = Math.min(typer.shown, common(typer.chars, chars));  // a revision: retype from where it differs
+    typer.chars = chars;
+  }
+  typer.done = !m.streaming;
+  requestAnimationFrame(step);
+}
+var lastFrame = 0;
+function step(now) {
+  if (!typer) return;
+  var dt = lastFrame ? Math.min(0.05, (now - lastFrame) / 1000) : 0.016;
+  lastFrame = now;
+  var behind = typer.chars.length - typer.shown;
+  if (behind > 0) {  // (shown is clamped to the length, so the last character always lands)
+    typer.shown = Math.min(typer.chars.length, typer.shown + Math.max(1, Math.max(70, behind / 0.35) * dt));
+    var bubble = feed.querySelector('.msg[data-id="' + typer.id + '"] .text');
+    var atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
+    if (bubble) bubble.textContent = typer.chars.slice(0, Math.floor(typer.shown)).join('');
+    if (atEnd) feed.scrollTop = feed.scrollHeight;
+  }
+  if (typer.shown < typer.chars.length || !typer.done) { requestAnimationFrame(step); }
+  else { typer = null; lastFrame = 0; }
+}
+function typedText(m) {
+  return typer && typer.id === m.id ? typer.chars.slice(0, Math.floor(typer.shown)).join('') : m.text;
+}
+// While a reply streams only its text changes: aim the typer at it instead of redrawing the chat.
 function shape(data) {
   return JSON.stringify((data.messages || []).map(function (m, i, all) {
     return [m.id, i === all.length - 1 ? '' : m.text, m.buttons, m.note, m.streaming]; }));
@@ -356,12 +395,10 @@ function shape(data) {
 function render(data) {
   var msgs0 = data.messages || [], tail = msgs0[msgs0.length - 1];
   if (last && tail && tail.streaming && shape(data) === shape(last)) {
-    var bubbles = feed.querySelectorAll('.msg .text'), atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
-    if (bubbles.length) { bubbles[bubbles.length - 1].textContent = tail.text; }
-    last = data; tick();
-    if (atEnd) feed.scrollTop = feed.scrollHeight;
+    last = data; tick(); aim(tail);
     return;
   }
+  if (tail) aim(tail);
   last = data;
   var msgs = data.messages || [], atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
   feed.textContent = '';
@@ -372,8 +409,9 @@ function render(data) {
     if (d !== day) { day = d; feed.appendChild(el('div', 'day', d)); }
     var open = m.buttons && m.buttons.length;
     var box = el('div', 'msg ' + (m.who === 'you' ? 'you' : 'jarvis') + (open ? ' ask' : ''));
+    box.dataset.id = m.id;
     box.appendChild(el('div', 'meta', (m.who === 'you' ? 'You' : 'JARVIS') + (m.via ? ' · ' + m.via : '') + ' · ' + clock(m.at)));
-    box.appendChild(el('div', 'text', m.text));
+    box.appendChild(el('div', 'text', typedText(m)));
     if (open) {
       if (!firstAsk) firstAsk = box;
       var row = el('div', 'buttons');
@@ -400,7 +438,7 @@ function render(data) {
   if (atBottom) feed.scrollTop = feed.scrollHeight;
 }
 function tick() {
-  var msgs = (last && last.messages) || [], streaming = msgs.length && msgs[msgs.length - 1].streaming;
+  var msgs = (last && last.messages) || [], streaming = typer || (msgs.length && msgs[msgs.length - 1].streaming);
   document.getElementById('typing').className = !streaming && last && (last.typing_until || 0) * 1000 > Date.now() ? 'on' : '';
 }
 setInterval(tick, 1000);

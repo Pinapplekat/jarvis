@@ -1,7 +1,7 @@
 """'JARVIS HUD.app': type to JARVIS on the Mac. ⌥Space (or "Type to JARVIS…" in the menu bar
 indicator) brings up a floating glass bar; Return sends, Esc hides, ↑ recalls the last question.
 While JARVIS works, the HUD shows what it's doing (the same white icons as the menu bar), then
-the reply streams in under the question.
+the reply is typed out under the question as it streams in.
 
 Like the panel, it's a tiny native app with no access to anything: it writes hud/request.json
 (what he typed) and reads hud/reply.json, which `serve` (run by `jarvis listen`) writes, plus
@@ -73,6 +73,9 @@ final class HUD: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     var sentAt = 0.0
     var lastQuestion = ""
     var replyMod: Date? = nil
+    var target: [Character] = []   // the reply as it has arrived; it's typed out on screen at an even pace
+    var shown = 0.0
+    var typeTimer: Timer? = nil
 
     override init() {
         super.init()
@@ -203,6 +206,10 @@ final class HUD: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             .font: NSFont.systemFont(ofSize: 21, weight: .light), .foregroundColor: NSColor.white.withAlphaComponent(0.4)])
         waiting = true
         sentAt = now
+        typeTimer?.invalidate()
+        typeTimer = nil
+        target = []
+        shown = 0
         setReply("")
         setStatus("brain.head.profile", "Thinking")
     }
@@ -217,7 +224,7 @@ final class HUD: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         let r = readJSON(replyPath)
         guard (r["seq"] as? Int) == seq else { return }
         let text = r["text"] as? String ?? ""
-        if !text.isEmpty { setReply(text) }
+        if !text.isEmpty { aim(text) }
         if (r["state"] as? String) == "done" {
             waiting = false
             setStatus(nil, "")
@@ -247,6 +254,30 @@ final class HUD: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         statusIcon.image = sym.flatMap { symbol($0, 12) }
         statusText.stringValue = text
         relayout()
+    }
+
+    // Like the Claude app: what has arrived is revealed a few characters a frame, faster when it falls
+    // behind, so streamed chunks never land in lumps. A revised reply is retyped from where it differs.
+    func aim(_ text: String) {
+        let chars = Array(text)
+        var same = 0
+        while same < min(chars.count, target.count) && chars[same] == target[same] { same += 1 }
+        shown = min(shown, Double(same))
+        target = chars
+        if typeTimer == nil {
+            typeTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.typeStep() }
+        }
+    }
+
+    func typeStep() {
+        let behind = Double(target.count) - shown
+        if behind <= 0 {  // shown is clamped to the length, so the last character always lands
+            typeTimer?.invalidate()
+            typeTimer = nil
+            return
+        }
+        shown = min(Double(target.count), shown + max(1, max(70, behind / 0.35) / 60))
+        setReply(String(target.prefix(Int(shown))))
     }
 
     func setReply(_ text: String) {
