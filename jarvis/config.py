@@ -80,6 +80,12 @@ JARVIS_HEAVY_MODEL = os.getenv("JARVIS_HEAVY_MODEL", "sonnet")  # drafting, plan
 JARVIS_MODEL_ROUTING = os.getenv("JARVIS_MODEL_ROUTING", "auto")  # auto | fast | heavy
 WARM_CLAUDE = os.getenv("WARM_CLAUDE", "1") == "1"  # keep a persistent chat session (≈3x faster replies)
 # Screen looks (private peeks and "what's on my screen?"): a warm session, reused for a few looks.
+# Reading email text (read_email). At the desk it runs inside "JARVIS Ears", which would need its own
+# permission to control Mail (a macOS prompt), so that's off until Elijah turns it on and allows it.
+EMAIL_BODIES = os.getenv("EMAIL_BODIES", "1") == "1"
+EMAIL_BODIES_AT_DESK = os.getenv("EMAIL_BODIES_AT_DESK", "0") == "1"
+DESK_PROCESS = False  # set by `jarvis ears` (the process running inside JARVIS Ears.app)
+
 # JARVIS's own floating panel for "show me..." (a separate small app; no permissions needed)
 PANEL = os.getenv("PANEL", "1") == "1"
 VISION_MODEL = os.getenv("VISION_MODEL", "")  # empty = JARVIS_MODEL (the fast one); "sonnet" for sharper reading

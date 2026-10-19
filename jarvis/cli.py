@@ -1234,6 +1234,7 @@ def main() -> None:
         return
     if args.cmd == "ears":
         from jarvis import speech
+        config.DESK_PROCESS = True  # runs inside JARVIS Ears.app: no new permissions from here
         from jarvis.ears import Ears
         speech._whisper()  # load the model up front so the first answer isn't slow
         log = lambda s: print(s, flush=True)  # noqa: E731

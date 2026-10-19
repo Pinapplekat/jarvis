@@ -1,6 +1,7 @@
 """Send and read mail through Apple Mail on this Mac, using whatever accounts it's signed in to."""
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -72,8 +73,53 @@ end run
 """
 
 
+# One message's text, by the id the inbox read gave it. Read-only: nothing is marked, moved or sent.
+BODY_SCRIPT = """
+on run argv
+    set acctAddr to item 1 of argv
+    set wanted to (item 2 of argv) as integer
+    tell application "Mail"
+        set acct to missing value
+        repeat with a in accounts
+            if (email addresses of a) contains acctAddr then set acct to a
+        end repeat
+        if acct is missing value then error "No Mail account with address " & acctAddr
+        set box to missing value
+        try
+            set box to mailbox "INBOX" of acct
+            count of messages of box
+        on error
+            set box to missing value
+            repeat with mb in mailboxes of acct
+                if name of mb is "INBOX" or name of mb is "Inbox" then set box to contents of mb
+            end repeat
+        end try
+        if box is missing value then error "No inbox found for " & acctAddr
+        set msg to first message of box whose id is wanted
+        return content of msg
+    end tell
+end run
+"""
+MAX_BODY_CHARS = 6000
+
+
 class MailError(RuntimeError):
     pass
+
+
+def read_body(account: str, message_id: str, timeout: int = 25) -> str:
+    """The plain text of one inbox message (read-only; it isn't even marked read). Untrusted data."""
+    if not account:
+        raise MailError("no MAIL_ACCOUNT set")
+    if not str(message_id).isdigit():
+        raise MailError("bad message id")
+    try:
+        text = _osascript(BODY_SCRIPT, account, str(message_id), timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise MailError("Mail didn't answer in time") from None
+    text = "\n".join(line.rstrip() for line in text.replace("\r", "\n").splitlines())
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text[:MAX_BODY_CHARS] + ("\n(cut off here)" if len(text) > MAX_BODY_CHARS else "")
 
 
 @dataclass
