@@ -255,6 +255,80 @@ def test_missing_keys_never_call_spotify(mac, monkeypatch):
     assert not mac.api.requests and not mac.spotify_scripts()
 
 
+# ----- the Keychain and signing in -----
+def test_env_refresh_token_is_copied_into_the_keychain_once(mac, keychain):
+    spotify.search("a")
+    assert keychain.items == {"refresh_token": SECRET}
+    assert not any(c[0][0] == "security" for c in mac.calls)  # the fake, never the real Keychain
+
+
+def test_keychain_token_wins_over_env(mac, keychain):
+    keychain.items["refresh_token"] = "from-keychain"
+    spotify.search("a")
+    assert mac.api.token_forms()[0][0]["refresh_token"] == ["from-keychain"]
+
+
+def test_keychain_token_works_without_env(mac, keychain, monkeypatch):
+    monkeypatch.setattr(config, "SPOTIFY_REFRESH_TOKEN", "")
+    keychain.items["refresh_token"] = "from-keychain"
+    assert spotify.play("get lucky", "song") == "Get Lucky by Daft Punk"
+
+
+def test_rotated_refresh_token_is_stored_in_the_keychain(mac, keychain):
+    mac.api.rotate = "newer-refresh"
+    spotify.search("a")
+    assert keychain.items["refresh_token"] == "newer-refresh"
+
+
+def test_real_keychain_passes_secrets_on_stdin_only(monkeypatch):
+    calls = []
+    def run(argv, **kw):
+        calls.append((argv, kw.get("input")))
+        return subprocess.CompletedProcess(argv, 0, "stored-token\n", "")
+    monkeypatch.setattr(spotify.subprocess, "run", run)
+    k = spotify.Keychain()
+    assert k.set("refresh_token", "AQB-x_y.z")
+    argv, stdin = calls[-1]
+    assert argv == ["security", "-i"] and "AQB-x_y.z" in stdin and "AQB-x_y.z" not in " ".join(argv)
+    assert '-s "JARVIS Spotify" -a refresh_token' in stdin
+    assert k.get("refresh_token") == "stored-token"
+    assert calls[-1][0] == ["security", "find-generic-password", "-s", "JARVIS Spotify", "-a", "refresh_token", "-w"]
+    before = len(calls)
+    assert not k.set("refresh_token", 'x" ; delete-keychain')  # not token-shaped: never sent
+    assert not k.set("refresh token", "abc")
+    assert len(calls) == before
+
+
+def test_real_keychain_missing_item_is_empty(monkeypatch):
+    monkeypatch.setattr(spotify.subprocess, "run",
+                        lambda argv, **kw: subprocess.CompletedProcess(argv, 44, "", "could not be found"))
+    assert spotify.Keychain().get("refresh_token") == ""
+
+
+def test_login_url_asks_for_the_control_scopes_with_pkce(monkeypatch):
+    monkeypatch.setattr(config, "SPOTIFY_CLIENT_ID", "id")
+    url = spotify.login_url("v" * 64, "st8")
+    q = parse_qs(url.split("?", 1)[1])
+    assert set(q["scope"][0].split()) == {"user-modify-playback-state", "user-read-playback-state", "user-library-modify"}
+    assert q["code_challenge_method"] == ["S256"] and q["state"] == ["st8"] and "v" * 64 not in url
+
+
+def test_finish_login_stores_the_refresh_token(mac, keychain):
+    mac.api.rotate = "fresh-refresh"
+    assert spotify.finish_login("http://127.0.0.1:8888/callback?code=abc&state=st8", "verifier", "st8")
+    form, _ = mac.api.token_forms()[0]
+    assert form["grant_type"] == ["authorization_code"] and form["code_verifier"] == ["verifier"]
+    assert keychain.items["refresh_token"] == "fresh-refresh"
+    spotify.search("a")  # uses the new sign-in's access token
+    assert mac.api.tokens == 1
+
+
+def test_finish_login_refuses_a_wrong_state(mac, keychain):
+    with pytest.raises(spotify.SpotifyError, match="state"):
+        spotify.finish_login("http://127.0.0.1:8888/callback?code=abc&state=other", "verifier", "st8")
+    assert not mac.api.requests and not keychain.items
+
+
 # ----- the desktop app, only with SPOTIFY_APP_FALLBACK=1 -----
 @pytest.fixture
 def keyless(mac, monkeypatch):

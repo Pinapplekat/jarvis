@@ -128,10 +128,12 @@ SIRI = os.getenv("SIRI", "1") == "1"
 SIRI_TIMER_SHORTCUT = os.getenv("SIRI_TIMER_SHORTCUT", "")  # a Shortcut that starts a Clock timer (input: seconds)
 SIRI_ALARM_SHORTCUT = os.getenv("SIRI_ALARM_SHORTCUT", "")  # a Shortcut that sets a Clock alarm (input: HH:MM)
 # Music plays through the Spotify Web API on his active device: a Spotify developer app's client ID and a
-# refresh token for his account (scopes user-modify-playback-state, user-read-playback-state). Secrets:
-# never logged. The secret is optional (only for apps that aren't PKCE).
+# refresh token for his account (scopes user-modify-playback-state, user-read-playback-state,
+# user-library-modify). `jarvis media login` gets one into the Keychain; one in .env is copied there once.
+# Secrets: never logged. The secret is optional (only for apps that aren't PKCE).
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "")
 SPOTIFY_REFRESH_TOKEN = os.getenv("SPOTIFY_REFRESH_TOKEN", "")
+SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback")  # as set in the Spotify app
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
 SPOTIFY_MARKET = os.getenv("SPOTIFY_MARKET", "US")
 SPOTIFY_APP_FALLBACK = os.getenv("SPOTIFY_APP_FALLBACK", "0") == "1"  # last resort: drive the desktop app's UI

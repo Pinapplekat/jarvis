@@ -172,6 +172,13 @@ You can't do anything directly. To change something, put actions in "actions":
   a named song is song, a band or singer is artist, a mood, genre or activity ("nice study lo-fi")
   is playlist with a short search like "study lo-fi". Don't say it's playing: say you're putting it
   on ("Putting it on, sir."); JARVIS adds what actually started and on which service, or why it didn't.
+- media_control: {{"type":"media_control","op":"pause"|"play"|"next"|"previous"|"seek"|"volume"|"volume_up"|
+  "volume_down"|"mute"|"unmute"|"shuffle"|"repeat"|"queue"|"like"|"now_playing","value":optional}}
+  controls what's playing (Spotify first, then the Spotify or Music app). value: seek seconds (90 for
+  1:30), volume 0-100, volume_up/down step (default 10), shuffle "on"|"off", repeat "off"|"track"|
+  "context", queue the song to look for; nothing for the rest. "play" resumes; to start something new
+  use play_music. Runs at once; reply with nothing or a couple of words ("Right away, sir.");
+  JARVIS adds the one-line result (e.g. "Paused." or what's playing).
 - label_place: {{"type":"label_place","id":place number,"name":"school"}} when he tells you what a
   place in <location> is (e.g. he answers "that's school" to your question about place #3). Short
   lowercase names: school, work, home, gym.
@@ -599,6 +606,14 @@ def apply_actions(mem: Memory, actions: list[dict], tz, ran: set[str] = frozense
                     playing = siri.music(mem, str(a["query"]), str(a.get("kind") or "any"))
                     if said is not None:
                         said.append(playing)
+            elif kind == "media_control":  # low risk: runs at once, op and value strictly checked
+                if not config.SIRI:
+                    raise ValueError("music control is turned off (SIRI=0)")
+                from jarvis import media
+                done = media.media_control(a["op"], a.get("value"))
+                mem.log("media_control", f"{a['op']}: {done}")
+                if said is not None:
+                    said.append(done)
             else:
                 raise ValueError(f"unknown action {kind!r}")
         except (KeyError, ValueError, TypeError, sqlite3.Error) as e:

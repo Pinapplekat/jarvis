@@ -30,6 +30,27 @@ def _no_real_logs_or_state(monkeypatch, tmp_path):
     monkeypatch.setattr(browser, "SITES", tmp_path / "browser-sites-test.json")
 
 
+class FakeKeychain:
+    def __init__(self):
+        self.items = {}
+
+    def get(self, account):
+        return self.items.get(account, "")
+
+    def set(self, account, secret):
+        self.items[account] = secret
+        return True
+
+
+@pytest.fixture(autouse=True)
+def keychain(monkeypatch):
+    """Tests never read or write the real Keychain; Spotify tokens go to an in-memory stand-in."""
+    from jarvis import spotify
+    fake = FakeKeychain()
+    monkeypatch.setattr(spotify, "keychain", fake)
+    return fake
+
+
 @pytest.fixture(autouse=True)
 def _no_real_claude_sessions(monkeypatch, tmp_path):
     """The helpers view reads a fake transcripts folder in tests, never ~/.claude."""

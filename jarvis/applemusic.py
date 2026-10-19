@@ -7,6 +7,9 @@ iTunes Search API (no key) finds the top catalog song, the Music app opens its p
 presses its Play button, only ever inside Music (needs Accessibility permission and an Apple Music
 subscription). The query and link are passed to the scripts as arguments, never as script text, and
 success is only reported once Music says it's playing that song or artist.
+
+Also the offline side of playback control (media.py): pause, skip, seek, volume, shuffle, repeat and
+like in whichever of the Spotify and Music apps is open, plus the system media keys as a last resort.
 """
 
 import re
@@ -93,8 +96,127 @@ end run
 """
 
 
+# Playback control in the Spotify or Music app (the fallback for media.py when the Spotify Web API
+# can't). The op is one of a fixed set and the value an argument, never script text.
+CONTROL_SCRIPT = """
+on run argv
+    set op to item 1 of argv
+    set v to item 2 of argv
+    tell application "__APP__"
+        if op is "pause" then
+            pause
+        else if op is "play" then
+            play
+        else if op is "next" then
+            next track
+        else if op is "previous" then
+            previous track
+        else if op is "seek" then
+            set player position to (v as integer)
+        else if op is "volume" then
+            set sound volume to (v as integer)
+        else if op is "shuffle" then
+            __SHUFFLE__
+        else if op is "repeat" then
+            __REPEAT__
+        else if op is "like" then
+            __LIKE__
+        end if
+        if op is "next" or op is "previous" then delay 0.5
+        set t to ""
+        set a to ""
+        try
+            set t to name of current track
+            set a to artist of current track
+        end try
+        return (player state as text) & (character id 31) & (sound volume as text) & (character id 31) & t & (character id 31) & a
+    end tell
+end run
+"""
+APP_TERMS = {
+    "Spotify": {"__SHUFFLE__": 'set shuffling to (v is "on")', "__REPEAT__": 'set repeating to (v is not "off")',
+                "__LIKE__": 'error "the Spotify app can\'t like songs"'},
+    "Music": {"__SHUFFLE__": 'set shuffle enabled to (v is "on")',
+              "__REPEAT__": 'if v is "track" then\n set song repeat to one\n else if v is "off" then\n'
+                            ' set song repeat to off\n else\n set song repeat to all\n end if',
+              "__LIKE__": "set favorited of current track to true"},
+}
+APP_OPS = {"Spotify": {"pause", "play", "next", "previous", "seek", "volume", "shuffle", "repeat", "status"},
+           "Music": {"pause", "play", "next", "previous", "seek", "volume", "shuffle", "repeat", "like", "status"}}
+
+# System media keys (play/pause, next, previous) for whatever player macOS routes them to. NX_KEYTYPE_*
+# codes come in as an argument; posting events may need Accessibility for the background job.
+MEDIA_KEYS = {"pause": 16, "play": 16, "next": 17, "previous": 18}
+MEDIA_KEY_SCRIPT = """
+ObjC.import('AppKit');
+ObjC.import('CoreGraphics');
+function run(argv) {
+    const code = parseInt(argv[0], 10);
+    for (const down of [true, false]) {
+        const ev = $.NSEvent.otherEventWithTypeLocationModifierFlagsTimestampWindowNumberContextSubtypeData1Data2(
+            14, $.NSMakePoint(0, 0), down ? 0xa00 : 0xb00, 0, 0, null, 8, (code << 16) | ((down ? 0xa : 0xb) << 8), -1);
+        $.CGEventPost(0, ev.CGEvent);
+    }
+    return "sent";
+}
+"""
+
+
 class AppleMusicError(RuntimeError):
     pass
+
+
+def running_players() -> list[str]:
+    """Which of Spotify and Music are open (without launching either)."""
+    out = []
+    for app in APP_OPS:
+        try:
+            if subprocess.run(["pgrep", "-xq", app], capture_output=True, timeout=5).returncode == 0:
+                out.append(app)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return out
+
+
+def control(app: str, op: str, value: str = "") -> dict:
+    """Runs one op in the app and returns its state afterwards: state ('playing', 'paused', 'stopped'),
+    volume (0-100), track ('Song by Artist' or '')."""
+    if app not in APP_OPS or op not in APP_OPS[app]:
+        raise AppleMusicError(f"the {app} app can't do {op}")
+    script = CONTROL_SCRIPT.replace("__APP__", app)
+    for key, terms in APP_TERMS[app].items():
+        script = script.replace(key, terms)
+    raw = _osascript(script, op, str(value), timeout=15)
+    state, volume, name, artist = (raw.split(FS) + ["", "", ""])[:4]
+    return {"state": state.strip(), "volume": int(volume) if volume.strip().isdigit() else None,
+            "track": f"{name} by {artist}" if name and artist else name}
+
+
+def pick_player() -> str | None:
+    """The open player to control: the one playing, else the first open one (Spotify first)."""
+    open_ = running_players()
+    if len(open_) < 2:
+        return open_[0] if open_ else None
+    for app in open_:
+        try:
+            if control(app, "status")["state"] == "playing":
+                return app
+        except AppleMusicError:
+            pass
+    return open_[0]
+
+
+def media_key(op: str) -> None:
+    """Presses the system play/pause, next or previous key."""
+    if op not in MEDIA_KEYS:
+        raise AppleMusicError(f"there's no media key for {op}")
+    try:
+        r = subprocess.run(["osascript", "-l", "JavaScript", "-", str(MEDIA_KEYS[op])], input=MEDIA_KEY_SCRIPT,
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise AppleMusicError(f"the media key didn't go through ({str(e)[:100]})")
+    if r.returncode != 0:
+        raise AppleMusicError(explain(r.stderr))
 
 
 def _client() -> httpx.Client:

@@ -56,6 +56,30 @@ def _set_env(key: str, value: str) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
+def _spotify_login() -> None:
+    """Signs in to Spotify with PKCE (playback, read and like scopes) and keeps the tokens in the Keychain."""
+    import secrets
+    import webbrowser
+
+    from jarvis import spotify
+    if not config.SPOTIFY_CLIENT_ID:
+        sys.exit("Set SPOTIFY_CLIENT_ID in .env first (developer.spotify.com, Create app)")
+    verifier, state = spotify.new_verifier(), secrets.token_urlsafe(16)
+    url = spotify.login_url(verifier, state)
+    print(f"In the Spotify app's settings, the Redirect URI must be {config.SPOTIFY_REDIRECT_URI}\n"
+          f"Opening the sign-in page (or open it yourself):\n{url}\n")
+    webbrowser.open(url)
+    redirected = input("After approving, paste the address the browser ended up on: ")
+    try:
+        stored = spotify.finish_login(redirected, verifier, state)
+    except spotify.SpotifyError as e:
+        sys.exit(str(e))
+    print("Signed in. Tokens are in the Keychain (JARVIS Spotify)." if stored else
+          "Signed in, but the Keychain wouldn't take the token, so it only lasts for this run.")
+    if config.SPOTIFY_REFRESH_TOKEN:
+        print("You can now remove SPOTIFY_REFRESH_TOKEN from .env.")
+
+
 def _telegram_setup() -> None:
     from jarvis.telegram import TelegramClient
     tg = TelegramClient(chat_id="")
@@ -214,6 +238,9 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
     from jarvis import judge, router
     from jarvis.canvas import format_digest, from_memory
     from jarvis.chat import FirstSentence, respond
+    hit = router.media_command(text) if config.SIRI else None
+    if hit:  # "pause", "skip", "volume 40": done at once, no model round trip
+        return _media_fast(mem, text, hit, spoken=spoken, phone=phone)
     now = _now_local()
     started = time.time()
     recent = [f"{'Elijah' if h['role'] == 'user' else 'JARVIS'}: {h['text'][:300]}" for h in mem.chat_history(4)]
@@ -246,6 +273,21 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
     mem.log("answered", f"{total:.1f}s total, first sentence {first_at}, route {routed:.2f}s ({route.how}), "
                         f"context {asked - started - routed:.2f}s, model {model} {temp}, "
                         f"blocks: {', '.join(sorted(blocks)) or 'minimal'}")
+    return reply
+
+
+def _media_fast(mem: Memory, text: str, hit: tuple, spoken: bool = False, phone: bool = False) -> str:
+    """A whole-message playback command from his chat or mic, done straight away with a one-line answer."""
+    from jarvis import media
+    op, value = hit
+    mem.add_chat("user", f"(on the phone, transcribed) {text}" if phone
+                 else f"(said out loud, transcribed) {text}" if spoken else text)
+    try:
+        reply = media.media_control(op, value)
+    except Exception as e:  # never leave him without an answer
+        reply = f"Couldn't do that just now ({str(e)[:120]})."
+    mem.log("media_control", f"{op} (fast path): {reply}")
+    mem.add_chat("assistant", reply)
     return reply
 
 
@@ -697,6 +739,12 @@ def main() -> None:
     st.add_argument("action", choices=["timer", "alarm", "music", "contact"])
     st.add_argument("arg")
     st.add_argument("--kind", default="any", choices=["song", "artist", "playlist", "any"], help="for music")
+    md = sub.add_parser("media", help="Control playback (pause, next, volume 40, queue 'Get Lucky', now_playing...) "
+                                      "or 'login' to sign in to Spotify")
+    md.add_argument("op", help="login, pause, play, next, previous, seek SECONDS, volume N, volume_up, "
+                               "volume_down, mute, unmute, shuffle on|off, repeat off|track|context, "
+                               "queue SONG, like, now_playing")
+    md.add_argument("value", nargs="?", default=None)
 
     al = sub.add_parser("alert", help="Raise an alert (delivered on next tick)")
     al.add_argument("message")
@@ -830,6 +878,16 @@ def main() -> None:
                 print(siri.music(mem, args.arg, args.kind))
             else:
                 print("%s: %s" % siri.resolve_contact(mem, args.arg))
+        except ValueError as e:
+            sys.exit(str(e))
+        return
+    if args.cmd == "media":
+        from jarvis import media
+        if args.op == "login":
+            _spotify_login()
+            return
+        try:
+            print(media.media_control(args.op, args.value))
         except ValueError as e:
             sys.exit(str(e))
         return
