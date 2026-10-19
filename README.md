@@ -322,10 +322,46 @@ Speech is handled on-device: Whisper (`faster-whisper`, model `WHISPER_MODEL`, d
 ### Fast replies (models, warm session, streaming)
 
 - **Two models:** quick replies use `JARVIS_MODEL` (default `haiku`), kept warm in a persistent session, typically **~2 s**. Heavier requests use `JARVIS_HEAVY_MODEL` (default `sonnet`) as a streamed one-off call, ~5–6 s: drafting email, planning, debugging, multi-step reasoning, long answers. Jev decides which, in the same call as context routing (or a keyword check without Jev). `JARVIS_MODEL_ROUTING=fast|heavy` forces one. Background writing (journal, briefs, plans, check-ins, interjections) stays on the heavy model.
-- **Speaking as it writes:** replies stream. At the desk, each sentence is spoken as soon as it's finished, and the next one is rendered while the current one plays, so JARVIS starts talking after the first sentence instead of the whole reply. If the final reply doesn't match what streamed (an error, or a "checking" round), what's queued is stopped and the real answer is said instead. Telegram voice notes are still one recording of the full reply. In Telegram the first sentence is sent right away as its own message and the rest follows as a second new message once it's written (more if it's past Telegram's 4096-character limit); a message already sent is never edited. If the reply changed after the first sentence went out (an error, or a "checking" round), the full reply is sent as a new message instead. Actions are only checked and carried out once the full reply has arrived.
+- **Speaking as it writes:** replies stream. At the desk, each sentence is spoken as soon as it's finished, and the next one is rendered while the current one plays, so JARVIS starts talking after the first sentence instead of the whole reply. If the final reply doesn't match what streamed (an error, or a "checking" round), what's queued is stopped and the real answer is said instead. Telegram voice notes are still one recording of the full reply. In Telegram the first sentence is sent right away as its own message and the rest follows as a second new message once it's written (more if it's past Telegram's 4096-character limit); a message already sent is never edited. If the reply changed after the first sentence went out (an error, or a "checking" round), the full reply is sent as a new message instead. Actions are written first and carried out before the reply's words go out (see below).
 - **Warm session:** saves the 2–3.5 s it takes to start `claude -p`. It retires after 12 messages or 2 hours idle, and a spare warms up just before. One per listener (about 170 MB each) to keep RAM in check. On failure a message falls back to a one-off call (`warm_fallback`). `WARM_CLAUDE=0` turns it off.
 - **Cached inputs:** chat uses tick's copies of the inbox snapshot and the Canvas feed (up to 10 min old), so no reply waits on Mail or the network.
 - **Measure it:** `jarvis latency` shows median and slowest reply times and time to first sentence, per model, plus desk time to first audio (from when you stop talking; target 1 s, also in the ears log as `time_to_first_audio=NNNms`). Claude's startup and Telegram network timeouts can still add delay. Only timings and choices are logged, never your message text.
+
+### Saying only what really happened
+
+- **Actions first:** the reply's actions are written before its words, carried out as soon as they arrive, and only then is anything said. If one fails ("play_music: no active device"), nothing claiming it worked goes out; JARVIS says plainly what didn't happen and why.
+- **No empty promises:** a sentence that says JARVIS is doing something ("I'm drafting it", "checking now", "the build is running", "it's waiting in Telegram") is dropped unless an action in that reply, or real state (a task really running, something really awaiting your OK), backs it. If that leaves nothing, JARVIS is asked once more for a real answer. Dropped sentences are logged as `unbacked_claim` (the words only).
+- **Standing orders and right now:** your preferences (facts in the `preference` category, plus a few defaults: answer first, say each reminder once, look at the screen when unsure, only ask on high risk, Spotify for music, stay silent when it wasn't meant for JARVIS) are pinned at the top of every prompt. A `<right_now>` block gives live state: what's really running, recent music, whether you're at the Mac, mid-conversation or probably driving, what you've already been told, and what you've brushed off.
+- **One voice:** spoken announcements (reminders, reports, alerts) wait while you're talking with JARVIS at the desk (the wake word stops one that's playing), never repeat the same words within 10 minutes, and respect quiet hours. Heartbeat news isn't repeated in new words, and after "I know" / "don't worry" only something urgent brings it back.
+
+### Instant commands (no model)
+
+Whole-message commands answered at once from the real result: playback ("pause", "skip", "volume 40"), "play Daft Punk", "set a timer for 5 minutes", "wake me up at 7:30 am", "what time is it", "what day is it", "use Sonnet" / "go back to Haiku" / "pick the model yourself" (saved as a setting, not in .env; also a `switch_model` action in chat), and for the panel: "show me the screenshot from earlier", "close that", "bigger", "smaller", "go back" (while it's showing).
+
+### Desk voice extras
+
+- If what you said ends on a word a sentence can't end on ("...and", "um"), JARVIS waits up to 2.5 s for the rest. Carrying on before JARVIS has said a word joins the two halves into one turn.
+- A follow-up heard without the wake word is checked first: naming JARVIS means yes; "babe", "Emily", "love you" and the like mean it wasn't for JARVIS, and Jev judges the rest. Not for JARVIS: it stays silent (logged as `not_for_me`, the reason only).
+- Whisper gets a vocabulary hint (Jarvis, Jev, Claude, Canvas, InQuizitive, Emily, Spotify) and a few unambiguous slips are fixed ("Hey Travis" → "Hey Jarvis", "clod code" → "Claude code").
+- Screen looks use a warm session on the fast model (`VISION_MODEL`, default `JARVIS_MODEL`), started when you say "Hey Jarvis"; the capture runs while Jev routes.
+- **Deploying by voice:** "deploy it" offers the ready build; only an explicit "yes, deploy it" next deploys it (self-editing must be on).
+
+### JARVIS's panel ("show me...")
+
+**JARVIS Panel** (a tiny separate app in `~/Applications`, its own `panel` background job, no permissions) is a floating window in the top-right corner. The `show` action puts up a plot of a formula ("show me sin(x) shifted up 2"), a screenshot from JARVIS's folder, a card, a page JARVIS wrote (no network: a content policy blocks it) or a web page; `browse` with `"show": true` puts a page's picture there. JARVIS only says it's up once the app confirms. `PANEL=0` turns it off.
+
+### Hands on the Mac
+
+- **Email text:** `read_email` reads one inbox message's text through Apple Mail (read-only, not even marked read; treated as untrusted). At the desk it's off unless `EMAIL_BODIES_AT_DESK=1` (JARVIS Ears would need its own OK to control Mail).
+- **Mac controls:** `mac` action: system volume, mute, display sleep; dark mode only with `MAC_SYSTEM_EVENTS=1` (an Automation prompt).
+- **Clicking on screen:** `click` looks, clicks and checks, but is off unless `SCREEN_CLICK=1` after you allow the process under Privacy & Security → Accessibility. It never clicks anything that sends, buys, deletes, submits or agrees.
+- **Contacts:** names are matched loosely ("Julian Lanton" finds Julian Linton; nicknames count), and iPhone-style numbers (non-breaking spaces and hyphens) are read.
+
+### Reliability
+
+- Telegram calls retry a connection that never opened; the listener backs off (5 s doubling to 2 min) during outages and logs once per outage. Messages that can't be sent wait in an outbox and go out late, marked late, when the network is back.
+- Per-step timings (transcribe, route, peek, each model round, actions, first text, first audio, total) are logged as `timing` events; `jarvis latency` summarizes them.
+- Helpers (tasks and builds) get a scratch folder they can always write (instead of /tmp), are told nothing can type into their commands, and reports are cut at sentence ends. A finished build is rebased onto the latest main and re-tested before Deploy is offered.
 
 ## Jev (fast decisions)
 
