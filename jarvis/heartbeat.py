@@ -355,7 +355,7 @@ def run_heartbeat(mem: Memory, now: datetime, deadlines: list = (), quiet: bool 
         _save(mem, state)
         mem.log("heartbeat", "quiet: " + (why or "nothing worth saying"))
         return "quiet"
-    if (blocked := _repeat(mem, about, urgency, now)):
+    if (blocked := _repeat(mem, about, urgency, now, message)):
         state["hash"] = digest
         _save(mem, state)
         mem.log("heartbeat", f"held back ({blocked}): {message[:150]}")
@@ -371,7 +371,7 @@ def run_heartbeat(mem: Memory, now: datetime, deadlines: list = (), quiet: bool 
     state.update(hash=digest, msgs=state["msgs"] + 1, last_msg=stamp)
     _save(mem, state)
     raised = _load(mem, RAISED_KEY, {})
-    for iid in about:
+    for iid in about or [f"msg:{_short_id(message)}"]:  # unnamed news is remembered by its words
         raised[iid] = {"at": stamp, "urgency": urgency, "message": message[:300], "checked": False}
     mem.set_kv(RAISED_KEY, json.dumps({k: v for k, v in raised.items() if stamp - v["at"] < 3 * 86400}))
     mem.raise_alert("urgent" if urgency == "urgent" else "high", message[:600], dedupe_key=f"heartbeat:{digest}")
@@ -380,16 +380,51 @@ def run_heartbeat(mem: Memory, now: datetime, deadlines: list = (), quiet: bool 
     return "sent"
 
 
-def _repeat(mem: Memory, about: list[str], urgency: str, now: datetime) -> str:
+SIMILAR_AT = 0.5  # share of words two messages have in common to count as the same news
+
+
+_FILLER = {"your", "about", "sent", "says", "said", "needs", "need", "unread", "still", "with", "from", "that",
+           "this", "have", "haven", "there", "just", "will", "sir", "tonight", "today"}
+
+
+def _stems(text: str) -> set[str]:
+    return {w[:5] for w in _words(text) if w not in _FILLER}
+
+
+def similar(a: str, b: str) -> bool:
+    """Same news in other words ("Twilio sent a Response Required notice..." twice)?"""
+    wa, wb = _stems(a), _stems(b)
+    return bool(wa and wb) and len(wa & wb) / min(len(wa), len(wb)) >= SIMILAR_AT
+
+
+def _repeat(mem: Memory, about: list[str], urgency: str, now: datetime, message: str = "") -> str:
     """Why this message must not go out (closed, or already raised and no more urgent), or ""."""
     dismissed = _load(mem, DISMISSED_KEY, {})
     if any(dismissed.get(i, 0) > now.timestamp() for i in about):
         return "he said he's handled it"
+    recent = _raised_recent(mem, now)
     for iid in about:
-        r = _raised_recent(mem, now).get(iid)
+        r = recent.get(iid)
         if r and URGENCY.index(urgency) <= URGENCY.index(r["urgency"]):
             return "already said, not more urgent"
+    # The same news under different item ids (each look names things its own way) is still a repeat;
+    # and once he's answered it ("I know", "don't worry"), only something urgent brings it back.
+    for r in recent.values():
+        if not message or not similar(message, r["message"]):
+            continue
+        if dismissed_since(mem, r["at"], now) and urgency != "urgent":
+            return "he said he's handled it"
+        if URGENCY.index(urgency) <= URGENCY.index(r["urgency"]):
+            return "already said, not more urgent"
     return ""
+
+
+def dismissed_since(mem: Memory, at: float, now: datetime) -> bool:
+    """Did he brush something off ("I know", "don't worry") in chat since `at` (a timestamp)?"""
+    replies = [r["text"] for r in mem.chat_between(datetime.fromtimestamp(at, timezone.utc),
+                                                   now.astimezone(timezone.utc) + timedelta(minutes=1))
+               if r["role"] == "user"]
+    return any(DISMISSIVE.search(t) for t in replies)
 
 
 def status(mem: Memory, now: datetime) -> str:

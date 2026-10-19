@@ -89,8 +89,10 @@ def test_a_message_becomes_an_alert_and_joins_the_conversation():
 
 def test_no_quota_important_things_keep_getting_through():
     m = Memory(":memory:")
-    think = thinker(SAY)
-    for i, hours in enumerate([20, 10, 5, 2]):  # four messages in a few hours: its call, not a cap
+    news = ["ECON Module 3 is due in five hours, sir.", "Your professor emailed about the midterm, sir.",
+            "The test run failed on the build, sir.", "Twilio wants a reply about your account, sir."]
+    think = thinker(*[SAY | {"message": n} for n in news])
+    for i, hours in enumerate([20, 10, 5, 2]):  # four different messages in a few hours: its call, not a cap
         assert heartbeat.run_heartbeat(m, later(31 * i), [essay(hours - i * 0.5)], think=think) == "sent"
     assert len(m.undelivered_alerts()) == 4
 
@@ -157,7 +159,9 @@ def test_daily_claude_cap(monkeypatch):
 def test_runaway_guard_only_stops_a_broken_loop(monkeypatch):
     monkeypatch.setattr(config, "HEARTBEAT_RUNAWAY_PER_DAY", 2)
     m = Memory(":memory:")
-    think = thinker(SAY)
+    think = thinker(SAY | {"message": "Your professor emailed about the midterm, sir."},
+                    SAY | {"message": "The test run failed on the build, sir."},
+                    SAY | {"message": "Twilio wants a reply about your account, sir."})
     for i in range(2):
         assert heartbeat.run_heartbeat(m, later(31 * i), [essay(5, f"t{i}")], think=think) == "sent"
     assert heartbeat.run_heartbeat(m, later(100), [essay(5, "t9")], think=think) == "held back (runaway guard)"
@@ -293,3 +297,27 @@ def test_item_ids_never_reach_him():
     think = thinker(say_about("deadline:canvas:1", text="Sir, [deadline:canvas:1] the essay is due soon."))
     heartbeat.run_heartbeat(m, NOW, [essay(5)], think=think)
     assert m.undelivered_alerts()[0]["message"] == "Sir, the essay is due soon."
+
+
+def test_the_same_news_in_new_words_isnt_repeated():
+    m = Memory(":memory:")
+    first = SAY | {"message": "Sir, Twilio has sent a Response Required notice about suspending your account.",
+                   "urgency": "normal"}
+    again = SAY | {"message": "Sir, an unread Twilio email says your account is suspended and needs a response.",
+                   "urgency": "normal"}
+    assert heartbeat.run_heartbeat(m, NOW, [essay(20)], think=thinker(first)) == "sent"
+    assert heartbeat.run_heartbeat(m, later(40), [essay(19)], think=thinker(again)) == \
+        "held back (already said, not more urgent)"
+
+
+def test_after_i_know_only_urgent_brings_it_back():
+    import time
+    m = Memory(":memory:")
+    now = datetime.now(TZ)
+    msg = "Sir, the Econ weekly work is due tonight at 11:59 and you haven't started it."
+    assert heartbeat.run_heartbeat(m, now, [essay(20)], think=thinker(SAY | {"message": msg})) == "sent"
+    time.sleep(1.1)
+    m.add_chat("user", "I know, don't worry")
+    louder = SAY | {"message": "Sir, Econ weekly work is due tonight at 11:59, still not started.", "urgency": "high"}
+    out = heartbeat.run_heartbeat(m, datetime.now(TZ) + timedelta(minutes=40), [essay(19)], think=thinker(louder))
+    assert out in ("held back (he said he's handled it)", "quiet")
