@@ -257,14 +257,24 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
     if inst and (config.SIRI or inst[0] in ("time", "date")):  # "play X", timers, alarms, the time: no model
         timing.mark("instant", 0)
         return _instant(mem, text, inst, spoken=spoken, phone=phone)
+    from jarvis.chat import EarlyPeek, warm_vision
     now = _now_local()
     started = time.time()
+    early_peek = EarlyPeek()  # the screen capture runs while Jev routes
     recent = [f"{'Elijah' if h['role'] == 'user' else 'JARVIS'}: {h['text'][:300]}" for h in mem.chat_history(4)]
     route = router.route(text, recent, judge.fast_engine(),
                          on_error=lambda e: mem.log("route_failed", str(e)[:200]))
     blocks = route.blocks
     routed = time.time() - started
     timing.mark("route", routed)
+    message = (f"(on the phone, transcribed) {text}" if phone
+               else f"(said out loud, transcribed) {text}" if spoken else text)
+    if route.look:  # the look runs in the background while the rest of the context is gathered
+        peek_wait = early_peek.look(message, (route.look, route.look_why), vision=warm_vision())
+    else:
+        early_peek.discard()
+        mem.log("screen_peek", f"skipped: {route.look_why}")
+        peek_wait = None
     runner, model, temp = _runner_for(route, warm)
     first = FirstSentence(on_first) if on_first else None
     feeds = [f for f in (first.feed if first else None, on_text) if f]
@@ -276,8 +286,6 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
         except Exception:  # feed down: answer from stored deadlines rather than not at all
             deadlines = from_memory(mem)
         deadlines_text = format_digest(deadlines, now, days=14)
-    message = (f"(on the phone, transcribed) {text}" if phone
-               else f"(said out loud, transcribed) {text}" if spoken else text)
     inbox = _inbox_text(mem) if "inbox" in blocks else ""
     activity = _activity(mem) if "activity" in blocks else ""
     asked = time.time()
@@ -285,7 +293,7 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
     reply = respond(mem, message, now, deadlines_text, runner=runner, on_progress=on_progress,
                     inbox_text=inbox, activity_text=activity, blocks=blocks,
                     on_text=stream, spotter=_page_spotter(), send_photo=send_photo, idle=_idle_reader(),
-                    peek=(route.look, route.look_why), judge=judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])))
+                    peek_wait=peek_wait, vision=warm_vision(), judge=judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])))
     total = time.time() - started
     first_at = f"{first.at - started:.1f}s" if first and first.at else "-"
     # Timings and choices only; never the message text.
@@ -1177,11 +1185,14 @@ def main() -> None:
             if tg:          # the mic is open for his follow-up and mustn't hear JARVIS's own voice
                 from jarvis import attachments, reports
                 reports.flush_pending(mem, tg.send, send_image=lambda p, c: attachments.send_image(tg, p, c, mem))
-        Ears(answer=lambda text, on_text=None: _spoken_confirmation(mem, text)
+        ears = Ears(answer=lambda text, on_text=None: _spoken_confirmation(mem, text)
              or _answer(mem, text, spoken=True, warm=warm, on_text=on_text),
              transcribe=speech.transcribe, log=log, after_reply=after_reply,
              timing=lambda ms: mem.log("first_audio", f"time_to_first_audio={ms}ms"),
-             on_turn=lambda steps: mem.log("timing", json.dumps(steps))).run_forever()
+             on_turn=lambda steps: mem.log("timing", json.dumps(steps)))
+        from jarvis.chat import warm_vision
+        ears.prewarm = warm_vision().prewarm
+        ears.run_forever()
         return
     if args.cmd == "projects":
         from jarvis import projects

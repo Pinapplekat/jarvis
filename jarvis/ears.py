@@ -109,6 +109,7 @@ class Ears:
         self.timing = timing or (lambda ms: None)
         self.after_reply = after_reply or (lambda: None)
         self.on_turn = on_turn or (lambda steps: None)
+        self.prewarm: Callable[[], None] | None = None
         self.voice = voice
         self.noise = deque(maxlen=50)  # recent chunk levels while idle (~4 s)
         self._wake = None
@@ -164,6 +165,8 @@ class Ears:
         from jarvis.voice import stop_announcement
         conversation_started()
         stop_announcement()
+        if self.prewarm:
+            threading.Thread(target=self.prewarm, daemon=True).start()  # a screen look this turn starts warm
         try:
             self._converse(stream)
         finally:

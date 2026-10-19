@@ -79,6 +79,8 @@ JARVIS_MODEL = os.getenv("JARVIS_MODEL", "haiku")              # quick chat repl
 JARVIS_HEAVY_MODEL = os.getenv("JARVIS_HEAVY_MODEL", "sonnet")  # drafting, planning, debugging; background writing
 JARVIS_MODEL_ROUTING = os.getenv("JARVIS_MODEL_ROUTING", "auto")  # auto | fast | heavy
 WARM_CLAUDE = os.getenv("WARM_CLAUDE", "1") == "1"  # keep a persistent chat session (≈3x faster replies)
+# Screen looks (private peeks and "what's on my screen?"): a warm session, reused for a few looks.
+VISION_MODEL = os.getenv("VISION_MODEL", "")  # empty = JARVIS_MODEL (the fast one); "sonnet" for sharper reading
 
 # Self-editing: the git repo JARVIS improves (your project folder), the model that writes
 # the code, and the local hour after which JARVIS may suggest one improvement a day.

@@ -10,6 +10,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -347,6 +348,90 @@ def run_vision(system: str, prompt: str, image: Path, model: str | None = None) 
     return str(out.get("answer") or "").strip()
 
 
+class WarmVision:
+    """A vision session kept warm and reused for a few looks (a cold start costs seconds on every
+    peek). Retired after MAX_TURNS looks (each image stays in its context) or IDLE_SECONDS unused
+    (RAM is tight). Any failure falls back to a one-off call, so a look is never lost to it."""
+
+    MAX_TURNS = 4
+    IDLE_SECONDS = 600
+
+    def __init__(self, model: str | None = None, start=None, fallback: Vision | None = None):
+        self.model = model or config.VISION_MODEL or config.JARVIS_MODEL
+        self._start = start or self._default_start
+        self._fallback = fallback or (lambda system, prompt, image: run_vision(system, prompt, image, self.model))
+        self._lock = threading.Lock()
+        self._session = None
+        self._timer = None
+
+    def _default_start(self):
+        from jarvis.warm import Session, _argv
+        config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        return Session(_argv(find_claude(), self.model, VISION_SYSTEM, VISION_SCHEMA), cwd=config.DATA_DIR)
+
+    def _ready(self):
+        s = self._session
+        if s is None or not s.alive() or s.turns >= self.MAX_TURNS:
+            if s is not None:
+                s.close()
+            self._session = s = self._start()
+        return s
+
+    def prewarm(self) -> None:
+        """Start a session now (he just woke JARVIS), so a look in this conversation is quick."""
+        try:
+            with self._lock:
+                self._ready()
+                self._arm_idle()
+        except Exception:
+            pass
+
+    def _arm_idle(self) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
+        self._timer = threading.Timer(self.IDLE_SECONDS, self.close)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def close(self) -> None:
+        with self._lock:
+            if self._session is not None:
+                self._session.close()
+            self._session = None
+
+    def __call__(self, system: str, prompt: str, image: Path) -> str:
+        import base64
+
+        from jarvis.warm import SessionDied
+        if system != VISION_SYSTEM:
+            return self._fallback(system, prompt, image)
+        media = "image/png" if image.suffix.lower() == ".png" else "image/jpeg"
+        blocks = [{"type": "image", "source": {"type": "base64", "media_type": media,
+                                               "data": base64.b64encode(image.read_bytes()).decode()}},
+                  {"type": "text", "text": prompt}]
+        with self._lock:
+            try:
+                out = self._ready().ask(blocks)
+                self._arm_idle()
+                return str(out.get("answer") or "").strip()
+            except SessionDied:
+                if self._session is not None:
+                    self._session.close()
+                self._session = None
+        return self._fallback(system, prompt, image)
+
+
+_WARM_VISION: WarmVision | None = None
+
+
+def warm_vision() -> WarmVision:
+    """This process's shared warm vision session (created on first use)."""
+    global _WARM_VISION
+    if _WARM_VISION is None:
+        _WARM_VISION = WarmVision()
+    return _WARM_VISION
+
+
 def look_at_screen(message: str, question: str, vision: Vision | None = None) -> str:
     """Capture his screen, let Claude look at it, delete the picture. Returns Claude's answer text;
     nothing is sent to Telegram or spoken from here."""
@@ -389,6 +474,79 @@ def peek_at_screen(mem: Memory, message: str, decision: tuple[bool, str], vision
         return None
     mem.log("screen_peek", f"looked privately (not sent; picture deleted): {why}")
     return seen or None
+
+
+class EarlyPeek:
+    """The screen capture for a private peek, started at the same time as routing (it only needs a
+    moment, but that moment no longer comes after routing). Once routing says whether to look,
+    `look()` starts the vision call in the background while the rest of the context is gathered,
+    or `discard()` deletes the picture unseen. Guards are the same as peek_at_screen's."""
+
+    def __init__(self, idle: Callable[[], float | None] | None = None, locked: Callable[[], bool] | None = None,
+                 capture: Callable[[], Path] | None = None):
+        self._idle, self._locked, self._capture = idle, locked, capture
+        self.path: Path | None = None
+        self.skip: str | None = None
+        self._captured = threading.Event()
+        threading.Thread(target=self._take, daemon=True).start()
+
+    def _take(self) -> None:
+        try:
+            from jarvis import screen
+            from jarvis.voice import idle_seconds
+            quiet = (self._idle or idle_seconds)()
+            if quiet is not None and quiet > config.VOICE_IDLE_SECONDS:
+                self.skip = f"Mac idle {quiet:.0f}s"
+            elif (self._locked or screen.locked)():
+                self.skip = "Mac locked"
+            else:
+                self.path = (self._capture or screen.capture_for_vision)()
+        except Exception as e:
+            self.skip = f"couldn't look: {str(e)[:100]}"
+        finally:
+            self._captured.set()
+
+    def discard(self) -> None:
+
+        def drop():
+            self._captured.wait(30)
+            if self.path:
+                self.path.unlink(missing_ok=True)
+        threading.Thread(target=drop, daemon=True).start()
+
+    def look(self, message: str, decision: tuple[bool, str], vision: Vision | None = None) -> Callable[[Memory], str | None]:
+        """Start looking now; the returned function waits for what JARVIS saw (and logs the decision)."""
+        box: dict = {}
+        turn = timing.current()
+
+        def run():
+            began = time.time()
+            self._captured.wait(30)
+            if not self.path:
+                return
+            try:
+                prompt = f"Elijah's message:\n{message}\n\nWhat to look for: {PEEK_QUESTION}"
+                box["seen"] = (vision or run_vision)(VISION_SYSTEM, prompt, self.path)
+            except Exception as e:
+                box["error"] = str(e)[:100]
+            finally:
+                self.path.unlink(missing_ok=True)
+                timing.mark("peek_vision", time.time() - began, turn)
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+
+        def wait(mem: Memory) -> str | None:
+            worker.join(120)
+            why = decision[1]
+            if self.skip or not self._captured.is_set():
+                mem.log("screen_peek", f"skipped ({self.skip or 'capture too slow'}): {why}")
+                return None
+            if "error" in box or "seen" not in box:
+                mem.log("screen_peek", f"skipped (couldn't look: {box.get('error', 'too slow')}): {why}")
+                return None
+            mem.log("screen_peek", f"looked privately (not sent; picture deleted): {why}")
+            return box["seen"] or None
+        return wait
 
 
 SKIPPED ="(not loaded for this message; if you need it, say you'll check)"
@@ -732,7 +890,8 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             spotter: Callable[[Page], list[str]] | None = None,
             browser: Callable | None = None, send_photo: Callable[[bytes, str], None] | None = None,
             judge=None, vision: Vision | None = None, peek: tuple[bool, str] | None = None,
-            idle: Callable[[], float | None] | None = None) -> str:
+            idle: Callable[[], float | None] | None = None,
+            peek_wait: Callable[[Memory], str | None] | None = None) -> str:
     """`on_text` (optional) receives the reply text as it streams, first round only; actions
     are still only applied once the complete reply has arrived. `browser(url, screenshot)`
     (jarvis.browser.browse by default) serves browse actions; `send_photo(png, caption)` shares
@@ -767,7 +926,13 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
         early.update(problems=problems, said=said)
         if problems and gate:
             gate.failed = True  # nothing more goes out early; the final reply says what happened
-    if peek is not None:
+    if peek_wait is not None:  # a peek already under way (EarlyPeek): just wait for what it saw
+        on_progress()
+        with timing.step("peek"):
+            seen = peek_wait(mem)
+        if seen:
+            findings.append((PEEK_LABEL, seen))
+    elif peek is not None:
         if peek[0]:
             on_progress()
         with timing.step("peek"):
