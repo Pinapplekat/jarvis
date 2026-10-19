@@ -2,7 +2,7 @@
 "Hey Jarvis", listening, speaking, or off, and while it works, what it's doing (a white icon per
 action: a camera for a screenshot, a pin for location...; see status.ACTIONS). It only reads the
 status file that jarvis/status.py writes; it has no other access. Its menu can open the typing HUD
-(jarvis/hud.py). Rebuilt only when its source changes."""
+(jarvis/hud.py) and put the helpers on the panel. Rebuilt only when its source changes."""
 
 import hashlib
 import plistlib
@@ -47,6 +47,9 @@ final class Indicator: NSObject {
         type.keyEquivalentModifierMask = [.option]
         type.target = self
         menu.addItem(type)
+        let helpers = NSMenuItem(title: "Show Helpers", action: #selector(showHelpers), keyEquivalent: "h")
+        helpers.target = self
+        menu.addItem(helpers)
         menu.addItem(.separator())
         stateLine.isEnabled = false
         detailLine.isEnabled = false
@@ -106,14 +109,12 @@ final class Indicator: NSObject {
             let image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: "JARVIS: " + title) }
                 ?? NSImage(systemSymbolName: look.symbol, accessibilityDescription: "JARVIS: " + title)
             if let image = image {
-                image.isTemplate = true
-                item.button?.image = image
+                item.button?.image = white(image, alpha: look.alpha)
                 item.button?.title = ""
             } else {
                 item.button?.image = nil
                 item.button?.title = look.fallback
             }
-            item.button?.contentTintColor = NSColor.white.withAlphaComponent(look.alpha)
             item.button?.toolTip = "JARVIS: " + title
             stateLine.title = "JARVIS: " + title
         }
@@ -122,6 +123,30 @@ final class Indicator: NSObject {
         detailLine.title = detail + " (since " + f.string(from: Date(timeIntervalSince1970: since)) + ")"
     }
 
+    // White, always: the color is drawn into the image (not a template, which macOS would paint black on a
+    // light menu bar and ignore any tint).
+    func white(_ symbol: NSImage, alpha: CGFloat) -> NSImage {
+        let src = symbol.withSymbolConfiguration(.init(pointSize: 14, weight: .medium)) ?? symbol
+        let out = NSImage(size: src.size, flipped: false) { rect in
+            src.draw(in: rect)
+            NSColor.white.withAlphaComponent(alpha).set()
+            rect.fill(using: .sourceAtop)
+            return true
+        }
+        out.isTemplate = false
+        out.accessibilityDescription = symbol.accessibilityDescription
+        return out
+    }
+
+    @objc func showHelpers() {
+        // The menu bar can't draw the panel itself: it asks `jarvis listen`, which puts the helpers up, kept live.
+        let dir = (statusPath as NSString).deletingLastPathComponent + "/panel"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let body: [String: Any] = ["kind": "helpers", "at": Date().timeIntervalSince1970]
+        if let d = try? JSONSerialization.data(withJSONObject: body) {
+            try? d.write(to: URL(fileURLWithPath: dir + "/request.json"), options: .atomic)
+        }
+    }
     @objc func openLogs() { NSWorkspace.shared.open(URL(fileURLWithPath: logsPath)) }
     @objc func openHUD() {
         // The HUD is its own app (it may be closed): start it if needed, then ask it to show itself.

@@ -289,6 +289,19 @@ final class HUD: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     }
 }
 
+// Only one HUD, ever: two would both answer ⌥Space and stack two bars. A second copy hands over and exits.
+let lockPath = NSHomeDirectory() + "/Library/Application Support/JARVIS/.hud.lock"
+try? FileManager.default.createDirectory(atPath: (lockPath as NSString).deletingLastPathComponent,
+                                         withIntermediateDirectories: true)
+let lockFD = open(lockPath, O_CREAT | O_RDWR, 0o644)
+if lockFD < 0 || flock(lockFD, LOCK_EX | LOCK_NB) != 0 {
+    if CommandLine.arguments.contains("--show") {
+        DistributedNotificationCenter.default().postNotificationName(
+            NSNotification.Name("com.jarvis.hud.show"), object: nil, userInfo: nil, deliverImmediately: true)
+    }
+    exit(0)
+}
+
 // ⌥Space from anywhere (a Carbon hot key: needs no Accessibility permission).
 enum Hot { static var action: () -> Void = {} }
 var hotKeyRef: EventHotKeyRef?

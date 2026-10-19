@@ -78,3 +78,26 @@ def test_it_says_what_the_build_is_doing_when_self_editing_is_on(monkeypatch):
     m.set_self_edit(eid, status="ready")
     text = helpers.for_prompt(m)
     assert "self-editing: ON; your build session is idle" in text and "waiting for his Deploy/Discard: README note" in text
+
+
+def test_the_board_follows_a_sessions_plan_and_says_where_it_runs():
+    folder = "/Users/x/site"
+    plan = {"type": "assistant", "cwd": folder, "entrypoint": "claude-desktop", "gitBranch": "hud-fix",
+            "message": {"content": [{"type": "tool_use", "name": "mcp__ccd_turn__update_plan", "input": {"items": [
+                {"content": "Read the code", "status": "in_progress"}, {"content": "Fix the bug", "status": "pending"},
+                {"content": "Test", "status": "pending"}]}}]}}
+    advance = {**plan, "message": {"content": [{"type": "tool_use", "name": "mcp__ccd_turn__update_plan",
+                                                "input": {"advance": True}}]}}
+    transcript("desk", folder, [{"type": "ai-title", "aiTitle": "HUD fix"}, user("fix the hud", folder),
+                                plan, tool("Read", folder, file_path="/Users/x/site/hud.py"), advance])
+    m = Memory(":memory:")
+    tid = m.db.execute("INSERT INTO tasks (goal, status, steps, created_at, updated_at) VALUES "
+                       "('tidy the repo', 'waiting', ?, '2026-10-19T10:00:00+00:00', '2026-10-19T10:00:00+00:00')",
+                       (json.dumps([{"n": 1, "update": "Asking before deleting build/"}]),)).lastrowid
+    board = helpers.board(m)
+    assert [h["kind"] for h in board] == ["task", "session"]  # waiting on him first
+    task, desk = board
+    assert task["name"] == f"Task #{tid}: tidy the repo" and task["waiting"] and task["now"] == "Asking before deleting build/"
+    assert desk["where"] == "Claude app · site · hud-fix" and desk["busy"] and desk["now"] == "Fix the bug"
+    assert [x["status"] for x in desk["plan"]] == ["completed", "in_progress", "pending"]
+    assert desk["steps"] == ["Reading hud.py"]  # plan bookkeeping isn't listed as a step

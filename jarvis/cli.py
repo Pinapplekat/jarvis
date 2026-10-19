@@ -513,6 +513,10 @@ def _listen(mem: Memory) -> None:
 
     if config.HUD:
         threading.Thread(target=_serve_hud, args=(tg, warm, turn), daemon=True).start()
+    if config.PANEL:  # "Show Helpers" from the menu bar, and the helpers view kept live while it's up
+        from jarvis import panel
+        threading.Thread(target=panel.serve_live, args=(lambda: Memory(config.DB_PATH),),
+                         kwargs={"log": lambda s: print(s, flush=True)}, daemon=True).start()
 
     def _on_text(update):
         if (toggle := HEARTBEAT_TOGGLE.match(update.text or "")):
@@ -910,6 +914,7 @@ def main() -> None:
     br.add_argument("site", nargs="?", help="for login/forget: e.g. canvas.seattlecolleges.edu")
     hp = sub.add_parser("helpers", help="What JARVIS sees of its helpers: build, Claude Code sessions on this Mac")
     hp.add_argument("which", nargs="?", default="", help="words from a session's title for detail")
+    hp.add_argument("--panel", action="store_true", help="put every helper on the panel, kept live")
     si = sub.add_parser("send-image", help="Send an image to your Telegram (same folder checks as JARVIS uses)")
     si.add_argument("path")
     si.add_argument("--caption", default="")
@@ -1236,6 +1241,10 @@ def main() -> None:
         return
     if args.cmd == "helpers":
         from jarvis import helpers
+        if args.panel:
+            from jarvis import panel
+            print(panel.show(mem, {"type": "show", "kind": "helpers"}))
+            return
         print(helpers.detail(mem, args.which) if args.which else helpers.for_prompt(mem, max_age=0))
         return
     if args.cmd == "send-image":

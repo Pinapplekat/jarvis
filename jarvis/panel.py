@@ -201,6 +201,16 @@ final class Panel: NSObject, NSWindowDelegate, WKNavigationDelegate {
             return
         }
         if newSeq == seq { return }
+        // A live view's update (the helpers): swap the page's contents in place, no reload, no flash.
+        if obj["refresh"] as? Bool ?? false, window.isVisible, fit, let body = obj["body"] as? String,
+           let enc = try? JSONSerialization.data(withJSONObject: [body]), let arr = String(data: enc, encoding: .utf8) {
+            seq = newSeq
+            window.title = obj["title"] as? String ?? "JARVIS"
+            bar.set(window.title, syncedAt: nil)
+            web.evaluateJavaScript("document.body.innerHTML = \(arr)[0]") { [weak self] _, _ in self?.fitToContent() }
+            ack(newSeq, "shown")
+            return
+        }
         seq = newSeq
         window.title = obj["title"] as? String ?? "JARVIS"
         bar.set(window.title, syncedAt: (obj["source"] as? [String: Any])?["at"] as? Double)
@@ -350,7 +360,7 @@ def _history(mem: Memory) -> list[dict]:
 def _present(mem: Memory, content: dict, wait=_wait_ack, source: dict | None = None) -> str:
     """Put content on the panel. `source` (the show action that made it) goes into the history, so
     "go back" can rebuild it without keeping big pages in the database."""
-    size = int(content.get("size", DEFAULT_SIZE))
+    size = int(content.get("size", 2 if content.get("live") == "helpers" else DEFAULT_SIZE))
     w, h = SIZES[max(0, min(size, len(SIZES) - 1))]
     seq = _write({**content, "visible": True, "width": w, "height": h, "size": size})
     if source is not None:
@@ -377,7 +387,7 @@ def resize(mem: Memory, step: int, wait=_wait_ack) -> str:
     size = max(0, min(int(st.get("size", DEFAULT_SIZE)) + step, len(SIZES) - 1))
     if size == st.get("size", DEFAULT_SIZE):
         return "That's as " + ("big" if step > 0 else "small") + " as it goes, sir."
-    _present(mem, {k: st[k] for k in ("title", "html", "url", "source") if k in st} | {"size": size}, wait)
+    _present(mem, {k: st[k] for k in ("title", "html", "url", "source", "body", "live") if k in st} | {"size": size}, wait)
     return "Bigger, sir." if step > 0 else "Smaller, sir."
 
 
@@ -487,6 +497,60 @@ def deadlines(mem: Memory, now: datetime | None = None) -> dict:
     title = f"{left} due {when}" if left else f"Nothing left {when}"
     body = f"<main>{''.join(parts)}</main>" if parts else '<main><p class="empty">Nothing due, sir.</p></main>'
     return {"title": title, "html": page(body, title), "source": source}
+
+
+HELPER_STYLE = ("<style>.helper{padding:9px 14px 10px;border-top:1px solid var(--line)}.helper:first-child{border-top:0}"
+                ".helper .head{display:flex;align-items:baseline;gap:8px}"
+                ".helper .name{flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
+                ".helper .state{font-size:11px;color:rgba(255,255,255,.55);white-space:nowrap}"
+                ".helper .where{font-size:11px;color:rgba(255,255,255,.5);margin:1px 0 4px 14px}"
+                ".helper .line{margin:2px 0 0 14px;color:rgba(255,255,255,.85);overflow-wrap:anywhere}"
+                ".helper .k{color:rgba(255,255,255,.45);margin-right:5px}"
+                ".helper ol{margin:3px 0 0 14px;padding:0;list-style:none;font-size:12px}"
+                ".helper ol li{padding:1px 0;border:0;color:rgba(255,255,255,.6)}"
+                ".helper ol li.completed{color:rgba(255,255,255,.35);text-decoration:line-through}"
+                ".helper ol li.in_progress{color:#fff}.helper ol li.in_progress::before{content:'\\25B8  '}"
+                ".helper ol li.pending::before,.helper ol li.completed::before{content:'\\00B7  '}"
+                ".helper .steps{font-size:12px;color:rgba(255,255,255,.55);display:-webkit-box;-webkit-line-clamp:2;"
+                "-webkit-box-orient:vertical;overflow:hidden}"
+                ".helper.quiet .name{color:rgba(255,255,255,.6);font-weight:500}"
+                ".helper.waiting .state{color:var(--amber)}"
+                "@keyframes pulse{50%{opacity:.35}}.dot.busy{animation:pulse 1.6s ease-in-out infinite}"
+                "</style>")
+
+
+def helpers_view(mem: Memory | None, now: float | None = None) -> dict:
+    """Every helper (JARVIS's tasks, jobs and build, and Claude Code sessions on this Mac): where it
+    runs and exactly what it's doing. Kept live while it's up (serve_live)."""
+    from jarvis import helpers
+    board = helpers.board(mem, now)
+    e = htmllib.escape
+    parts = []
+    for h in board:
+        dot = "var(--amber)" if h["waiting"] else "#fff" if h["busy"] else "rgba(255,255,255,.3)"
+        state = "waiting for you" if h["waiting"] else h["state"]
+        lines = [f'<div class="where">{e(h["where"])}</div>']
+        if h["asked"] and not h["asked"].startswith(h["name"].rstrip(".…")):  # named after it already
+            lines.append(f'<div class="line"><span class="k">Asked</span>{e(h["asked"][:220])}</div>')
+        if h["plan"]:
+            done = sum(1 for x in h["plan"] if x["status"] == "completed")
+            items = "".join(f'<li class="{e(x["status"])}">{e(x["content"])}</li>' for x in h["plan"])
+            lines.append(f'<div class="line"><span class="k">Plan</span>{done} of {len(h["plan"])} done</div><ol>{items}</ol>')
+        elif h["now"]:
+            lines.append(f'<div class="line"><span class="k">Now</span>{e(h["now"][:200])}</div>')
+        if h["steps"]:
+            lines.append(f'<div class="line steps"><span class="k">Last steps</span>{e(" · ".join(h["steps"][-3:]))}</div>')
+        if h["said"]:
+            lines.append(f'<div class="line steps"><span class="k">{"Output" if h["kind"] == "job" else "Said"}</span>'
+                         f'{e(h["said"][-220:])}</div>')
+        cls = "helper" + (" waiting" if h["waiting"] else "" if h["busy"] else " quiet")
+        parts.append(f'<section class="{cls}"><div class="head"><span class="name"><i class="dot{" busy" if h["busy"] else ""}" '
+                     f'style="background:{dot}"></i>{e(h["name"])}</span><span class="state">{e(state)}</span></div>'
+                     f'{"".join(lines)}</section>')
+    busy = sum(1 for h in board if h["busy"])
+    title = (f"{len(board)} helper{'s' if len(board) != 1 else ''}, {busy} working" if board else "No helpers running")
+    body = HELPER_STYLE + (f"<main>{''.join(parts)}</main>" if parts else '<main><p class="empty">Nothing running, sir.</p></main>')
+    return {"title": title, "html": page(body, title), "body": body, "live": "helpers"}
 
 
 def image(path: str, mem: Memory | None = None) -> dict:
@@ -646,6 +710,8 @@ def render(mem: Memory, action: dict) -> dict:
             content["title"] = title[:80]
     elif kind == "deadlines":
         content = deadlines(mem)
+    elif kind == "helpers":
+        content = helpers_view(mem)
     elif kind == "card":
         lines = action.get("lines") or []
         content = card(title or "JARVIS", [str(x) for x in lines] if isinstance(lines, list) else [str(lines)])
@@ -654,9 +720,52 @@ def render(mem: Memory, action: dict) -> dict:
     elif kind == "url":
         content = web(str(action.get("url") or ""))
     else:
-        raise ValueError(f"can't show kind {kind!r} (plot, image, deadlines, card, html or url)")
+        raise ValueError(f"can't show kind {kind!r} (plot, image, deadlines, helpers, card, html or url)")
     return content
 
 
 PANEL_OPS = {"close": close, "bigger": lambda mem, wait=_wait_ack: resize(mem, 1, wait),
              "smaller": lambda mem, wait=_wait_ack: resize(mem, -1, wait), "back": back}
+
+
+# ----- live views -----
+REQUEST = PANEL_DIR / "request.json"   # "Show Helpers" in the menu bar writes this
+LIVE_EVERY = 3.0                        # seconds between refreshes of a live view
+
+
+def refresh(mem: Memory | None) -> bool:
+    """Re-render a live view that's up (helpers) in place: the panel swaps its contents without a reload."""
+    st = current()
+    if st.get("live") != "helpers" or not visible():
+        return False
+    content = helpers_view(mem)
+    if content["body"] == st.get("body"):
+        return False
+    _write({**st, **content, "refresh": True})
+    return True
+
+
+def take_request(now: float | None = None) -> str | None:
+    """A view asked for from the menu bar ("helpers"), once, if it's fresh."""
+    req = _read(REQUEST)
+    if not req:
+        return None
+    REQUEST.unlink(missing_ok=True)
+    kind = str(req.get("kind") or "")
+    return kind if kind in ("helpers", "deadlines") and (now or time.time()) - float(req.get("at") or 0) < 30 else None
+
+
+def serve_live(open_mem, log=print, stop=None, every: float = LIVE_EVERY) -> None:
+    """Run by `jarvis listen` on its own thread: opens what the menu bar asks for and keeps live views current."""
+    import threading
+    stop = stop or threading.Event()
+    mem = open_mem()  # SQLite connections stay on the thread that opened them
+    while not stop.is_set():
+        try:
+            if (kind := take_request()):
+                show(mem, {"type": "show", "kind": kind})
+            else:
+                refresh(mem)
+        except Exception as e:  # a bad file or a slow panel mustn't kill the listener
+            log(f"panel: {e}")
+        stop.wait(every)

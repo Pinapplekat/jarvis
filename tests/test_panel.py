@@ -109,3 +109,36 @@ def test_deadlines_this_week_grouped_by_day(monkeypatch, tmp_path):
     assert "Thursday's the heavy one, sir." in html and "·" not in html
     assert out["title"] == "5 due this week" and out["source"]["label"] == "Weekly plan"
     assert panel.deadlines(m, datetime(2026, 10, 24, 10, 0, tzinfo=tz))["title"] == "2 due by next Sunday"
+
+
+def test_helpers_view_is_live_and_escaped(monkeypatch):
+    from jarvis import helpers
+    board = [{"kind": "session", "name": "<b>HUD</b> fix", "where": "Claude app · JARVIS", "state": "working now",
+              "busy": True, "waiting": False, "now": "Fix the bug", "steps": ["Reading hud.py"], "asked": "fix it",
+              "said": "", "plan": [{"content": "Read", "status": "completed"}, {"content": "Fix the bug", "status": "in_progress"}]}]
+    monkeypatch.setattr(helpers, "board", lambda mem, now=None: board)
+    m = Memory(":memory:")
+    out = panel.helpers_view(m)
+    assert out["title"] == "1 helper, 1 working" and out["live"] == "helpers"
+    assert "&lt;b&gt;HUD&lt;/b&gt; fix" in out["html"] and "1 of 2 done" in out["html"] and "Claude app · JARVIS" in out["html"]
+    assert panel.refresh(m) is False  # nothing live is up
+    panel.show(m, {"type": "show", "kind": "helpers"}, wait=fake_app)
+    seq = panel.current()["seq"]
+    assert panel.refresh(m) is False  # unchanged: no rewrite
+    board[0]["state"] = "quiet for 3 min"
+    assert panel.refresh(m) is True
+    st = panel.current()
+    assert st["seq"] == seq + 1 and st["refresh"] and "quiet for 3 min" in st["body"]
+    panel.show(m, {"type": "show", "kind": "plot", "expr": "x"}, wait=fake_app)
+    assert panel.refresh(m) is False  # something else is up now
+
+
+def test_menu_bar_request_is_taken_once_and_only_when_fresh():
+    import time
+    panel.PANEL_DIR.mkdir(parents=True, exist_ok=True)
+    panel.REQUEST.write_text(json.dumps({"kind": "helpers", "at": time.time()}))
+    assert panel.take_request() == "helpers" and panel.take_request() is None
+    panel.REQUEST.write_text(json.dumps({"kind": "helpers", "at": time.time() - 60}))
+    assert panel.take_request() is None
+    panel.REQUEST.write_text(json.dumps({"kind": "rm -rf", "at": time.time()}))
+    assert panel.take_request() is None

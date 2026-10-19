@@ -31,10 +31,13 @@ def _no_real_logs_or_state(monkeypatch, tmp_path):
     monkeypatch.setattr(panel, "PANEL_DIR", tmp_path / "panel-test")
     monkeypatch.setattr(panel, "STATE", tmp_path / "panel-test" / "state.json")
     monkeypatch.setattr(panel, "ACK", tmp_path / "panel-test" / "ack.json")
+    monkeypatch.setattr(panel, "REQUEST", tmp_path / "panel-test" / "request.json")
     from jarvis import voice
     monkeypatch.setattr(voice, "ANNOUNCE_PID", tmp_path / "announcing-test.pid")
     monkeypatch.setattr(terminal, "AUDIT", tmp_path / "commands-test.jsonl")
     monkeypatch.setattr(tasks, "TASKS_DIR", tmp_path / "tasks-test")
+    from jarvis import jobs
+    monkeypatch.setattr(jobs, "JOBS_DIR", tmp_path / "jobs-test")
     monkeypatch.setattr(selfedit, "BUILD_DIR", tmp_path / "build-test")
     monkeypatch.setattr(selfedit, "STATUS", tmp_path / "build-test" / "status.json")
     monkeypatch.setattr(selfedit, "LOG", tmp_path / "selfedit-test.log")

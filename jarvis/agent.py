@@ -217,7 +217,8 @@ def describe_tool(name: str, tool_input: dict) -> str:
     def short(p):
         return Path(str(p)).name or str(p)
     if name == "Bash":
-        return "Running " + (str(tool_input.get("command", ""))[:80] or "a command")
+        command = re.sub(r'^\s*cd\s+("[^"]*"|\'[^\']*\'|\S+)\s*&&\s*', "", str(tool_input.get("command", "")))
+        return "Running " + (command[:80] or "a command")  # the folder is said elsewhere
     if name == "Read":
         return f"Reading {short(tool_input.get('file_path', ''))}"
     if name in EDIT_TOOLS:
@@ -230,6 +231,9 @@ def describe_tool(name: str, tool_input: dict) -> str:
         return f"Searching the web for {str(tool_input.get('query', ''))[:60]}"
     if name == "TodoWrite":
         return "Planning the next steps"
+    if name.startswith("mcp__"):  # mcp__Claude_Browser__browser_batch -> "Using browser batch (Claude Browser)"
+        parts = name.split("__")
+        return f"Using {parts[-1].replace('_', ' ')}" + (f" ({parts[1].replace('_', ' ')})" if len(parts) > 2 else "")
     return name
 
 
