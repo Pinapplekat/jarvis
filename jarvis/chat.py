@@ -967,6 +967,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
     pending_now, busy_now = bool(mem.pending_actions()), _busy(mem)
     gate = honesty.Gate(on_text, pending_now, busy_now) if on_text else None
     early: dict = {}
+    done_kinds: set[str] = set()  # every action asked for this message, lookups included ("I've checked" is true)
 
     def on_actions(acts: list) -> None:
         """The actions arrived before the reply text: do them now (if this is the real answer), so
@@ -987,6 +988,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             seen = peek_wait(mem)
         if seen:
             findings.append((PEEK_LABEL, seen))
+            done_kinds.add("look_at_screen")
     elif peek is not None:
         if peek[0]:
             on_progress()
@@ -1161,6 +1163,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             with timing.step(f"model_{round_ + 1}"):
                 out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
                                                               activity_text, blocks, findings, idle), **stream)
+            done_kinds.update(str(a.get("type")) for a in out.get("actions") or [] if isinstance(a, dict))
             asked_to_look = next((a for a in out.get("actions") or [] if a.get("type") == "look_at_screen"), None)
             if asked_to_look is not None:
                 # The look's text answer is the reply. The image is input only: the vision call has no
@@ -1203,7 +1206,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             said = []
             with timing.step("actions"):
                 problems = apply_actions(mem, actions, now.tzinfo, ran, send_photo=send_photo, said=said)
-        kinds = {str(a.get("type")) for a in out.get("actions") or [] if isinstance(a, dict)}
+        kinds = done_kinds | {str(a.get("type")) for a in out.get("actions") or [] if isinstance(a, dict)}
         if out.get("vision"):  # the look's own answer: it can't take actions or promise any
             if problems:
                 reply += "\n\n" + honesty.failure_line(problems)
@@ -1226,7 +1229,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                                                              activity_text, blocks, findings, idle))
                 retry = [a for a in out.get("actions") or [] if a.get("type") not in GATHER]
                 problems = apply_actions(mem, retry, now.tzinfo, ran, send_photo=send_photo, said=said)
-                kinds = {str(a.get("type")) for a in out.get("actions") or [] if isinstance(a, dict)}
+                kinds = done_kinds | {str(a.get("type")) for a in out.get("actions") or [] if isinstance(a, dict)}
                 again = str(out.get("reply") or "").strip()
                 cleaned, _ = honesty.clean(again, kinds, problems, pending_now, busy_now)
                 cleaned = cleaned or again

@@ -15,9 +15,10 @@ JEV_ASK = ("Elijah has just been talking with JARVIS, his AI assistant, at his d
 SILENT_BELOW = 0.75  # Jev must be at least this sure it's NOT for JARVIS to stay quiet
 
 # Ends on a word that can't end a sentence, or is only filler: he isn't done yet.
+# Only words a sentence can't end on ("...where is it at?" is finished; "...and" isn't).
 UNFINISHED = re.compile(
-    r"(?:^|\s)(?:and|or|but|so|um+|uh+|er+|erm|hmm+|like|because|cause|the|a|an|to|of|for|with|then|if|that|"
-    r"my|your|is|are|was|what|which|when|where|who|about|from|into|on|at|in)\s*[.,?!…-]*\s*$|,\s*$", re.I)
+    r"(?:^|\s)(?:and|or|but|so|um+|uh+|er+|erm|like|because|cause|the|a|an|to|of|for|with|then|if|"
+    r"my|your|our|their)\s*[.,…-]*\s*$|,\s*$", re.I)
 FILLER_ONLY = re.compile(r"^\s*(?:um+|uh+|er+|erm|hmm+|so|and|like|okay so|well)[\s.,?!…-]*$", re.I)
 
 

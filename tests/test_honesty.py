@@ -140,3 +140,12 @@ def test_a_bare_promise_gets_one_retry_for_a_real_answer():
 
 def test_a_long_answer_starting_with_looking_is_kept():
     assert not honesty.is_unbacked("Looking at the error, it's a missing import in chat.py line 40.", set())
+
+
+def test_saying_it_checked_after_a_real_lookup_is_kept(monkeypatch):
+    from jarvis import introspect
+    monkeypatch.setattr(introspect, "inspect", lambda op, arg: "all 830 passed")
+    outs = iter([{"actions": [{"type": "inspect", "op": "check", "arg": "tests"}], "reply": "Checking, sir."},
+                 {"actions": [], "reply": "I've checked: all the tests pass, sir."}])
+    reply = respond(Memory(":memory:"), "do the tests pass?", NOW, "", runner=lambda s, p: next(outs))
+    assert reply == "I've checked: all the tests pass, sir."

@@ -391,6 +391,7 @@ def test_unfinished_and_addressee_rules():
     from jarvis.addressee import for_jarvis, unfinished
     assert unfinished("Um") and unfinished("can you send me a text and") and unfinished("so,")
     assert not unfinished("What's due this week?") and not unfinished("Play some Tame Impala.")
+    assert not unfinished("Where is it at?") and not unfinished("What are you looking at.")
     assert for_jarvis("Jarvis, what's next?") == (True, "named JARVIS")
     assert for_jarvis("love you babe")[0] is False
     from jarvis.judge import Answer
