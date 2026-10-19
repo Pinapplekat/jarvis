@@ -160,7 +160,8 @@ def run_now() -> None:
 def status(log_lines: int = 5) -> str:
     keep = ("state =", "run interval", "last exit code", "runs =", "pid =")
     out = []
-    for label, command in ((TICK, "tick"), (LISTEN, "listen"), (WATCH, "watch"), (EARS, "ears"), (PHONE, "phone")):
+    for label, command in ((TICK, "tick"), (LISTEN, "listen"), (WATCH, "watch"), (EARS, "ears"), (PHONE, "phone"),
+                           (PANEL, "panel")):
         if not is_loaded(label):
             out.append(f"{command}: not installed (jarvis schedule install)")
             continue
