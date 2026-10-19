@@ -107,3 +107,13 @@ def test_live_reply_flag_is_set_cleared_and_expires():
     assert not speech.is_speaking()
     speech.LIVE.write_text("not json")
     assert not speech.is_speaking()
+
+
+def test_whisper_name_slips_are_fixed():
+    from jarvis.speech import fix_names
+    assert fix_names("Jeff, what's due this week?") == "Jarvis, what's due this week?"
+    assert fix_names("Hey Travis, pause") == "Hey Jarvis, pause"
+    assert fix_names("open clod code") == "open Claude code"
+    assert fix_names("Jeff from work called") == "Jeff from work called"  # not addressed: left alone
+    assert fix_names("I told Jeff about it") == "I told Jeff about it"  # mid-sentence names are left alone
+    assert fix_names("the next inquisitive question") == "the next InQuizitive question"

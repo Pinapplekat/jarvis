@@ -346,3 +346,74 @@ def test_wake_with_no_speech_or_garbled_speech_pops():
     ears2, stream2, played2, _, answered2 = make([LOUD] * 8 + [SILENT] * 14, heard="")
     ears2.converse(stream2)
     assert played2 == [CHIME, MISS] and answered2 == []
+
+
+# ----- end of turn, resuming, and who it was meant for -----
+def make_heard(chunks, heard, addressed=None):
+    played, answered, voice = [], [], FakeVoice()
+    heard = list(heard)
+    ears = Ears(answer=lambda t, on_text=None: answered.append(t) or "Right, sir.",
+                transcribe=lambda audio: heard.pop(0) if len(heard) > 1 else heard[0], log=lambda s: None,
+                play=played.append, voice=voice, addressed=addressed)
+    ears.noise.extend([0.002] * 10)
+    return ears, FakeStream(chunks), played, voice, answered
+
+
+def test_a_trailing_and_waits_for_the_rest(monkeypatch):
+    monkeypatch.setattr(config, "FOLLOW_UP_SECONDS", 1)
+    turn = [LOUD] * 8 + [SILENT] * 16
+    ears, stream, played, voice, answered = make_heard(turn + [SILENT] * 5 + turn,
+                                                       ["Send a text to Julian and", "Send a text to Julian and say hi"])
+    ears.converse(stream)
+    assert answered == ["Send a text to Julian and say hi"]
+
+
+def test_a_follow_up_meant_for_someone_else_gets_silence(monkeypatch):
+    monkeypatch.setattr(config, "FOLLOW_UP_SECONDS", 2)
+    turn = [LOUD] * 8 + [SILENT] * 16
+    from jarvis.addressee import for_jarvis
+    ears, stream, played, voice, answered = make_heard(turn + [SILENT] * 3 + turn,
+                                                       ["What's due this week?", "I love you babe"],
+                                                       addressed=lambda t: for_jarvis(t))
+    ears.converse(stream)
+    assert answered == ["What's due this week?"] and len(spoken_of(voice)) == 1
+
+
+def test_no_reply_is_not_spoken():
+    voice = FakeVoice()
+    ears = Ears(answer=lambda t, on_text=None: "(no reply)", transcribe=lambda a: "", log=lambda s: None,
+                play=lambda p: None, voice=voice)
+    ears.reply("hmm", heard_at=0.0)
+    assert spoken_of(voice) == []
+
+
+def test_unfinished_and_addressee_rules():
+    from jarvis.addressee import for_jarvis, unfinished
+    assert unfinished("Um") and unfinished("can you send me a text and") and unfinished("so,")
+    assert not unfinished("What's due this week?") and not unfinished("Play some Tame Impala.")
+    assert for_jarvis("Jarvis, what's next?") == (True, "named JARVIS")
+    assert for_jarvis("love you babe")[0] is False
+    from jarvis.judge import Answer
+    no = lambda state, qs: {q.key: Answer(False, 0.9) for q in qs}  # noqa: E731
+    unsure = lambda state, qs: {q.key: Answer(False, 0.6) for q in qs}  # noqa: E731
+    assert for_jarvis("can you grab the mail", fast=no)[0] is False
+    assert for_jarvis("can you grab the mail", fast=unsure)[0] is True  # unsure means answer
+
+
+def test_carrying_on_before_jarvis_speaks_is_the_same_sentence(monkeypatch):
+    import time
+    monkeypatch.setattr(config, "FOLLOW_UP_SECONDS", 1)
+    answered, heard = [], iter(["Can you check", "on this."])
+    ears = Ears(answer=lambda t, on_text=None: "", transcribe=lambda a: next(heard), log=lambda s: None,
+                play=lambda p: None, voice=FakeVoice())
+    ears.noise.extend([0.002] * 10)
+
+    def reply(text, heard_at, read_chunk=None):
+        answered.append(text)
+        if len(answered) == 1:  # he carried on while JARVIS was still thinking: nothing said yet
+            ears.barged = (np.ones(CHUNK * 5, dtype=np.int16), time.time())
+            ears.barge_at, ears.barge_after_audio = time.time(), False
+        return "ok"
+    monkeypatch.setattr(ears, "reply", reply)
+    ears.converse(FakeStream([LOUD] * 8 + [SILENT] * 16))
+    assert answered == ["Can you check", "Can you check on this."]

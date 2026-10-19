@@ -6,7 +6,8 @@ from pathlib import Path
 # Bookkeeping events (timings, network blips, archives) that only crowd the model's context.
 NOISY_EVENTS = {"answered", "first_audio", "timing", "listen_error", "fact_archived", "canvas_sync", "spoke",
                 "warm_fallback", "jev_fallback", "route_failed", "screen_peek", "tick_error", "watch_error",
-                "inspect", "web_open", "reported", "report_compose_failed", "telegram_retry"}
+                "inspect", "web_open", "reported", "report_compose_failed", "telegram_retry", "not_for_me",
+                "unbacked_claim", "instant"}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS facts (

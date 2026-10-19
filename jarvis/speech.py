@@ -121,8 +121,28 @@ def transcribe(audio: np.ndarray | bytes) -> str:
     samples = decode(audio) if isinstance(audio, bytes) else audio
     if samples.size < SAMPLE_RATE * 0.3:
         return ""
-    segments, _ = _whisper().transcribe(samples, vad_filter=True, beam_size=1, language="en")
-    return " ".join(s.text.strip() for s in segments).strip()
+    segments, _ = _whisper().transcribe(samples, vad_filter=True, beam_size=1, language="en",
+                                        initial_prompt=VOCABULARY)
+    return fix_names(" ".join(s.text.strip() for s in segments).strip())
+
+
+# Names Whisper doesn't know. The prompt nudges it toward them; fix_names catches the usual slips
+# where they're unambiguous (only at the start for the wake name: "Jeff, what's due?").
+VOCABULARY = "Jarvis, Jev, Claude, Claude Code, Canvas, InQuizitive, Emily, Spotify, Telegram, Econ."
+_NAME_FIXES = [
+    (re.compile(r"^(?:(?P<lead>(?:hey|ok|okay)[,\s]+)(?:jeff|travis|drivers|jervis|jarvi|jarvas|service)\b"
+                r"|(?:jeff|travis|drivers|jervis|jarvi|jarvas)(?=,))", re.I),
+     lambda m: (m["lead"] or "") + "Jarvis"),
+    (re.compile(r"\bclod(?=\s+code\b|\b)", re.I), lambda m: "Claude"),
+    (re.compile(r"\bin\s?quisitive\b|\binquisitive\b(?=.*\b(?:question|card|assignment|chapter)s?\b)", re.I),
+     lambda m: "InQuizitive"),
+]
+
+
+def fix_names(text: str) -> str:
+    for pattern, repl in _NAME_FIXES:
+        text = pattern.sub(repl, text)
+    return text
 
 
 def voice_note(text: str) -> bytes:

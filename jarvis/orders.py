@@ -13,6 +13,8 @@ DEFAULT_ORDERS = [
     "Only ask first for high-risk things: texts, email or messages to other people, purchases, deleting, "
     "and high-risk commands. Everything else, just do it and say briefly what changed.",
     "Music means Spotify (play_music); never ask him which service, playlist or song.",
+    "If something said out loud clearly wasn't meant for you (he's talking to someone in the room), reply "
+    "with an empty reply and no actions. Never say it sounded meant for someone else.",
 ]
 
 

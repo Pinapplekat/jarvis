@@ -27,6 +27,9 @@ RESUME_GAP = 0.25            # a pause this long that he talks through marks him
 ECHO_WINDOW = 12             # recent mic levels (~1 s) while JARVIS talks: how loud its own voice is
 ECHO_WARMUP = 0.3            # seconds of JARVIS's voice heard before barge-in can trigger
 HEARTBEAT_TTL = 30.0         # indicator shows "off" if the listener hasn't checked in this long
+GRACE_SECONDS = 2.5          # after a trailing "and..."/"um", how long to wait for him to carry on
+MAX_GRACES = 2
+RESUME_MERGE_SECONDS = 4.0   # talking again this soon after his turn ended is the same sentence
 SPEAKING, LISTENING = "speaking", "listening"
 
 
@@ -97,12 +100,14 @@ class Ears:
     def __init__(self, answer: Callable[..., str], transcribe: Callable[[np.ndarray], str],
                  log=print, play: Callable[[str], None] | None = None, voice=None,
                  report: Callable | None = None, timing: Callable[[int], None] | None = None,
-                 after_reply: Callable[[], object] | None = None, on_turn: Callable[[dict], None] | None = None):
+                 after_reply: Callable[[], object] | None = None, on_turn: Callable[[dict], None] | None = None,
+                 addressed: Callable[[str], tuple[bool, str]] | None = None):
         """`answer(text, on_text)` streams the reply's text so far into `on_text`; `voice` is a
         SpeakQueue, so each sentence is spoken as soon as it's written. `report` publishes
         state for the menu bar indicator; `timing(ms)` gets the time to first audio;
         `after_reply()` runs once each answer is over (it passes on helper reports that waited);
-        `on_turn(steps)` gets each turn's per-step timings (jarvis.timing)."""
+        `on_turn(steps)` gets each turn's per-step timings (jarvis.timing); `addressed(text)` says
+        whether a follow-up heard without the wake word was meant for JARVIS ((yes, why))."""
         self.answer, self.transcribe, self.log = answer, transcribe, log
         self.report = report or _report
         self.play = play or (lambda path: subprocess.Popen(["afplay", path]))
@@ -110,6 +115,9 @@ class Ears:
         self.after_reply = after_reply or (lambda: None)
         self.on_turn = on_turn or (lambda steps: None)
         self.prewarm: Callable[[], None] | None = None
+        self.addressed = addressed or (lambda text: (True, "no check"))
+        self.barge_at: float | None = None
+        self.barge_after_audio = False
         self.voice = voice
         self.noise = deque(maxlen=50)  # recent chunk levels while idle (~4 s)
         self._wake = None
@@ -176,28 +184,57 @@ class Ears:
         from jarvis.speech import conversation_started
         self.play(CHIME)
         self.report("listening")
+        from jarvis import timing
+        from jarvis.addressee import unfinished
         timeout, barged = START_TIMEOUT, None
+        last_text, last_heard_at = "", 0.0
         read = lambda: stream.read(CHUNK)[0][:, 0]
         while True:
+            first_turn = timeout == START_TIMEOUT
+            resumed = False
             if barged:  # he talked over the last answer: that's already this turn
                 audio, heard_at = barged
+                # Talking again right after his turn ended, before JARVIS said a word, is the rest of
+                # that sentence, not a new one. Once JARVIS has spoken, it's an interruption.
+                resumed = bool(last_text and self.barge_at and not self.barge_after_audio
+                               and self.barge_at - last_heard_at <= RESUME_MERGE_SECONDS)
             else:
                 audio = self.record(read, timeout)
                 heard_at = time.time()  # he stopped talking: the clock for time to first audio
             if audio is None:
-                if timeout == START_TIMEOUT:
+                if first_turn:
                     self.play(MISS)  # woke but heard nothing
                 return
             self.report("working", detail="thinking")
-            from jarvis import timing
             timing.start("desk")
             with timing.step("transcribe"):
                 text = self.transcribe(audio.astype(np.float32) / 32768.0)
+            for _ in range(MAX_GRACES):  # "...and", "um": he isn't finished; give him a moment to carry on
+                if not text or not unfinished(text):
+                    break
+                more = self.record(read, GRACE_SECONDS)
+                if more is None:
+                    break
+                self.log(f"waited for the rest of: {text[-40:]}")
+                audio, heard_at = np.concatenate([audio, more]), time.time()
+                with timing.step("transcribe"):
+                    text = self.transcribe(audio.astype(np.float32) / 32768.0)
             if not text:
                 timing.finish()
                 self.play(MISS)
                 return
+            if resumed:
+                self.log(f"resumed: {last_text[-60:]} + {text[:60]}")
+                text = f"{last_text} {text}"
+            elif not first_turn:  # a follow-up without the wake word: was it even for JARVIS?
+                with timing.step("addressee"):
+                    meant, why = self.addressed(text)
+                if not meant:
+                    timing.finish()
+                    self.log(f"not for me ({why}): {text[:80]}")
+                    return  # stay silent; he's talking to someone else
             self.log(f"heard: {text[:120]}")
+            last_text, last_heard_at = text, heard_at
             self.reply(text, heard_at, read)
             barged, self.barged = self.barged, None
             if not barged:
@@ -227,7 +264,7 @@ class Ears:
         voice, buf = self._voice(), SentenceBuffer()
         voice.cancel()  # nothing from an earlier answer talks over this one
         voice.reset()
-        self.barged = None
+        self.barged, self.barge_at = None, None
         cut, lock, finished = threading.Event(), threading.Lock(), threading.Event()
         monitor = None
         if read_chunk is not None and config.BARGE_IN:
@@ -246,7 +283,9 @@ class Ears:
 
         reply = self.answer(text, on_text)
         self.log(f"said: {reply[:120]}")
-        if reply.startswith(buf.text):  # the usual case: finish what streamed
+        if reply.strip() in ("", "(no reply)") and not buf.text:
+            pass  # nothing to say (it wasn't meant for JARVIS): stay silent
+        elif reply.startswith(buf.text):  # the usual case: finish what streamed
             for sentence in buf.feed(reply[len(buf.text):]) + buf.flush():
                 say(sentence)
         elif not cut.is_set():  # streaming failed or was a "checking" round: say the real answer instead
@@ -285,6 +324,8 @@ class Ears:
                 if state == "talking":
                     recent.append(chunk)
                 elif state == "barge_in":
+                    self.barge_at = time.time()
+                    self.barge_after_audio = getattr(self._voice(), "first_audio_at", None) is not None
                     from jarvis.speech import live_reply_ended
                     from jarvis.voice import stop_speaking
                     with lock:

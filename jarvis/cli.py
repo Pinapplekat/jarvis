@@ -303,6 +303,20 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
     return reply
 
 
+def _addressed_check(mem: Memory):
+    """For the desk mic: was a follow-up (no wake word) meant for JARVIS? Heuristics, then Jev."""
+    from jarvis import judge
+    from jarvis.addressee import for_jarvis
+
+    def check(text: str) -> tuple[bool, str]:
+        recent = [f"{'Elijah' if h['role'] == 'user' else 'JARVIS'}: {h['text'][:200]}" for h in mem.chat_history(4)]
+        meant, why = for_jarvis(text, recent, judge.fast_engine())
+        if not meant:
+            mem.log("not_for_me", why)  # the reason only, never what he said
+        return meant, why
+    return check
+
+
 def _idle_reader():
     from jarvis.voice import idle_seconds
     return idle_seconds
@@ -1189,7 +1203,7 @@ def main() -> None:
              or _answer(mem, text, spoken=True, warm=warm, on_text=on_text),
              transcribe=speech.transcribe, log=log, after_reply=after_reply,
              timing=lambda ms: mem.log("first_audio", f"time_to_first_audio={ms}ms"),
-             on_turn=lambda steps: mem.log("timing", json.dumps(steps)))
+             on_turn=lambda steps: mem.log("timing", json.dumps(steps)), addressed=_addressed_check(mem))
         from jarvis.chat import warm_vision
         ears.prewarm = warm_vision().prewarm
         ears.run_forever()
