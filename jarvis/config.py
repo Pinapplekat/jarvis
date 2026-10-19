@@ -132,6 +132,13 @@ BROWSER_BLOCKLIST = os.getenv("BROWSER_BLOCKLIST", "")  # extra domains, comma-s
 # Extra folders JARVIS may send images from (besides its screenshots, task folders); comma-separated.
 ATTACH_DIRS = os.getenv("ATTACH_DIRS", "")
 
+# Live web search through an official API (brave or google). Elijah pastes the key into .env himself.
+WEB_SEARCH = os.getenv("WEB_SEARCH", "1") == "1"
+SEARCH_PROVIDER = os.getenv("SEARCH_PROVIDER", "brave")
+SEARCH_API_KEY = os.getenv("SEARCH_API_KEY", "")
+SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID", "")  # Google Programmable Search only (its "cx")
+SEARCH_DAILY_LIMIT = int(os.getenv("SEARCH_DAILY_LIMIT", "40"))  # keeps the free tier's quota safe
+
 # Self-inspection and terminal commands. PROJECT_DIR is the JARVIS repo (the background jobs
 # run from a copy, which records where it came from); commands stay inside it unless approved.
 _HERE = Path(__file__).resolve().parent.parent

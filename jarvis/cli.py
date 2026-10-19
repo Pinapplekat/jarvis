@@ -983,6 +983,9 @@ def main() -> None:
     sub.add_parser("listen", help="Stay connected to Telegram: chat and approval buttons (runs forever)")
     ask = sub.add_parser("ask", help="Ask JARVIS something from the terminal (same brain as Telegram)")
     ask.add_argument("message")
+    se = sub.add_parser("search", help="Search the web through the search API (counts toward the daily cap)")
+    se.add_argument("query")
+    se.add_argument("-n", type=int, default=5)
     sub.add_parser("call-test", help="Call yourself once to check Twilio voice")
     ph = sub.add_parser("phone", help="Answer your calls to the Twilio number (runs forever), or point the number here")
     ph.add_argument("action", nargs="?", default="serve", choices=["serve", "setup"])
@@ -1495,6 +1498,14 @@ def main() -> None:
             sys.exit("Self-editing is off. To turn it on, set JARVIS_REPO in .env to this project folder.")
         selfedit.main([args.action, *([args.id] if args.id else [])])
         return
+    if args.cmd == "search":
+        from jarvis import websearch
+        found = websearch.run(mem, args.query, n=args.n)
+        print(f"Query sent: {found.query}")
+        print(found.error or websearch.for_prompt(found))
+        print(f"({websearch.used_today(mem)} of {config.SEARCH_DAILY_LIMIT} searches used today)")
+        return
+
     if args.cmd == "ask":
         from jarvis.canvas import format_digest
         from jarvis.chat import respond

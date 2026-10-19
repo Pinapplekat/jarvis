@@ -34,6 +34,7 @@ ACTIONS: dict[str, tuple[str, str]] = {
     "peek": ("eye", "Glancing at your screen"),
     "open_url": ("globe", "Reading a web page"),
     "browse": ("globe", "Opening a web page"),
+    "search": ("magnifyingglass.circle", "Searching the web"),
     "read_email": ("envelope.open", "Reading an email"),
     "inbox": ("tray.full", "Checking your inbox"),
     "draft_email": ("square.and.pencil", "Drafting an email"),
