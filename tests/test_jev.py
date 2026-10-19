@@ -105,6 +105,25 @@ def test_router_picks_blocks_and_falls_back_to_all():
     assert r.blocks == router.ALL and r.how == "keywords" and errors
 
 
+def test_jev_decides_whether_to_peek_at_the_screen():
+    yes = router.route("what's this error?", [], routed({"look_at_screen"}))
+    assert yes.look and "help" in yes.look_why
+    no = router.route("thanks", [], routed(set()))
+    assert not no.look and "not needed" in no.look_why
+    unsure = lambda s, qs: {q.key: Answer(False, 0.6) for q in qs}  # noqa: E731  (40% yes: look)
+    r = router.route("hmm", [], unsure)
+    assert r.look and "unsure" in r.look_why
+    junk = lambda s, qs: {q.key: Answer("maybe" if q.key == "look_at_screen" else False, 0.9) for q in qs}  # noqa: E731
+    r = router.route("hmm", [], junk)
+    assert r.look and "couldn't read" in r.look_why
+    missing = lambda s, qs: {q.key: Answer(False, 0.9) for q in qs if q.key != "look_at_screen"}  # noqa: E731
+    assert router.route("hmm", [], missing).look
+
+    def broken(s, qs):
+        raise JevError("down")
+    assert router.route("x", [], broken).look and router.route("x", [], None).look
+
+
 def test_model_choice(monkeypatch):
     monkeypatch.setattr(config, "JARVIS_MODEL_ROUTING", "auto")
     assert router.route("draft an email to prof", [], routed({"heavy"})).heavy

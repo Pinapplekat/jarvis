@@ -225,6 +225,8 @@ JARVIS can send images from the Mac to your Telegram: a screenshot a helper took
 
 **Looking at your screen, privately:** "what's on my screen?" or "what does this error say?" makes JARVIS capture the screen and look at the picture itself (a second, tool-less Claude call with the image attached as input, `JARVIS_HEAVY_MODEL`), then answer in text. Nothing is sent to Telegram or shown, and the picture is deleted right after. It works from the desk mic and phone calls too, where pictures can't be sent. Screen text is treated as untrusted data and the look can only answer, never act. Needs Screen Recording permission for the background job's Python; it's slower than a normal reply and uses more of your Claude limits.
 
+**Peeking on its own:** JARVIS also decides for itself whether a glance would help. The same Jev routing call asks "would a look at his screen help?" and JARVIS looks whenever Jev says yes, is unsure, or gives no usable answer (and always without Jev). What it sees reaches the chat model only as untrusted context, never Telegram or the chat history; the reply stays short and only mentions the screen when it matters. It's skipped when the Mac is idle or locked or the screen can't be captured, and each decision and its reason is logged as a `screen_peek` event. This means more captures than before, so a bit more latency and Claude usage.
+
 - **Only images** (png, jpg, gif, webp), up to 10 MB, sent as a photo (or as a file if Telegram refuses the photo).
 - **Only from allowed folders:** JARVIS's screenshot folder (`~/Library/Application Support/JARVIS/shots`, where browser screenshots are kept, newest 50), its task folders, and the folders of tasks you started in the last week, plus any you add with `ATTACH_DIRS=/path/one,/path/two`. Paths are fully resolved first, so `..` and symlinks can't escape, and private locations (keys, keychains, the browser profile) are refused even inside an allowed folder. Text in pages, emails or files can't add folders.
 - **Only to your chat.** `jarvis send-image <path> --caption "..."` sends one by hand with the same checks.
@@ -314,7 +316,7 @@ Speech is handled on-device: Whisper (`faster-whisper`, model `WHISPER_MODEL`, d
 ## Jev (fast decisions)
 
 With `TYPESAFE_API_KEY` set (from console.typesafe.ai → API Keys), JARVIS uses TypeSafe's Jev (`JEV_MODEL`, default `jev-latest`) for its quick typed decisions:
-- **Context routing:** before each chat message, five yes/no questions decide which context to load (deadlines, inbox, current screen and terminal, project briefs, journal). It leans toward including, and skips the Canvas fetch when deadlines aren't needed. Each answer's timing and chosen context are logged as `answered` events.
+- **Context routing:** before each chat message, five yes/no questions decide which context to load (deadlines, inbox, current screen and terminal, project briefs, journal), plus one on whether to peek at your screen privately. It leans toward including and looking, and skips the Canvas fetch when deadlines aren't needed. Each answer's timing and chosen context are logged as `answered` events.
 - **Attention:** the "should I speak up?" judgment (Jev instead of Claude Haiku, so no Claude usage).
 
 - **What you're doing:** each saved screen is tagged (coding, homework, reading, writing, chatting, email, video, gaming, browsing, planning, other). Without Jev, an app-name guess does it. The journal and evening check-in get a time breakdown ("coding 2h10m, homework 45m…").

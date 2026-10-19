@@ -143,6 +143,16 @@ def capture_for_vision(run=None) -> Path:
     return path
 
 
+def locked() -> bool:
+    """True if the Mac's screen is locked (or at the login window). False when it can't tell."""
+    try:
+        import Quartz
+        session = Quartz.CGSessionCopyCurrentDictionary() or {}
+        return bool(session.get("CGSSessionScreenIsLocked")) or session.get("kCGSSessionOnConsoleKey") is False
+    except Exception:
+        return False
+
+
 def meaningfully_changed(old: str | None, new: str, threshold: float = 0.85) -> bool:
     if not old:
         return bool(new.strip())

@@ -239,7 +239,7 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
                     inbox_text=_inbox_text(mem) if "inbox" in blocks else "",
                     activity_text=_activity(mem) if "activity" in blocks else "", blocks=blocks,
                     on_text=stream, spotter=_page_spotter(), send_photo=send_photo,
-                    judge=judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])))
+                    peek=(route.look, route.look_why), judge=judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])))
     total = time.time() - started
     first_at = f"{first.at - started:.1f}s" if first and first.at else "-"
     # Timings and choices only; never the message text.

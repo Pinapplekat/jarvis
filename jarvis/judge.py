@@ -154,6 +154,32 @@ def engine(on_fallback=None) -> Engine:
     raise RuntimeError(f"judge engine {choice!r} isn't available")
 
 
+# ----- peeking at the screen before answering (plan #29) -----
+SCREEN_ASK = ("Could a quick private look at his screen right now help answer this well (it might be about "
+              "something in front of him, or you can't tell)? Lean yes when unsure.")
+LOOK_AT = 0.3    # probability of "yes" from which JARVIS looks: unsure counts as yes
+SURE_AT = 0.7
+
+
+def screen_look(answers: dict) -> tuple[bool, str]:
+    """Jev's call on peeking at the screen: (look, one-line reason). Unsure or unreadable means look."""
+    try:
+        a = answers["look_at_screen"]
+        if not isinstance(a.value, bool):
+            raise ValueError(f"not a yes/no: {a.value!r}")
+        conf = float(a.confidence)
+        if not 0 <= conf <= 1:
+            raise ValueError(f"confidence {conf}")
+        p = conf if a.value else 1 - conf
+    except Exception:
+        return True, "couldn't read Jev's answer; looking to be safe"
+    if p >= SURE_AT:
+        return True, f"Jev thinks it'll help ({p:.0%})"
+    if p >= LOOK_AT:
+        return True, f"Jev unsure ({p:.0%}); looking to be safe"
+    return False, f"Jev says not needed ({p:.0%})"
+
+
 # ----- grading a command's risk (plan #17) -----
 TIERS = ["low", "medium", "high", "critical"]
 RISK_QUESTION = ("How risky is running this command on Elijah's Mac right now? low: only reads, or only writes "

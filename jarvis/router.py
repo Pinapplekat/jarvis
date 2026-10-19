@@ -1,14 +1,14 @@
 """Before each chat message, decide (1) which context it needs, so JARVIS doesn't gather or
-send everything every time, and (2) whether it needs the heavy model (Sonnet) or the quick
-one (Haiku). One fast Jev call answers both; it leans toward including context, since a
-missing block hurts more than an extra one. Without Jev, every block is included and a
-keyword check picks the model."""
+send everything every time, (2) whether it needs the heavy model (Sonnet) or the quick
+one (Haiku), and (3) whether to peek at his screen first. One fast Jev call answers all three;
+it leans toward including context and looking, since a missing block hurts more than an extra
+one. Without Jev, every block is included, JARVIS looks, and a keyword check picks the model."""
 
 import re
 from dataclasses import dataclass
 
 from jarvis import config
-from jarvis.judge import Engine, Question
+from jarvis.judge import SCREEN_ASK, Engine, Question, screen_look
 
 BLOCKS = {
     "deadlines": "Would answering this need his school deadlines, due dates, classes or schedule?",
@@ -35,6 +35,8 @@ class Route:
     blocks: frozenset[str]
     heavy: bool
     how: str  # "jev" | "keywords" (no Jev, or it failed)
+    look: bool = True    # peek at his screen privately before answering (Jev's call; unsure = yes)
+    look_why: str = ""
 
 
 def _p_yes(answer) -> float:
@@ -47,15 +49,16 @@ def heavy_by_keywords(message: str) -> bool:
 
 def route(message: str, recent: list[str], fast: Engine | None, on_error=None) -> Route:
     forced = config.JARVIS_MODEL_ROUTING
-    def finish(blocks, heavy, how):
+    def finish(blocks, heavy, how, look=(True, "no judgment from Jev; looking to be safe")):
         if forced in ("fast", "heavy"):
             heavy = forced == "heavy"
-        return Route(frozenset(blocks), heavy, how)
+        return Route(frozenset(blocks), heavy, how, *look)
 
     if fast is None:
         return finish(ALL, heavy_by_keywords(message), "keywords")
     state = "Recent conversation:\n" + ("\n".join(recent[-4:]) or "(none)") + f"\n\nNew message from Elijah:\n{message}"
-    questions = [Question(k, ask) for k, ask in BLOCKS.items()] + [Question("heavy", HEAVY_ASK)]
+    questions = ([Question(k, ask) for k, ask in BLOCKS.items()] + [Question("heavy", HEAVY_ASK)]
+                 + [Question("look_at_screen", SCREEN_ASK)])
     try:
         answers = fast(state, questions)
     except Exception as e:
@@ -63,4 +66,4 @@ def route(message: str, recent: list[str], fast: Engine | None, on_error=None) -
             on_error(e)
         return finish(ALL, heavy_by_keywords(message), "keywords")
     blocks = {k for k in BLOCKS if _p_yes(answers[k]) >= INCLUDE_AT}
-    return finish(blocks, _p_yes(answers["heavy"]) >= HEAVY_AT, "jev")
+    return finish(blocks, _p_yes(answers["heavy"]) >= HEAVY_AT, "jev", screen_look(answers))
