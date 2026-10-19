@@ -1,6 +1,6 @@
 """Siri-style actions on this Mac: texts (Messages), calls (FaceTime / iPhone via a tel: link),
 timers and alarms (a Clock Shortcut if one is set, otherwise a JARVIS reminder), and music
-(the Music app).
+(the Spotify app, see spotify.py).
 
 Texts and calls reach other people, so they only ever go out after Elijah's yes in Telegram, and
 the yes is bound to the exact recipient and text: any change afterwards voids it, and unanswered
@@ -53,36 +53,6 @@ on run argv
 end run
 """
 
-MUSIC_SCRIPT = """
-on run argv
-    set q to item 1 of argv
-    set k to item 2 of argv
-    tell application "Music"
-        if k is "playlist" then
-            try
-                set pl to (first user playlist whose name contains q)
-            on error
-                error "No playlist called " & q
-            end try
-            play pl
-            return "the playlist " & (name of pl)
-        end if
-        if k is "artist" then
-            set hits to (search library playlist 1 for q only artists)
-        else if k is "song" then
-            set hits to (search library playlist 1 for q only songs)
-        else
-            set hits to (search library playlist 1 for q)
-        end if
-        if (count of hits) is 0 then error "Nothing in the Music library matches " & q
-        set t to item 1 of hits
-        play t
-        return (name of t) & " by " & (artist of t)
-    end tell
-end run
-"""
-
-
 class SiriError(RuntimeError):
     pass
 
@@ -106,8 +76,9 @@ def place_call(number: str) -> None:
 
 
 def play_music(query: str, kind: str = "any") -> str:
-    """Plays the best match from his Music library. Returns what's playing."""
-    return _osascript(MUSIC_SCRIPT, query, kind)
+    """Plays the best Spotify match. Returns what's actually playing."""
+    from jarvis import spotify
+    return spotify.play(query, kind)
 
 
 def run_shortcut(name: str, text: str) -> None:
@@ -260,9 +231,10 @@ def music(mem: Memory, query: str, kind: str = "any", player=None) -> str:
         raise ValueError("needs something to play (a song, artist or playlist)")
     if kind not in ("song", "artist", "playlist", "any"):
         raise ValueError(f"bad music kind {kind!r}")
+    from jarvis.spotify import SpotifyError
     try:
         playing = (player or play_music)(query, kind)
-    except (SiriError, OSError, subprocess.TimeoutExpired) as e:
+    except (SiriError, SpotifyError, OSError, subprocess.TimeoutExpired) as e:
         mem.log("siri", f"music {kind} {query!r} failed: {str(e)[:120]}")
         raise ValueError(f"couldn't play {query!r} ({str(e)[:120]})")
     mem.log("siri", f"playing {playing[:150]}")

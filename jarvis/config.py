@@ -127,6 +127,10 @@ JOB_STALL_MINUTES = int(os.getenv("JOB_STALL_MINUTES", "10"))  # ping once if a 
 SIRI = os.getenv("SIRI", "1") == "1"
 SIRI_TIMER_SHORTCUT = os.getenv("SIRI_TIMER_SHORTCUT", "")  # a Shortcut that starts a Clock timer (input: seconds)
 SIRI_ALARM_SHORTCUT = os.getenv("SIRI_ALARM_SHORTCUT", "")  # a Shortcut that sets a Clock alarm (input: HH:MM)
+# Music plays in the Spotify app; these (a free Spotify developer app) let JARVIS search and pick a result.
+SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
+SPOTIFY_MARKET = os.getenv("SPOTIFY_MARKET", "US")
 
 # Location: points from locations you share in Telegram, kept on this Mac; place names come
 # from OpenStreetMap Nominatim (rounded, cached coordinates are the only thing sent).

@@ -165,8 +165,11 @@ You can't do anything directly. To change something, put actions in "actions":
 - set_timer: {{"type":"set_timer","duration":"5m" | "90s" | "1h30m","label":optional}} and
   set_alarm: {{"type":"set_alarm","at":"HH:MM" (24h, the next one) or "YYYY-MM-DD HH:MM","label":optional}}
   run at once with no asking; confirm in one short line ("Timer set for five minutes, sir.").
-- play_music: {{"type":"play_music","query":"song, artist or playlist","kind":"song"|"artist"|"playlist"|"any"}}
-  plays from his Music library at once; confirm in one short line.
+- play_music: {{"type":"play_music","query":"what to search Spotify for","kind":"song"|"artist"|"playlist"|"any"}}
+  searches Spotify and plays the best match in the Spotify app at once. You pick the query and kind:
+  a named song is song, a band or singer is artist, a mood, genre or activity ("nice study lo-fi")
+  is playlist with a short search like "study lo-fi". Don't say it's playing: say you're putting it
+  on ("Putting it on, sir."); JARVIS adds what actually started, or why it didn't.
 - label_place: {{"type":"label_place","id":place number,"name":"school"}} when he tells you what a
   place in <location> is (e.g. he answers "that's school" to your question about place #3). Short
   lowercase names: school, work, home, gym.
@@ -479,10 +482,11 @@ def _jobs_text() -> str:
 
 
 def apply_actions(mem: Memory, actions: list[dict], tz, ran: set[str] = frozenset(),
-                  send_photo: Callable[[bytes, str], None] | None = None) -> list[str]:
+                  send_photo: Callable[[bytes, str], None] | None = None,
+                  said: list[str] | None = None) -> list[str]:
     """Perform validated actions. Returns notes about anything that was skipped. `ran` holds
     the auto-run commands already done this message (they aren't repeated); `send_photo` sends
-    an attach_image to his chat."""
+    an attach_image to his chat; `said` collects confirmations of what really happened (music)."""
     from jarvis.canvas import import_deadlines, parse_due
 
     problems = []
@@ -590,7 +594,9 @@ def apply_actions(mem: Memory, actions: list[dict], tz, ran: set[str] = frozense
                 elif kind == "set_alarm":
                     siri.set_alarm(mem, siri.parse_alarm(a["at"], datetime.now(tz)), str(a.get("label") or ""))
                 else:
-                    siri.music(mem, str(a["query"]), str(a.get("kind") or "any"))
+                    playing = siri.music(mem, str(a["query"]), str(a.get("kind") or "any"))
+                    if said is not None:
+                        said.append(playing)
             else:
                 raise ValueError(f"unknown action {kind!r}")
         except (KeyError, ValueError, TypeError, sqlite3.Error) as e:
@@ -863,7 +869,10 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
     else:
         reply = str(out.get("reply") or "").strip() or "(no reply)"
         actions = [a for a in out.get("actions") or [] if a.get("type") not in GATHER]
-        problems = apply_actions(mem, actions, now.tzinfo, ran, send_photo=send_photo)
+        said: list[str] = []
+        problems = apply_actions(mem, actions, now.tzinfo, ran, send_photo=send_photo, said=said)
+        if said:
+            reply += "\n\n" + " ".join(said)
         if problems:
             reply += "\n\n(couldn't do: " + "; ".join(problems) + ")"
         for p in pages:
