@@ -397,9 +397,12 @@ SKIPPED ="(not loaded for this message; if you need it, say you'll check)"
 def build_prompt(mem: Memory, message: str, now: datetime, deadlines_text: str,
                  pages: list[Page] = (), inbox_text: str = "(not checked)",
                  activity_text: str = "(not observed)", blocks: frozenset[str] | None = None,
-                 findings: list[tuple[str, str]] = ()) -> str:
+                 findings: list[tuple[str, str]] = (), idle: Callable[[], float | None] | None = None) -> str:
     """`blocks` (from router.route) limits which optional context is included; None = all.
-    `findings` are (what was looked at, result) pairs from inspect / run_command."""
+    `findings` are (what was looked at, result) pairs from inspect / run_command. `idle` reads the
+    Mac's idle seconds for the right-now block (left out when None)."""
+    from jarvis.orders import standing_orders
+    from jarvis.rightnow import for_prompt as right_now
     def want(name: str) -> bool:
         return blocks is None or name in blocks
     pending = [json.loads(a["payload"]) | {"id": a["id"]} for a in mem.pending_actions(kind="send_email")]
@@ -414,7 +417,10 @@ def build_prompt(mem: Memory, message: str, now: datetime, deadlines_text: str,
                for h in mem.chat_history(HISTORY_TURNS)]
     return "\n\n".join([
         f"Now: {now:%A %B %-d, %Y %-I:%M %p} ({config.TIMEZONE}). Default sender: {config.MAIL_ACCOUNT or 'unset'}.",
-        "<context>\n" + mem.context_snapshot() + "\n</context>",
+        "<standing_orders (Elijah's standing preferences: follow every one, every reply)>\n" + standing_orders(mem)
+        + "\n</standing_orders>",
+        "<right_now (live state, real: trust it over anything older)>\n" + right_now(mem, now, idle) + "\n</right_now>",
+        "<context>\n" + mem.context_snapshot(skip_categories=("preference",)) + "\n</context>",
         "<upcoming>\n" + (deadlines_text if want("deadlines") else SKIPPED) + "\n</upcoming>",
         f"<inbox account=\"{config.MAIL_ACCOUNT or 'unset'}\">\n" + (inbox_text if want("inbox") else SKIPPED)
         + "\n</inbox>",
@@ -725,7 +731,8 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             on_text: Callable[[str], None] | None = None,
             spotter: Callable[[Page], list[str]] | None = None,
             browser: Callable | None = None, send_photo: Callable[[bytes, str], None] | None = None,
-            judge=None, vision: Vision | None = None, peek: tuple[bool, str] | None = None) -> str:
+            judge=None, vision: Vision | None = None, peek: tuple[bool, str] | None = None,
+            idle: Callable[[], float | None] | None = None) -> str:
     """`on_text` (optional) receives the reply text as it streams, first round only; actions
     are still only applied once the complete reply has arrived. `browser(url, screenshot)`
     (jarvis.browser.browse by default) serves browse actions; `send_photo(png, caption)` shares
@@ -900,7 +907,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                 stream["on_actions"] = on_actions
             with timing.step(f"model_{round_ + 1}"):
                 out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
-                                                              activity_text, blocks, findings), **stream)
+                                                              activity_text, blocks, findings, idle), **stream)
             asked_to_look = next((a for a in out.get("actions") or [] if a.get("type") == "look_at_screen"), None)
             if asked_to_look is not None:
                 # The look's text answer is the reply. The image is input only: the vision call has no
@@ -930,7 +937,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                                      "checking or will report back.)"))
                     with timing.step("model_retry"):
                         out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
-                                                                 activity_text, blocks, findings))
+                                                                 activity_text, blocks, findings, idle))
                 break
     except Exception as e:
         reply = f"Sorry, I couldn't think just now ({e})."
@@ -963,7 +970,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                                  "him now, without promising anything.)"))
                 with timing.step("model_honest_retry"):
                     out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
-                                                             activity_text, blocks, findings))
+                                                             activity_text, blocks, findings, idle))
                 retry = [a for a in out.get("actions") or [] if a.get("type") not in GATHER]
                 problems = apply_actions(mem, retry, now.tzinfo, ran, send_photo=send_photo, said=said)
                 kinds = {str(a.get("type")) for a in out.get("actions") or [] if isinstance(a, dict)}

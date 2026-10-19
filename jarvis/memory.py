@@ -571,10 +571,12 @@ class Memory:
     def deadlines(self) -> list[sqlite3.Row]:
         return self.db.execute("SELECT * FROM deadlines ORDER BY due").fetchall()
 
-    def context_snapshot(self) -> str:
-        """Plain-text dump of what JARVIS knows, for feeding to the model."""
+    def context_snapshot(self, skip_categories: tuple[str, ...] = ()) -> str:
+        """Plain-text dump of what JARVIS knows, for feeding to the model. `skip_categories` leaves out
+        facts shown elsewhere (chat pins preferences as standing orders)."""
         lines = ["# Facts"]
-        lines += [f"- [{f['category']}] {f['key']}: {f['value']}" for f in self.facts()]
+        lines += [f"- [{f['category']}] {f['key']}: {f['value']}" for f in self.facts()
+                  if f["category"] not in skip_categories]
         lines.append("\n# Projects")
         lines += [
             f"- {p['name']} ({p['kind']}, {p['status']}): {p['summary']}"

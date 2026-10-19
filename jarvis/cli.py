@@ -280,7 +280,7 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
     timing.mark("context", asked - started - routed)
     reply = respond(mem, message, now, deadlines_text, runner=runner, on_progress=on_progress,
                     inbox_text=inbox, activity_text=activity, blocks=blocks,
-                    on_text=stream, spotter=_page_spotter(), send_photo=send_photo,
+                    on_text=stream, spotter=_page_spotter(), send_photo=send_photo, idle=_idle_reader(),
                     peek=(route.look, route.look_why), judge=judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])))
     total = time.time() - started
     first_at = f"{first.at - started:.1f}s" if first and first.at else "-"
@@ -289,6 +289,11 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
                         f"context {asked - started - routed:.2f}s, model {model} {temp}, "
                         f"blocks: {', '.join(sorted(blocks)) or 'minimal'}")
     return reply
+
+
+def _idle_reader():
+    from jarvis.voice import idle_seconds
+    return idle_seconds
 
 
 def _media_fast(mem: Memory, text: str, hit: tuple, spoken: bool = False, phone: bool = False) -> str:
