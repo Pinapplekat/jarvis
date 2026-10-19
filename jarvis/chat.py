@@ -195,6 +195,10 @@ now", "I'll send it") without the action for it here.
   an SVG chart; it can't load anything from the internet) and "title". url: "url" (a web page). Use it when
   he says "show me ..." at the desk. Reply in a few words ("Here it is, sir."); JARVIS confirms once it's up.
 - panel: {{"type":"panel","op":"close"|"bigger"|"smaller"|"back"}} for what's on that panel.
+- click: {{"type":"click","target":"what to click, as it appears on screen, e.g. the Log In button"}} clicks
+  something on his screen when nothing else can (look, click, check). Off unless he has turned it on; never
+  for anything that sends, buys, deletes, submits or agrees to something (those are his to click). JARVIS
+  adds what happened.
 - mac: {{"type":"mac","op":"volume"|"volume_up"|"volume_down"|"mute"|"unmute"|"display_sleep"|"dark_mode",
   "value":optional}} the Mac's own sound (not the music's: that's media_control), sleeping the display, or
   dark mode ("on"/"off"). Runs at once; JARVIS adds the result.
@@ -796,6 +800,12 @@ def apply_actions(mem: Memory, actions: list[dict], tz, ran: set[str] = frozense
                     playing = siri.music(mem, str(a["query"]), str(a.get("kind") or "any"))
                     if said is not None:
                         said.append(playing)
+            elif kind == "click":
+                from jarvis import clicker
+                done = clicker.click(str(a.get("target") or ""))
+                mem.log("click", done[:150])
+                if said is not None:
+                    said.append(done)
             elif kind == "mac":
                 from jarvis import macsys
                 done = macsys.control(str(a.get("op") or ""), a.get("value"))

@@ -89,6 +89,10 @@ DESK_PROCESS = False  # set by `jarvis ears` (the process running inside JARVIS 
 # Mac controls through System Events (dark mode): needs an Automation permission, so off by default.
 MAC_SYSTEM_EVENTS = os.getenv("MAC_SYSTEM_EVENTS", "0") == "1"
 
+# Clicking on his screen (look, click, check). macOS ignores synthetic clicks until the process is allowed
+# under Privacy & Security > Accessibility, so this is off until Elijah grants that and sets SCREEN_CLICK=1.
+SCREEN_CLICK = os.getenv("SCREEN_CLICK", "0") == "1"
+
 # JARVIS's own floating panel for "show me..." (a separate small app; no permissions needed)
 PANEL = os.getenv("PANEL", "1") == "1"
 VISION_MODEL = os.getenv("VISION_MODEL", "")  # empty = JARVIS_MODEL (the fast one); "sonnet" for sharper reading

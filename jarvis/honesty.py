@@ -54,7 +54,7 @@ FAILED_AS = {
     "set_timer": "set the timer", "set_alarm": "set the alarm", "remind": "set that reminder",
     "cancel_reminder": "cancel that reminder", "run_command": "run that command", "attach_image": "send that picture",
     "add_deadline": "add that deadline", "deadline_done": "mark that done", "show": "show that",
-    "switch_model": "switch models", "dont_remind": "note that", "deploy_build": "deploy that", "mac": "do that on the Mac", "panel": "do that with the panel",
+    "switch_model": "switch models", "dont_remind": "note that", "deploy_build": "deploy that", "mac": "do that on the Mac", "click": "click that", "panel": "do that with the panel",
 }
 
 
