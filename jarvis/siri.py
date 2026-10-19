@@ -107,9 +107,16 @@ def contacts_lookup(name: str) -> list[tuple[str, str]]:
 PHONE = re.compile(r"\+?\d[\d\s().-]{6,}\d")
 
 
+_ODD_CHARS = str.maketrans({"\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-",
+                            "\u2212": "-", "\u00a0": " ", "\u202f": " ", "\u2007": " ", "\u200b": "",
+                            "\u200e": "", "\u200f": "", "\u202a": "", "\u202c": "", "\u2066": "", "\u2069": ""})
+
+
 def normalize_number(text: str) -> str | None:
-    """'(206) 555-0100' -> '+12065550100'; None if it isn't a phone number."""
-    text = str(text).strip()
+    """'(206) 555-0100' -> '+12065550100'; None if it isn't a phone number. Copes with what Contacts
+    synced from an iPhone stores: non-breaking spaces and hyphens, direction marks, 'tel:'."""
+    text = str(text).translate(_ODD_CHARS).strip()
+    text = re.sub(r"^tel:", "", text, flags=re.I).strip()
     if not re.fullmatch(r"\+?[\d\s().-]+", text):
         return None
     digits = re.sub(r"\D", "", text)
@@ -137,14 +144,25 @@ def resolve_contact(mem: Memory, who: str, lookup=None) -> tuple[str, str]:
         m = PHONE.search(str(f["value"]))
         if m and (number := normalize_number(m[0])) and all(w in hay for w in words):
             found.setdefault(number, who)
+    unreadable: set[str] = set()
     if not found:
+        search = lookup or contacts_lookup
         try:
-            hits = (lookup or contacts_lookup)(who)
+            hits = search(who)
+            if not any(normalize_number(raw) for _, raw in hits) and len(words) >= 2:
+                # "Julian Lanton" (a mishearing) or a middle name: search each name and keep close matches
+                wider = [h for w in _search_words(words) for h in search(w)]
+                hits = [h for h in wider if _close_name(h[0], who)]
         except Exception as e:
             raise ValueError(f"couldn't search Contacts for {who!r} ({str(e)[:80]}); ask him for the number")
         for name, raw in hits:
             if (number := normalize_number(raw)):
                 found.setdefault(number, name)
+            else:
+                unreadable.add(name)
+    if not found and unreadable:
+        raise ValueError(f"found {', '.join(sorted(unreadable)[:3])} in Contacts but couldn't read a phone number; "
+                         "ask him for it")
     if not found:
         raise ValueError(f"no number for {who!r} in saved facts or Contacts; ask him for it")
     if len(found) > 1:
@@ -152,6 +170,35 @@ def resolve_contact(mem: Memory, who: str, lookup=None) -> tuple[str, str]:
         raise ValueError(f"{who!r} matches more than one number ({options}); ask him which")
     number, name = next(iter(found.items()))
     return name, number
+
+
+NICKNAMES = {"mike": "michael", "matt": "matthew", "chris": "christopher", "nick": "nicholas", "jon": "jonathan",
+             "dan": "daniel", "dave": "david", "jim": "james", "jimmy": "james", "bill": "william", "will": "william",
+             "bob": "robert", "rob": "robert", "tom": "thomas", "tony": "anthony", "joe": "joseph", "sam": "samuel",
+             "ben": "benjamin", "alex": "alexander", "liz": "elizabeth", "beth": "elizabeth", "katie": "katherine",
+             "kate": "katherine", "jen": "jennifer", "jenny": "jennifer", "em": "emily", "abby": "abigail"}
+
+
+def _search_words(words: list[str]) -> list[str]:
+    out = []
+    for w in words:
+        for v in (w, NICKNAMES.get(w)):
+            if v and len(v) >= 3 and v not in out:
+                out.append(v)
+    return out
+
+
+def _close_name(name: str, wanted: str) -> bool:
+    """Is a Contacts name close to what he said? Each word he said must closely match a word of the
+    name (nicknames count), so 'Julian Lanton' finds 'Julian Linton' but not 'Julian Moore'."""
+    from difflib import SequenceMatcher
+    have = [w for w in re.split(r"[\s_.-]+", name.lower()) if w]
+
+    def near(w: str) -> bool:
+        w = NICKNAMES.get(w, w)
+        return any(SequenceMatcher(None, w, NICKNAMES.get(h, h)).ratio() >= 0.8 for h in have)
+    said = [w for w in re.split(r"[\s_]+", wanted.lower()) if w]
+    return bool(said) and all(near(w) for w in said)
 
 
 def parse_duration(text) -> int:

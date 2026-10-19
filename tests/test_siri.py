@@ -258,3 +258,27 @@ def test_off_switch(monkeypatch, mac):
     m = Memory(":memory:")
     assert apply_actions(m, [{"type": "set_timer", "duration": "5m"}], TZ)
     assert m.upcoming_reminders() == [] and mac == []
+
+
+def test_iphone_style_numbers_are_read():
+    assert siri.normalize_number("+1 (206) 555‑0199") == "+12065550199"
+    assert siri.normalize_number("tel:206.555.0199") is None or siri.normalize_number("tel:206-555-0199") == "+12065550199"
+    assert siri.normalize_number("‪206-555-0199‬") == "+12065550199"
+
+
+def test_a_misheard_last_name_still_finds_the_contact():
+    m = Memory(":memory:")
+    book = {"Julian": [("Julian Linton", "(206) 555-0142"), ("Julian Moore", "425 555 0100")],
+            "Lanton": [], "Julian Lanton": []}
+    found = siri.resolve_contact(m, "Julian Lanton", lookup=lambda name: book.get(name.title(), []))  # Contacts matches any case
+    assert found == ("Julian Linton", "+12065550142")
+
+
+def test_a_contact_with_no_readable_number_says_so():
+    m = Memory(":memory:")
+    with pytest.raises(ValueError, match="couldn't read a phone number"):
+        siri.resolve_contact(m, "Julian Linton", lookup=lambda name: [("Julian Linton", "n/a")])
+
+
+def test_nicknames_match():
+    assert siri._close_name("Michael Chen", "Mike Chen") and not siri._close_name("Julian Moore", "Julian Linton")
