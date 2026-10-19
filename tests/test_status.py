@@ -35,3 +35,22 @@ def test_file_is_always_valid_json():
 def test_speech_seconds_scales_with_words(monkeypatch):
     monkeypatch.setattr(config, "VOICE_RATE", 180)
     assert status.speech_seconds("Sir.") < status.speech_seconds("word " * 30) < 12
+
+
+def test_actions_carry_a_symbol_and_linger_briefly():
+    with status.doing("screenshot"):
+        entry = status.read()["action"]
+        assert entry["state"] == "acting" and entry["symbol"] == "camera.viewfinder"
+        assert entry["detail"] == "Taking a screenshot"
+    after = status.read()["action"]
+    assert after["symbol"] == "camera.viewfinder"  # still shown a moment, so a quick one is seen
+    assert time.time() < after["until"] <= time.time() + status.MIN_SHOW + 0.1
+
+
+def test_unknown_actions_are_ignored():
+    status.show_action("not_a_thing")
+    assert "action" not in status.read()
+
+
+def test_every_action_has_a_symbol_and_words():
+    assert all(sym and label for sym, label in status.ACTIONS.values())

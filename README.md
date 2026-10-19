@@ -350,6 +350,10 @@ Whole-message commands answered at once from the real result: playback ("pause",
 
 **JARVIS Panel** (a tiny separate app in `~/Applications`, its own `panel` background job, no permissions) is a floating window in the top-right corner. The `show` action puts up a plot of a formula ("show me sin(x) shifted up 2"), a screenshot from JARVIS's folder, a card, a page JARVIS wrote (no network: a content policy blocks it) or a web page; `browse` with `"show": true` puts a page's picture there. JARVIS only says it's up once the app confirms. `PANEL=0` turns it off.
 
+**JARVIS HUD** (another tiny app in `~/Applications`, its own `hud` job, no permissions) lets you type to JARVIS on the Mac: press ⌥Space anywhere (or choose "Type to JARVIS…" in the menu bar indicator), type, Return. Esc hides it, ↑ brings back your last question. While JARVIS works, the HUD shows what it's doing, then the reply streams in underneath. `jarvis listen` answers it (same brain and memory as Telegram; approvals still come to Telegram). `HUD=0` turns it off.
+
+The **menu bar indicator** is white and shows what JARVIS is actually doing: a camera while it takes a screenshot, an eye while it looks at your screen, a pin while it checks your location, a globe for a web page, a bell for a reminder, and so on (`status.ACTIONS`). Quick actions stay up for about a second so you can see them.
+
 ### Hands on the Mac
 
 - **Email text:** `read_email` reads one inbox message's text through Apple Mail (read-only, not even marked read; treated as untrusted). At the desk it's off unless `EMAIL_BODIES_AT_DESK=1` (JARVIS Ears would need its own OK to control Mail).

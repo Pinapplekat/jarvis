@@ -95,6 +95,8 @@ SCREEN_CLICK = os.getenv("SCREEN_CLICK", "0") == "1"
 
 # JARVIS's own floating panel for "show me..." (a separate small app; no permissions needed)
 PANEL = os.getenv("PANEL", "1") == "1"
+# Type to JARVIS on the Mac: the HUD (⌥Space), a separate small app; `jarvis listen` answers it
+HUD = os.getenv("HUD", "1") == "1"
 VISION_MODEL = os.getenv("VISION_MODEL", "")  # empty = JARVIS_MODEL (the fast one); "sonnet" for sharper reading
 
 # Self-editing: the git repo JARVIS improves (your project folder), the model that writes

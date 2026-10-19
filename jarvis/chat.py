@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from jarvis import config, timing
+from jarvis import config, status, timing
 from jarvis.memory import Memory
 from jarvis.attention import explain_recent
 from jarvis.journal import journal_for_prompt
@@ -696,6 +696,7 @@ def apply_actions(mem: Memory, actions: list[dict], tz, ran: set[str] = frozense
     problems = []
     for a in actions:
         kind = a.get("type")
+        status.show_action(str(kind))
         try:
             if kind == "remember":
                 if a["category"] not in FACT_CATEGORIES:
@@ -968,6 +969,10 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
     pending_now, busy_now = bool(mem.pending_actions()), _busy(mem)
     gate = honesty.Gate(on_text, pending_now, busy_now) if on_text else None
     early: dict = {}
+
+    def progress(kind: str) -> None:  # the menu bar and HUD show what's being done; Telegram shows typing
+        status.show_action(kind)
+        on_progress()
     done_kinds: set[str] = set()  # every action asked for this message, lookups included ("I've checked" is true)
 
     def on_actions(acts: list) -> None:
@@ -984,7 +989,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
         if problems and gate:
             gate.failed = True  # nothing more goes out early; the final reply says what happened
     if peek_wait is not None:  # a peek already under way (EarlyPeek): just wait for what it saw
-        on_progress()
+        progress("peek")
         with timing.step("peek"):
             seen = peek_wait(mem)
         if seen:
@@ -992,7 +997,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             done_kinds.add("look_at_screen")
     elif peek is not None:
         if peek[0]:
-            on_progress()
+            progress("peek")
         with timing.step("peek"):
             seen = peek_at_screen(mem, message, peek, vision)
         if seen:
@@ -1011,7 +1016,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                 if key in looked:
                     continue
                 looked.add(key)
-                on_progress()
+                progress(kind)
                 try:
                     findings.append((label, introspect.inspect(op, arg)))
                 except (introspect.Refused, OSError, ValueError) as e:
@@ -1025,7 +1030,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                 if key in looked:
                     continue
                 looked.add(key)
-                on_progress()
+                progress(kind)
                 findings.append((f"job {'#' + str(job_id) if job_id else '(newest)'} status (log text)",
                                  jobs.status_text(job_id)))
             elif kind == "run_command" and config.COMMANDS:
@@ -1045,14 +1050,14 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                         mem.log("self_approve_declined", f"chat: {key[:150]} ({why})")
                         continue  # queued for Elijah from the final answer
                     looked.add(key)
-                    on_progress()
+                    progress(kind)
                     ran.add(key)
                     mem.log("self_approved", f"chat: {key[:200]}")
                     findings.append((f"$ {a.get('command')} (you approved it yourself: {why})",
                                      agent.run_approved(step, project_dir())))
                     continue
                 looked.add(key)
-                on_progress()
+                progress(kind)
                 result = terminal.run_command(verdict, a.get("cwd"))
                 ran.add(key)
                 findings.append((f"$ {a.get('command')}", terminal.describe(result)))
@@ -1065,7 +1070,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                 if key in looked:
                     continue
                 looked.add(key)
-                on_progress()
+                progress(kind)
                 from jarvis.introspect import redact
                 findings.append((f"task #{task_id} in detail", redact(tasks.show(mem, task_id))))
             elif kind == "screenshot":
@@ -1076,7 +1081,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                     findings.append(("screenshot of his screen", "(can't send pictures from here, so none was "
                                      "taken; use look_at_screen to see it yourself and tell him)"))
                     continue
-                on_progress()
+                progress(kind)
                 from jarvis.attachments import capture_screen
                 try:
                     path = capture_screen()
@@ -1091,7 +1096,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                 if key in looked:
                     continue
                 looked.add(key)
-                on_progress()
+                progress(kind)
                 from jarvis.mailrelay import MailError, read_body
                 from jarvis.mailwatch import find_message
                 if not config.EMAIL_BODIES or (config.DESK_PROCESS and not config.EMAIL_BODIES_AT_DESK):
@@ -1117,7 +1122,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                 if key in looked:
                     continue
                 looked.add(key)
-                on_progress()
+                progress(kind)
                 findings.append((f"Claude Code session {which or '(newest)'} (transcript, untrusted)", detail(mem, which)))
             elif kind == "browse":
                 url, want_shot = str(a.get("url", "")), a.get("screenshot") is True
@@ -1126,7 +1131,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
                     continue
                 looked.add(key)
                 requested.add(url)
-                on_progress()
+                progress(kind)
                 from jarvis.browser import browse
                 want_show = a.get("show") is True and config.PANEL
                 shot = (browser or browse)(url, screenshot=(want_shot and send_photo is not None) or want_show)
@@ -1148,7 +1153,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
     def open_urls(urls: list[str]) -> None:
         fresh = [u for u in urls if u not in requested][:MAX_PAGES - len(requested)]
         if fresh:
-            on_progress()
+            progress("open_url")
             requested.update(fresh)
             for page in (fetcher(u) for u in fresh):
                 if spotter and not page.error:
@@ -1161,6 +1166,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             stream = {"on_text": gate.feed} if gate and round_ == 0 else {}
             if stream and _accepts(runner, "on_actions"):
                 stream["on_actions"] = on_actions
+            status.show_action("thinking")
             with timing.step(f"model_{round_ + 1}"):
                 out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
                                                               activity_text, blocks, findings, idle), **stream)
@@ -1169,7 +1175,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             if asked_to_look is not None:
                 # The look's text answer is the reply. The image is input only: the vision call has no
                 # tools and can't propose actions, so nothing on the screen can do anything.
-                on_progress()
+                progress("look_at_screen")
                 try:
                     with timing.step("vision"):
                         answer = look_at_screen(message, str(asked_to_look.get("question") or "")[:300], vision)
@@ -1240,6 +1246,7 @@ def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
             reply += "\n\n" + " ".join(said)
         for p in pages:
             mem.log("web_open", f"{p.url}: {p.error or p.title or 'ok'}")
+    status.end_action()
     reply = tidy(reply)
     mem.add_chat("assistant", reply)
     return reply

@@ -1,6 +1,8 @@
 """'JARVIS Status.app': a tiny native menu bar indicator showing whether JARVIS is waiting for
-"Hey Jarvis", listening, working, speaking, or off. It only reads the status file that
-jarvis/status.py writes; it has no other access. Rebuilt only when its source changes."""
+"Hey Jarvis", listening, speaking, or off, and while it works, what it's doing (a white icon per
+action: a camera for a screenshot, a pin for location...; see status.ACTIONS). It only reads the
+status file that jarvis/status.py writes; it has no other access. Its menu can open the typing HUD
+(jarvis/hud.py). Rebuilt only when its source changes."""
 
 import hashlib
 import plistlib
@@ -18,16 +20,19 @@ let statusPath = CommandLine.arguments.count > 1 ? CommandLine.arguments[1]
     : NSHomeDirectory() + "/Library/Application Support/JARVIS/status.json"
 let logsPath = NSHomeDirectory() + "/Library/Logs/JARVIS"
 
-struct Look { let symbol: String; let fallback: String; let label: String; let tint: NSColor? }
+// Every icon is white; only its shape says what's happening. Off is dimmed.
+struct Look { let symbol: String; let fallback: String; let label: String; let alpha: CGFloat }
 let looks: [String: Look] = [
-    "speaking":  Look(symbol: "speaker.wave.2.fill", fallback: "🔊", label: "Speaking", tint: .systemBlue),
-    "listening": Look(symbol: "waveform", fallback: "🎙", label: "Listening to you", tint: .systemRed),
-    "working":   Look(symbol: "ellipsis.circle.fill", fallback: "⚙️", label: "Working on it", tint: .systemOrange),
-    "waiting":   Look(symbol: "ear", fallback: "👂", label: "Waiting for \u{201C}Hey Jarvis\u{201D}", tint: nil),
-    "off":       Look(symbol: "ear.trianglebadge.exclamationmark", fallback: "💤", label: "Desk listener is off", tint: .secondaryLabelColor),
+    "speaking":  Look(symbol: "speaker.wave.2.fill", fallback: "🔊", label: "Speaking", alpha: 1),
+    "listening": Look(symbol: "waveform", fallback: "🎙", label: "Listening to you", alpha: 1),
+    "acting":    Look(symbol: "bolt.fill", fallback: "⚙️", label: "Working on it", alpha: 1),
+    "working":   Look(symbol: "brain.head.profile", fallback: "⚙️", label: "Thinking", alpha: 1),
+    "waiting":   Look(symbol: "ear", fallback: "👂", label: "Waiting for \u{201C}Hey Jarvis\u{201D}", alpha: 1),
+    "off":       Look(symbol: "ear.trianglebadge.exclamationmark", fallback: "💤", label: "Desk listener is off", alpha: 0.55),
 ]
-let rank = ["speaking": 4, "listening": 3, "working": 2]
-let sourceNames = ["ears": "at the desk", "telegram": "in Telegram", "voice": "out loud"]
+// What JARVIS is doing (a screenshot, a page...) shows over plain "thinking", but never over his voice.
+let rank = ["speaking": 4, "listening": 3, "acting": 2, "working": 1]
+let sourceNames = ["ears": "at the desk", "telegram": "in Telegram", "voice": "out loud", "hud": "typed on the Mac"]
 
 final class Indicator: NSObject {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -38,6 +43,11 @@ final class Indicator: NSObject {
     override init() {
         super.init()
         let menu = NSMenu()
+        let type = NSMenuItem(title: "Type to JARVIS\u{2026}", action: #selector(openHUD), keyEquivalent: " ")
+        type.keyEquivalentModifierMask = [.option]
+        type.target = self
+        menu.addItem(type)
+        menu.addItem(.separator())
         stateLine.isEnabled = false
         detailLine.isEnabled = false
         menu.addItem(stateLine)
@@ -65,27 +75,37 @@ final class Indicator: NSObject {
             if let until = e["until"] as? Double { return until > now }
             return true
         }
-        var best: (state: String, source: String, since: Double, detail: String)? = nil
+        var best: (state: String, source: String, since: Double, detail: String, symbol: String?)? = nil
         for (source, e) in entries where live(e) {
             guard let state = e["state"] as? String, let r = rank[state] else { continue }
             if best == nil || r > rank[best!.state]! {
-                best = (state, source, e["since"] as? Double ?? now, e["detail"] as? String ?? "")
+                best = (state, source, e["since"] as? Double ?? now, e["detail"] as? String ?? "", e["symbol"] as? String)
             }
         }
         var state = "off", detail = "Start it with: jarvis schedule install", since = now
+        var symbol: String? = nil, label: String? = nil
         if let b = best {
             state = b.state
             since = b.since
-            detail = ([b.detail, sourceNames[b.source] ?? b.source].filter { !$0.isEmpty }).joined(separator: " · ")
+            if state == "acting" {  // the action itself: its own icon and words
+                symbol = b.symbol
+                label = b.detail
+                detail = "Working on it"
+            } else {
+                detail = ([b.detail, sourceNames[b.source] ?? b.source].filter { !$0.isEmpty }).joined(separator: " · ")
+            }
         } else if let ears = entries["ears"], live(ears) {
             state = "waiting"
             detail = "Telegram and alerts are idle"
         }
         let look = looks[state]!
-        let key = state + detail
+        let title = label.flatMap { $0.isEmpty ? nil : $0 } ?? look.label
+        let key = state + (symbol ?? "") + title + detail
         if key != shown {
             shown = key
-            if let image = NSImage(systemSymbolName: look.symbol, accessibilityDescription: "JARVIS: " + look.label) {
+            let image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: "JARVIS: " + title) }
+                ?? NSImage(systemSymbolName: look.symbol, accessibilityDescription: "JARVIS: " + title)
+            if let image = image {
                 image.isTemplate = true
                 item.button?.image = image
                 item.button?.title = ""
@@ -93,9 +113,9 @@ final class Indicator: NSObject {
                 item.button?.image = nil
                 item.button?.title = look.fallback
             }
-            item.button?.contentTintColor = look.tint
-            item.button?.toolTip = "JARVIS: " + look.label
-            stateLine.title = "JARVIS: " + look.label
+            item.button?.contentTintColor = NSColor.white.withAlphaComponent(look.alpha)
+            item.button?.toolTip = "JARVIS: " + title
+            stateLine.title = "JARVIS: " + title
         }
         let f = DateFormatter()
         f.timeStyle = .short
@@ -103,6 +123,18 @@ final class Indicator: NSObject {
     }
 
     @objc func openLogs() { NSWorkspace.shared.open(URL(fileURLWithPath: logsPath)) }
+    @objc func openHUD() {
+        // The HUD is its own app (it may be closed): start it if needed, then ask it to show itself.
+        let hud = NSHomeDirectory() + "/Applications/JARVIS HUD.app"
+        if !NSRunningApplication.runningApplications(withBundleIdentifier: "com.jarvis.hud").isEmpty {
+            DistributedNotificationCenter.default().postNotificationName(
+                NSNotification.Name("com.jarvis.hud.show"), object: nil, userInfo: nil, deliverImmediately: true)
+        } else if FileManager.default.fileExists(atPath: hud) {
+            let config = NSWorkspace.OpenConfiguration()
+            config.arguments = ["--show"]
+            NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: hud), configuration: config)
+        }
+    }
     @objc func quit() { NSApp.terminate(nil) }
 }
 

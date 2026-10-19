@@ -169,8 +169,17 @@ def _warm(mem: Memory):
         return None
     from jarvis.chat import REPLY_SCHEMA, SYSTEM_PROMPT, run_claude
     from jarvis.warm import WarmClaude
-    return WarmClaude(SYSTEM_PROMPT, REPLY_SCHEMA, fallback=run_claude,
-                      log=lambda s: mem.log("warm_fallback", s[:200]))
+    def log(s: str) -> None:
+        import sqlite3
+        try:
+            mem.log("warm_fallback", s[:200])
+        except sqlite3.ProgrammingError:  # used from another thread (the HUD's): its own connection
+            other = Memory(config.DB_PATH)
+            try:
+                other.log("warm_fallback", s[:200])
+            finally:
+                other.db.close()
+    return WarmClaude(SYSTEM_PROMPT, REPLY_SCHEMA, fallback=run_claude, log=log)
 
 
 def latency_summary(lines: list[str]) -> str:
@@ -315,14 +324,21 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
     first = FirstSentence(on_first) if on_first else None
     feeds = [f for f in (first.feed if first else None, on_text) if f]
     stream = (lambda so_far: [f(so_far) for f in feeds]) if feeds else None
+    from jarvis import status
     deadlines_text = ""
     if "deadlines" in blocks:
-        try:  # reuse tick's copy of the feed (≤10 min old) instead of fetching live
-            deadlines = _deadlines(mem, now, max_age=FEED_CACHE_SECONDS)
-        except Exception:  # feed down: answer from stored deadlines rather than not at all
-            deadlines = from_memory(mem)
-        deadlines_text = format_digest(deadlines, now, days=14)
-    inbox = _inbox_text(mem) if "inbox" in blocks else ""
+        with status.doing("deadlines"):
+            try:  # reuse tick's copy of the feed (≤10 min old) instead of fetching live
+                deadlines = _deadlines(mem, now, max_age=FEED_CACHE_SECONDS)
+            except Exception:  # feed down: answer from stored deadlines rather than not at all
+                deadlines = from_memory(mem)
+            deadlines_text = format_digest(deadlines, now, days=14)
+    inbox = ""
+    if "inbox" in blocks:
+        with status.doing("inbox"):
+            inbox = _inbox_text(mem)
+    if ASKS_WHERE.search(text):  # his location is always in the prompt; show it being used when it matters
+        status.show_action("location")
     activity = _activity(mem) if "activity" in blocks else ""
     asked = time.time()
     timing.mark("context", asked - started - routed)
@@ -337,6 +353,10 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
                         f"context {asked - started - routed:.2f}s, model {model} {temp}, "
                         f"blocks: {', '.join(sorted(blocks)) or 'minimal'}")
     return reply
+
+
+ASKS_WHERE = re.compile(r"\b(where (am i|i am|i'm|was i)|my location|location|near(by| me| here)|"
+                        r"how far|get (home|there)|directions)\b", re.IGNORECASE)
 
 
 def _addressed_check(mem: Memory):
@@ -365,6 +385,9 @@ def _instant(mem: Memory, text: str, cmd: tuple, spoken: bool = False, phone: bo
                  else f"(said out loud, transcribed) {text}" if spoken else text)
     now = _now_local()
     kind = cmd[0]
+    from jarvis import status
+    status.show_action({"timer": "set_timer", "alarm": "set_alarm", "panel": "panel", "play": "play_music",
+                        "model": "switch_model"}.get(kind, ""))
     try:
         if kind == "time":
             reply = f"It's {now:%-I:%M %p}, sir."
@@ -387,6 +410,7 @@ def _instant(mem: Memory, text: str, cmd: tuple, spoken: bool = False, phone: bo
         what = {"timer": "set the timer", "alarm": "set the alarm", "play": "play that",
                 "panel": "show that"}.get(kind, "do that")
         reply = f"Sorry, sir, I couldn't {what}: {str(e)[:150]}"
+    status.end_action()
     mem.log("instant", f"{kind}: {reply[:150]}")
     mem.add_chat("assistant", reply)
     return reply
@@ -396,12 +420,15 @@ def _media_fast(mem: Memory, text: str, hit: tuple, spoken: bool = False, phone:
     """A whole-message playback command from his chat or mic, done straight away with a one-line answer."""
     from jarvis import media
     op, value = hit
+    from jarvis import status
+    status.show_action("media_control")
     mem.add_chat("user", f"(on the phone, transcribed) {text}" if phone
                  else f"(said out loud, transcribed) {text}" if spoken else text)
     try:
         reply = media.media_control(op, value)
     except Exception as e:  # never leave him without an answer
         reply = f"Couldn't do that just now ({str(e)[:120]})."
+    status.end_action()
     mem.log("media_control", f"{op} (fast path): {reply}")
     mem.add_chat("assistant", reply)
     return reply
@@ -469,16 +496,23 @@ def _listen(mem: Memory) -> None:
     if (n := tasks.recover(mem)):
         print(f"requeued {n} task(s) cut off by a restart", flush=True)
 
+    import threading
+    turn = threading.Lock()  # Telegram and the HUD share the warm session: one answer at a time
+
     def on_text(update):
         from jarvis.status import set_state
         from jarvis import timing
-        set_state("telegram", "working", detail="answering a voice note" if update.via_voice else "answering")
-        timing.start("voice_note" if update.via_voice else "telegram")
-        try:
-            _on_text(update)
-        finally:
-            timing.finish(mem)
-            set_state("telegram", "idle")
+        with turn:
+            set_state("telegram", "working", detail="answering a voice note" if update.via_voice else "answering")
+            timing.start("voice_note" if update.via_voice else "telegram")
+            try:
+                _on_text(update)
+            finally:
+                timing.finish(mem)
+                set_state("telegram", "idle")
+
+    if config.HUD:
+        threading.Thread(target=_serve_hud, args=(tg, warm, turn), daemon=True).start()
 
     def _on_text(update):
         if (toggle := HEARTBEAT_TOGGLE.match(update.text or "")):
@@ -541,7 +575,8 @@ def _listen(mem: Memory) -> None:
         """Stored quietly; only a fresh share (not each live update) gets a short reply."""
         if not config.LOCATION:
             return
-        from jarvis import location
+        from jarvis import location, status
+        status.show_action("location", ttl=status.MIN_SHOW)
         p = update.location
         if location.record_point(mem, p["lat"], p["lon"], p["at"], p["accuracy"], p["source"],
                                  p["live_until"]) is None:
@@ -581,6 +616,31 @@ def _listen(mem: Memory) -> None:
                 print(f"listen error: {e}", flush=True)
                 mem.log("listen_error", str(e)[:300])
             time.sleep(wait)
+
+
+def _serve_hud(tg, warm, turn) -> None:
+    """Answer what he types into the HUD on his Mac (jarvis/hud.py), on its own thread."""
+    from jarvis import hud, timing
+    from jarvis.approvals import notify_pending
+    from jarvis.status import set_state
+    mem = Memory(config.DB_PATH)  # SQLite connections stay on the thread that opened them
+
+    def answer(text: str, on_text) -> str:
+        with turn:
+            set_state("hud", "working", detail="answering")
+            timing.start("hud")
+            try:
+                reply = _answer(mem, f"(typed in the HUD on his Mac) {text}", warm=warm, on_text=on_text,
+                                send_photo=tg.send_photo)
+            finally:
+                timing.finish(mem)
+                set_state("hud", "idle")
+        try:
+            notify_pending(mem, tg, say=_say_if_present)  # drafts and risky commands still ask in Telegram
+        except Exception as e:
+            mem.log("hud", f"couldn't send approvals: {str(e)[:150]}")
+        return reply
+    hud.serve(answer, log=lambda s: print(s, flush=True))
 
 
 class Outage:
@@ -950,10 +1010,11 @@ def main() -> None:
             listen = bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID)
             phone = _phone_ready()
             schedule.install(args.minutes * 60, listen=listen, watch=config.WATCH, ears=config.EARS,
-                             menubar=config.MENUBAR, phone=phone, panel=config.PANEL)
+                             menubar=config.MENUBAR, phone=phone, panel=config.PANEL, hud=config.HUD and listen)
             print(f"tick: every {args.minutes} min. listen: {'always on' if listen else 'skipped (Telegram not set up)'}."
                   f" watch: {'on' if config.WATCH else 'off'}. ears: {'on' if config.EARS else 'off'}."
                   f" phone: {'on' if phone else 'off'}. panel: {'on' if config.PANEL else 'off'}."
+                  f" hud: {'on (⌥Space)' if config.HUD and listen else 'off'}."
                   f" Logs: {schedule.LOG_DIR}")
         elif args.action == "uninstall":
             print("Removed" if schedule.uninstall() else "Wasn't scheduled")
