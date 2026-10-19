@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from jarvis import config, siri, spotify
+from jarvis import applemusic, config, siri, spotify
 from jarvis.chat import apply_actions, respond
 from jarvis.memory import Memory
 
@@ -27,12 +27,16 @@ class FakeMac:
     """Stands in for osascript and `open`: records every call, never runs anything."""
     def __init__(self, installed=True, playing=(TRACK, "Get Lucky", "Daft Punk"), before=None):
         self.calls, self.installed, self.playing, self.before, self.played = [], installed, playing, before, False
+        self.music, self.apple_music = None, False  # what the Music app answers; whether it was asked
 
     def __call__(self, argv, **kw):
         self.calls.append((argv, kw.get("input")))
         out, code = "", 0
         if argv[:2] == ["open", "-Ra"]:
             code = 0 if self.installed else 1
+        elif argv[0] == "osascript" and 'tell application "Music"' in (kw.get("input") or ""):
+            self.apple_music = True
+            out = applemusic.FS.join(self.music) if self.music else ""
         elif argv[0] == "osascript" and "play track" in (kw.get("input") or ""):
             self.played = True
         elif argv[0] == "osascript":
@@ -142,10 +146,12 @@ def test_music_action_reports_the_real_result(mac, monkeypatch):
     said, m = [], Memory(":memory:")
     assert apply_actions(m, [{"type": "play_music", "query": "get lucky", "kind": "song"}],
                          ZoneInfo("UTC"), said=said) == []
-    assert said == ["Playing Get Lucky by Daft Punk."]
+    assert said == ["Playing Get Lucky by Daft Punk on Spotify."]
+    assert not mac.apple_music
     mac.played, mac.playing = False, None
     problems = apply_actions(m, [{"type": "play_music", "query": "get lucky", "kind": "song"}], ZoneInfo("UTC"))
     assert problems and "couldn't play" in problems[0] and "didn't start" in problems[0]
+    assert "Apple Music" in problems[0]
 
 
 def test_reply_says_playing_only_after_it_plays(mac, monkeypatch):
@@ -156,7 +162,7 @@ def test_reply_says_playing_only_after_it_plays(mac, monkeypatch):
     ask = lambda: respond(Memory(":memory:"), "play some nice study lo-fi", datetime.now(ZoneInfo("UTC")), "",
                           runner=runner)
     reply = ask()
-    assert "Playing the playlist Study Lo-Fi, starting with Get Lucky by Daft Punk." in reply
+    assert "Playing the playlist Study Lo-Fi, starting with Get Lucky by Daft Punk on Spotify." in reply
     mac.played, mac.playing = False, None
     reply = ask()
     assert "Playing" not in reply and "couldn't play" in reply
@@ -165,3 +171,75 @@ def test_reply_says_playing_only_after_it_plays(mac, monkeypatch):
 def test_siri_play_music_goes_to_spotify(monkeypatch):
     monkeypatch.setattr(spotify, "play", lambda q, kind: f"{q}/{kind}")
     assert siri.play_music("lo-fi", "playlist") == "lo-fi/playlist"
+
+
+# ----- Apple Music, only as the backup -----
+def test_spotify_success_never_touches_apple_music(mac, monkeypatch):
+    monkeypatch.setattr(spotify, "search", lambda q, kind: _results(tracks=[_track("Get Lucky", artist="Daft Punk")]))
+    mac.music = ("track", "", "Other Song", "Other Band")
+    assert siri.music(Memory(":memory:"), "get lucky", "song") == "Playing Get Lucky by Daft Punk on Spotify."
+    assert not mac.apple_music
+
+
+def test_no_match_falls_back_to_apple_music(mac, monkeypatch):
+    monkeypatch.setattr(spotify, "search", lambda q, kind: _results())
+    mac.music = ("track", "", "Get Lucky", "Daft Punk")
+    out = siri.music(Memory(":memory:"), "get lucky", "song")
+    assert out == "Spotify had nothing for it, so I played Get Lucky by Daft Punk on Apple Music."
+    assert not mac.played
+    music = next(c for c in mac.calls if 'tell application "Music"' in (c[1] or ""))
+    assert music[0] == ["osascript", "-", "get lucky"]  # the query is an argument, not script text
+
+
+def test_spotify_error_falls_back_to_apple_music(mac, monkeypatch):
+    def down(q, kind):
+        raise spotify.SpotifyError("Spotify search failed (503)")
+    monkeypatch.setattr(spotify, "search", down)
+    mac.music = ("playlist", "Study Lo-Fi", "Lo-Fi Beat", "Someone")
+    out = siri.music(Memory(":memory:"), "study lo-fi", "playlist")
+    assert out == ("Spotify couldn't play it (Spotify search failed (503)), so I played the playlist "
+                   "Study Lo-Fi, starting with Lo-Fi Beat by Someone on Apple Music.")
+
+
+def test_spotify_unavailable_falls_back_to_apple_music(mac):
+    mac.installed = False
+    mac.music = ("track", "", "Get Lucky", "Daft Punk")
+    out = siri.music(Memory(":memory:"), "get lucky")
+    assert "isn't installed" in out and out.endswith("Get Lucky by Daft Punk on Apple Music.")
+
+
+def test_spotify_not_starting_pauses_it_before_the_backup(mac, monkeypatch):
+    mac.playing = None
+    monkeypatch.setattr(spotify, "search", lambda q, kind: _results(tracks=[_track("Get Lucky")]))
+    mac.music = ("track", "", "Get Lucky", "Daft Punk")
+    assert siri.music(Memory(":memory:"), "get lucky", "song").endswith("on Apple Music.")
+    scripts = [c[1] or "" for c in mac.calls if c[0][0] == "osascript"]
+    pause = next(i for i, s in enumerate(scripts) if "to pause" in s)
+    assert pause < next(i for i, s in enumerate(scripts) if 'tell application "Music"' in s)
+
+
+def test_both_failing_is_reported_cleanly(mac, monkeypatch):
+    monkeypatch.setattr(spotify, "search", lambda q, kind: _results())
+    with pytest.raises(ValueError) as e:
+        siri.music(Memory(":memory:"), "zzzqqq", "song")
+    msg = str(e.value)
+    assert "couldn't play 'zzzqqq' on Spotify" in msg and "found nothing" in msg
+    assert "Apple Music (nothing in the Music library matches 'zzzqqq')" in msg
+
+
+def test_apple_music_query_cant_inject_applescript(mac):
+    nasty = 'x" \nend tell\ndo shell script "touch /tmp/pwned'
+    mac.music = ("track", "", "x", "y")
+    applemusic.play(nasty)
+    call = next(c for c in mac.calls if 'tell application "Music"' in (c[1] or ""))
+    assert call[0] == ["osascript", "-", nasty] and nasty not in call[1]
+
+
+def test_apple_music_errors(mac, monkeypatch):
+    mac.music = ("stopped",)
+    with pytest.raises(applemusic.AppleMusicError, match="didn't start"):
+        applemusic.play("lo-fi")
+    monkeypatch.setattr(applemusic.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a[0], 1, "", "Not authorized to send Apple events"))
+    with pytest.raises(applemusic.AppleMusicError, match="Not authorized"):
+        applemusic.play("lo-fi")

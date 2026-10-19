@@ -1,6 +1,6 @@
 """Siri-style actions on this Mac: texts (Messages), calls (FaceTime / iPhone via a tel: link),
 timers and alarms (a Clock Shortcut if one is set, otherwise a JARVIS reminder), and music
-(the Spotify app, see spotify.py).
+(the Spotify app, see spotify.py; Apple Music only as its backup, see applemusic.py).
 
 Texts and calls reach other people, so they only ever go out after Elijah's yes in Telegram, and
 the yes is bound to the exact recipient and text: any change afterwards voids it, and unanswered
@@ -79,6 +79,12 @@ def play_music(query: str, kind: str = "any") -> str:
     """Plays the best Spotify match. Returns what's actually playing."""
     from jarvis import spotify
     return spotify.play(query, kind)
+
+
+def play_apple_music(query: str) -> str:
+    """The backup: plays the best match in the Music app. Returns what's actually playing."""
+    from jarvis import applemusic
+    return applemusic.play(query)
 
 
 def run_shortcut(name: str, text: str) -> None:
@@ -225,20 +231,31 @@ def set_alarm(mem: Memory, at: datetime, label: str = "", shortcut=None) -> str:
     return f"Alarm set for {at:%a %-I:%M %p}" + (f" ({label})" if label else "") + "."
 
 
-def music(mem: Memory, query: str, kind: str = "any", player=None) -> str:
+def music(mem: Memory, query: str, kind: str = "any", player=None, backup=None) -> str:
+    """Spotify first; Apple Music only if Spotify is unavailable, fails or has no match. Says which
+    one actually played."""
     query = str(query or "").strip()
     if not query or len(query) > 200:
         raise ValueError("needs something to play (a song, artist or playlist)")
     if kind not in ("song", "artist", "playlist", "any"):
         raise ValueError(f"bad music kind {kind!r}")
-    from jarvis.spotify import SpotifyError
+    from jarvis.applemusic import AppleMusicError
+    from jarvis.spotify import NoMatch, SpotifyError
     try:
         playing = (player or play_music)(query, kind)
+        mem.log("siri", f"playing {playing[:150]} (Spotify)")
+        return f"Playing {playing} on Spotify."
     except (SiriError, SpotifyError, OSError, subprocess.TimeoutExpired) as e:
-        mem.log("siri", f"music {kind} {query!r} failed: {str(e)[:120]}")
-        raise ValueError(f"couldn't play {query!r} ({str(e)[:120]})")
-    mem.log("siri", f"playing {playing[:150]}")
-    return f"Playing {playing}."
+        why, no_match = str(e)[:120], isinstance(e, NoMatch)
+        mem.log("siri", f"music {kind} {query!r} failed on Spotify, trying Apple Music: {why}")
+    try:
+        playing = (backup or play_apple_music)(query)
+    except (SiriError, AppleMusicError, OSError, subprocess.TimeoutExpired) as e:
+        mem.log("siri", f"music {query!r} failed on Apple Music too: {str(e)[:120]}")
+        raise ValueError(f"couldn't play {query!r} on Spotify ({why}) or Apple Music ({str(e)[:120]})")
+    mem.log("siri", f"playing {playing[:150]} (Apple Music)")
+    lead = "Spotify had nothing for it" if no_match else f"Spotify couldn't play it ({why})"
+    return f"{lead}, so I played {playing} on Apple Music."
 
 
 # ----- texts and calls: queued for his yes, bound to exactly what he saw -----

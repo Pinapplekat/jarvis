@@ -21,6 +21,10 @@ def mac(monkeypatch):
     monkeypatch.setattr(siri, "send_text", lambda number, body: did.append(("text", number, body)))
     monkeypatch.setattr(siri, "place_call", lambda number: did.append(("call", number)))
     monkeypatch.setattr(siri, "play_music", lambda q, kind: did.append(("music", q, kind)) or f"{q} by Someone")
+    def no_apple_music(q):
+        did.append(("apple music", q))
+        raise siri.SiriError(f"nothing in the Music library matches {q!r}")
+    monkeypatch.setattr(siri, "play_apple_music", no_apple_music)
     monkeypatch.setattr(siri, "run_shortcut", lambda name, text: did.append(("shortcut", name, text)))
     monkeypatch.setattr(siri, "contacts_lookup", lambda name: pytest.fail("Contacts looked up unexpectedly"))
     monkeypatch.setattr(siri, "_osascript", lambda *a, **k: pytest.fail("AppleScript ran for real"))

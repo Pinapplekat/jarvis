@@ -1,4 +1,4 @@
-"""Music through the Spotify app (Apple Music is never touched).
+"""Music through the Spotify app, the primary service (Apple Music is only the backup, see siri.music).
 
 The model only proposes a query and a kind (song, artist, playlist or any). Spotify's own search API
 (SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET, client-credentials: no login to his account) picks the
@@ -48,7 +48,11 @@ _token: tuple[str, float] = ("", 0.0)
 
 
 class SpotifyError(RuntimeError):
-    pass
+    """Spotify is unavailable or failed (not installed, no keys, API or app error)."""
+
+
+class NoMatch(SpotifyError):
+    """Spotify works but found nothing for the query."""
 
 
 def _client() -> httpx.Client:
@@ -114,7 +118,7 @@ def best(results: dict, query: str, kind: str = "any") -> tuple[str, str]:
     for t in order:
         if found[t]:
             return found[t][0]["uri"], label(t, found[t][0])
-    raise SpotifyError(f"Spotify found nothing for {query!r}")
+    raise NoMatch(f"Spotify found nothing for {query!r}")
 
 
 def player() -> tuple[str, str] | None:
@@ -143,7 +147,8 @@ def started(uri: str, before: tuple[str, str] | None, step: float = 0.5) -> str:
 
 
 def play(query: str, kind: str = "any") -> str:
-    """Finds and plays the best Spotify match. Returns what's playing; raises SpotifyError otherwise."""
+    """Finds and plays the best Spotify match. Returns what's playing; raises NoMatch when Spotify has
+    nothing for it and SpotifyError when Spotify is unavailable or fails."""
     if not installed():
         raise SpotifyError("the Spotify app isn't installed on this Mac")
     if not (config.SPOTIFY_CLIENT_ID and config.SPOTIFY_CLIENT_SECRET):
@@ -157,5 +162,9 @@ def play(query: str, kind: str = "any") -> str:
     _osascript(PLAY_SCRIPT, uri, timeout=30)
     track = started(uri, before)
     if not track:
+        try:  # so a late start can't play over the Apple Music backup
+            _osascript('tell application "Spotify" to pause', timeout=10)
+        except (SpotifyError, subprocess.TimeoutExpired):
+            pass
         raise SpotifyError(f"Spotify didn't start playing {what}")
     return what if what == track else f"{what}, starting with {track}"
