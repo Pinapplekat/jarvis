@@ -269,7 +269,14 @@ class Announcer:
         aloud when Elijah is at the Mac."""
         result = None
         if self.messenger:
-            result = self.messenger.send(text, buttons=buttons) if buttons else self.messenger.send(text)
+            try:
+                result = self.messenger.send(text, buttons=buttons) if buttons else self.messenger.send(text)
+            except Exception as e:
+                from jarvis.telegram import TelegramError
+                if buttons or self.mem is None or not isinstance(e, TelegramError):
+                    raise
+                from jarvis import outbox  # offline: it goes out as soon as Telegram is reachable again
+                outbox.hold(self.mem, text)
         say = spoken or text
         if not self._presence(self._now()):
             return result

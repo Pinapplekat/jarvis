@@ -7,7 +7,7 @@ from pathlib import Path
 NOISY_EVENTS = {"answered", "first_audio", "timing", "listen_error", "fact_archived", "canvas_sync", "spoke",
                 "warm_fallback", "jev_fallback", "route_failed", "screen_peek", "tick_error", "watch_error",
                 "inspect", "web_open", "reported", "report_compose_failed", "telegram_retry", "not_for_me",
-                "unbacked_claim", "instant"}
+                "unbacked_claim", "instant", "telegram_held"}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS facts (

@@ -563,6 +563,8 @@ def _listen(mem: Memory) -> None:
     outage = Outage()
     while True:
         try:
+            from jarvis import outbox
+            outbox.flush(mem, tg.send, tz=_now_local().tzinfo)  # anything held while Telegram was unreachable
             deliver_reminders(mem, announcer, _now_local())
             tasks.start_queued(mem, worker)  # tasks from the desk mic, or resumed after an expiry
             reports.deliver(mem, announcer.send, send_image=lambda path, caption: attachments.send_image(

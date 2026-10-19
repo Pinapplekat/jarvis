@@ -68,8 +68,28 @@ def brushed_off(mem: Memory, now: datetime) -> list[str]:
     return [f"- {_ago(_at(r['at']), now)} he said: \"{r['text'][:100]}\"" for r in rows if DISMISSIVE.search(r["text"])][:4]
 
 
+DRIVING_MPS = 7.0  # ~25 km/h between his last two location points: in a car (or a bus)
+
+
+def moving(mem: Memory, now: datetime) -> str:
+    """'probably driving (about 40 km/h)' from his two latest live location points, if fresh."""
+    from jarvis.location import distance_m
+    rows = mem.db.execute("SELECT lat, lon, at, last_seen FROM location_points ORDER BY last_seen DESC, id DESC "
+                          "LIMIT 2").fetchall()
+    if len(rows) < 2:
+        return ""
+    newest, before = rows
+    t1, t0 = _at(newest["at"]), _at(before["last_seen"])  # arrived at the newest spot vs. left the one before
+    if now - t1 > timedelta(minutes=3) or not timedelta(seconds=20) <= t1 - t0 <= timedelta(minutes=10):
+        return ""  # stopped somewhere (or not live-sharing): not moving
+    speed = distance_m(before["lat"], before["lon"], newest["lat"], newest["lon"]) / (t1 - t0).total_seconds()
+    return f"probably driving (about {speed * 3.6:.0f} km/h): keep replies to a sentence" if speed >= DRIVING_MPS else ""
+
+
 def presence(mem: Memory, now: datetime, idle: Callable[[], float | None] | None) -> str:
     parts = []
+    if (move := moving(mem, now)):
+        parts.append(move)
     if idle is not None:
         try:
             quiet = idle()
