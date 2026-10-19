@@ -198,3 +198,41 @@ def test_outcome_status_and_resume_notes():
     assert "Elijah said yes" in yes and "untrusted" in yes and "did not approve" in no
     with pytest.raises(ValueError):
         agent.run_blocked({"tool": "Write", "command": ""})
+
+
+def test_scratch_folder_is_always_writable_even_when_the_project_is_read_only(tmp_path):
+    from jarvis import agent
+    root, state = tmp_path / "proj", tmp_path / "state"
+    root.mkdir()
+    scratch = agent.scratch_dir(state)
+    scratch.mkdir(parents=True)
+    assert agent.decide("Write", {"file_path": str(scratch / "signin.py")}, root, edits=False, scratch=scratch)[0] == "allow"
+    assert agent.decide("Write", {"file_path": "/tmp/x.py"}, root, edits=False, scratch=scratch)[0] == "deny"
+    assert agent.decide("Write", {"file_path": str(root / "a.py")}, root, edits=False, scratch=scratch)[0] == "deny"
+    assert agent.decide("Write", {"file_path": str(scratch / ".env")}, root, scratch=scratch)[0] == "deny"  # secrets still
+
+
+def test_rules_mention_scratch_and_no_typed_input():
+    from jarvis import agent
+    rules = agent.AGENT_RULES.format(root="/r", scratch="/s/scratch")
+    assert "/s/scratch" in rules and "Nothing can type into a command" in rules
+
+
+def test_a_job_that_wanted_typed_input_says_so(tmp_path, monkeypatch):
+    import time
+    from jarvis import jobs
+    from jarvis.memory import Memory
+    monkeypatch.setattr(jobs, "JOBS_DIR", tmp_path)
+    (tmp_path / "1").mkdir()
+    (tmp_path / "1" / "job.log").write_text("Enter code: Traceback\nEOFError: EOF when reading a line\n")
+    jobs._save_meta({"id": 1, "argv": ["python3", "signin.py"], "cwd": str(tmp_path), "pid": 999999,
+                     "started": time.time() - 5, "action_id": None, "why": "", "notified": {}})
+    monkeypatch.setattr(jobs, "job_status", lambda job_id, lines=8, now=None: {
+        "state": "exited", "code": 1, "tail": "EOFError: EOF when reading a line", "runtime": 5,
+        "last_output": time.time(), "argv": ["python3", "signin.py"], "id": 1})
+    monkeypatch.setattr(jobs, "describe_state", lambda s: "failed (exit 1)")
+    monkeypatch.setattr(jobs, "_command", lambda s: "python3 signin.py")
+    m = Memory(":memory:")
+    assert jobs.check_jobs(m) == 1
+    text = m.db.execute("SELECT text FROM reports").fetchone()[0]
+    assert "waiting for typed input" in text

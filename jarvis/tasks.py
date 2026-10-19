@@ -191,7 +191,9 @@ class Worker:
                 reports.add(mem, "task", task_id, "note", goal[:80], text)
 
             started = time.time()
-            rules = agent.AGENT_RULES.format(root=root)
+            scratch = agent.scratch_dir(state_dir(task_id))
+            scratch.mkdir(parents=True, exist_ok=True)
+            rules = agent.AGENT_RULES.format(root=root, scratch=scratch)
             out = self.runner(prompt, root, state_dir(task_id), config.TASK_MODEL, rules,
                               resume=t["session_id"], max_turns=config.TASK_MAX_TURNS, on_tool=on_tool,
                               on_tell=on_tell, edits=editable(root),

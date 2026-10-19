@@ -9,6 +9,7 @@ tells Elijah in its own words.
 """
 
 import json
+import re
 import os
 import signal
 import subprocess
@@ -202,6 +203,10 @@ def kill_job(job_id: int) -> bool:
     return True
 
 
+WANTED_INPUT = re.compile(r"EOFError: EOF when reading a line|Inappropriate ioctl for device|"
+                          r"stdin is not a tty|not a terminal|Press (?:any key|enter)", re.I)
+
+
 def check_jobs(mem: Memory, now: float | None = None) -> int:
     """File one report per event: a job exited, was lost, or has been quiet for JOB_STALL_MINUTES.
     JARVIS passes it on (bundled with anything else that came in)."""
@@ -220,6 +225,9 @@ def check_jobs(mem: Memory, now: float | None = None) -> int:
             tail = s["tail"].splitlines()[-3:]
             message = (f"Background job {describe_state(s)}: $ {_command(s)[:150]}"
                        + ("\n" + "\n".join(tail) if tail else ""))
+            if kind == "failed" and WANTED_INPUT.search(s["tail"]):
+                message += ("\n(It stopped because it was waiting for typed input, which a background job can't "
+                            "give. It needs its answers as arguments, environment variables or a file instead.)")
         elif not meta["notified"].get("stall"):
             since = s["last_output"] or meta["started"]
             if now - since >= config.JOB_STALL_MINUTES * 60:

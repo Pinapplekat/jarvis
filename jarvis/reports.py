@@ -38,6 +38,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def clip(text: str, limit: int) -> str:
+    """Cut long text at a sentence (or line) end, never mid-word, and say it was cut."""
+    if len(text) <= limit:
+        return text
+    head = text[:limit - 1]
+    cut = max(head.rfind(". "), head.rfind(".\n"), head.rfind("\n"), head.rfind("! "), head.rfind("? "))
+    if cut < limit // 2:
+        cut = head.rfind(" ")
+    return head[:cut + 1].rstrip() + " …"
+
+
 def add(mem: Memory, source: str, ref: int | None, kind: str, about: str, text: str,
         attachments: list[str] = ()) -> int:
     """File a report, optionally with images to show him (checked again when sent). Progress is
@@ -45,7 +56,7 @@ def add(mem: Memory, source: str, ref: int | None, kind: str, about: str, text: 
     now = _now()
     cur = mem.db.execute(
         "INSERT INTO reports (at, source, ref, kind, about, text, delivered_at, attachments) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (now, source, ref, kind, about.strip()[:120], text.strip()[:2000], None if kind in PASS_ON else now,
+        (now, source, ref, kind, about.strip()[:120], clip(text.strip(), 2000), None if kind in PASS_ON else now,
          json.dumps(list(attachments)[:5]) if attachments else None))
     mem.db.commit()
     return cur.lastrowid

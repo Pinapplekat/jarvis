@@ -177,6 +177,23 @@ def prepare_clone() -> str:
     return note
 
 
+def catch_up_with_main() -> str | None:
+    """Before Deploy is offered: put the finished build on top of the latest main (his project may
+    have moved on while it was building) and run the full suite again there. Returns what's wrong,
+    or None. Can't fetch: None (Deploy re-checks after merging anyway)."""
+    if _run(["git", "fetch", "-q", "origin"], cwd=CLONE, retries=3, timeout=120).returncode != 0:
+        return None
+    if _run(["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"], cwd=CLONE, env=GIT_ENV).returncode == 0:
+        return None  # already built on the latest main
+    if _run(["git", "rebase", "-q", "origin/main"], cwd=CLONE, env=GIT_ENV).returncode != 0:
+        _run(["git", "rebase", "--abort"], cwd=CLONE, env=GIT_ENV)
+        return "it conflicts with newer changes on main; ask me to redo it"
+    passed, tail = run_tests(CLONE)
+    if not passed:
+        return "tests fail on top of the latest main:\n" + tail[-1200:]
+    return None
+
+
 def count_tests(cwd: Path) -> int:
     r = _run([*TEST_CMD, "--collect-only"], cwd=cwd, timeout=300)
     # Only the summary line matters; a huge test id elsewhere once made this search run for ever.
@@ -196,7 +213,7 @@ def run_agent(mem: Memory, tg, title: str, prompt: str, resume: str | None = Non
     steps decided by JARVIS or asked of Elijah, hangs restarted. Returns the agent.Outcome."""
     from jarvis import agent, reports
     runner = runner or agent.run_session
-    rules = agent.AGENT_RULES.format(root=CLONE)
+    rules = agent.AGENT_RULES.format(root=CLONE, scratch=agent.scratch_dir(BUILD_DIR))
     progress = {"at": 0.0}
 
     def on_tool(update):
@@ -347,6 +364,11 @@ def _build(mem: Memory, tg, edit_id: int) -> None:
         _git("add", "-A")
         _git("commit", "-q", "-m", f"Self-edit #{edit_id}: {job['title']}\n\n{job['request']}")
         touched_safety = [f for f in files if f in SAFETY_FILES]
+        if (late := catch_up_with_main()):  # main moved during the build: re-based and re-tested, or not offered
+            mem.set_self_edit(edit_id, status="failed", summary=f"{late}\n\n{summary}"[:3000])
+            reports.add(mem, "build", edit_id, "failed", f"building {job['title']}", f"couldn't finish: {late[:1500]}")
+            _log(f"build #{edit_id} failed after catching up with main: {late[:200]}")
+            return
 
         mem.set_self_edit(edit_id, status="ready", summary=summary)
         # One short message, as he'd want it from a person: what's ready and the choice.

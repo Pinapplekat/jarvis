@@ -151,3 +151,45 @@ def test_a_silent_builder_is_reported_once(build, monkeypatch):
     assert selfedit.check_health(m, tg) == "stalled (reported)"
     assert "no progress for 60 minutes" in reports.recent(m)[0]["text"]
     assert selfedit.check_health(m, tg) == "ok"  # once per build
+
+
+def _repo_pair(tmp_path, monkeypatch):
+    import subprocess
+    origin, clone = tmp_path / "origin", tmp_path / "src"
+    def git(*a, cwd):
+        subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True,
+                       env={**__import__("os").environ, **selfedit.GIT_ENV})
+    origin.mkdir()
+    git("init", "-q", "-b", "main", cwd=origin)
+    (origin / "a.py").write_text("a = 1\n")
+    git("add", "-A", cwd=origin)
+    git("commit", "-qm", "base", cwd=origin)
+    git("clone", "-q", str(origin), str(clone), cwd=tmp_path)
+    git("checkout", "-qb", "self-edit-1", cwd=clone)
+    (clone / "b.py").write_text("b = 1\n")
+    git("add", "-A", cwd=clone)
+    git("commit", "-qm", "build", cwd=clone)
+    monkeypatch.setattr(selfedit, "CLONE", clone)
+    return origin, clone, git
+
+
+def test_a_finished_build_catches_up_with_main_and_is_retested(build, tmp_path, monkeypatch):
+    origin, clone, git = _repo_pair(tmp_path, monkeypatch)
+    ran = []
+    monkeypatch.setattr(selfedit, "run_tests", lambda cwd: ran.append(cwd) or (True, "ok"))
+    assert selfedit.catch_up_with_main() is None and ran == []  # nothing new on main: no re-run
+    (origin / "c.py").write_text("c = 1\n")
+    git("add", "-A", cwd=origin)
+    git("commit", "-qm", "newer main", cwd=origin)
+    assert selfedit.catch_up_with_main() is None and ran == [clone]
+    assert (clone / "c.py").exists() and (clone / "b.py").exists()
+
+
+def test_a_build_that_conflicts_with_newer_main_is_not_offered(build, tmp_path, monkeypatch):
+    origin, clone, git = _repo_pair(tmp_path, monkeypatch)
+    (origin / "b.py").write_text("b = 2\n")
+    git("add", "-A", cwd=origin)
+    git("commit", "-qm", "conflicting main", cwd=origin)
+    monkeypatch.setattr(selfedit, "run_tests", lambda cwd: (True, "ok"))
+    assert "conflicts" in selfedit.catch_up_with_main()
+    assert (clone / "b.py").read_text() == "b = 1\n"  # rebase aborted cleanly
