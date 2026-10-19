@@ -1001,9 +1001,15 @@ def main() -> None:
         speech._whisper()  # load the model up front so the first answer isn't slow
         log = lambda s: print(s, flush=True)  # noqa: E731
         warm = _warm(mem)
+        tg = _messenger()
+
+        def after_reply():  # helper reports that waited while JARVIS was talking: text only, since
+            if tg:          # the mic is open for his follow-up and mustn't hear JARVIS's own voice
+                from jarvis import attachments, reports
+                reports.flush_pending(mem, tg.send, send_image=lambda p, c: attachments.send_image(tg, p, c, mem))
         Ears(answer=lambda text, on_text=None: _spoken_confirmation(mem, text)
              or _answer(mem, text, spoken=True, warm=warm, on_text=on_text),
-             transcribe=speech.transcribe, log=log,
+             transcribe=speech.transcribe, log=log, after_reply=after_reply,
              timing=lambda ms: mem.log("first_audio", f"time_to_first_audio={ms}ms")).run_forever()
         return
     if args.cmd == "projects":

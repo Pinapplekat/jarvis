@@ -4,6 +4,8 @@ Tasks, background jobs and self-edit builds never message Elijah themselves. The
 report here: done, failed, a note worth passing on, or progress (kept only so JARVIS can answer
 "how's it going?"). The reporter, run from the listener and the tick, takes whatever is waiting
 and turns it into ONE message in JARVIS's voice: several finishes at once become one update.
+While JARVIS is speaking a live reply at the desk, reports wait (in the table, so nothing is
+lost) and go out once the answer is over, or after MAX_HOLD_SECONDS at most.
 Questions that need Elijah's yes (his side of the line) are the exception: JARVIS asks those
 directly, with buttons. What was said goes into the chat history, so a follow-up makes sense.
 Report text written by an agent is untrusted data to the composer, never instructions.
@@ -18,6 +20,7 @@ from jarvis import config
 from jarvis.memory import Memory
 
 PASS_ON = ("done", "failed", "note")
+MAX_HOLD_SECONDS = 120  # longest a report waits for JARVIS to finish speaking
 
 COMPOSE_SYSTEM = """You are JARVIS, Elijah's AI, reporting back on work you had your helpers do
 (tasks, background jobs, builds). You get the updates that came in since you last spoke to him.
@@ -81,13 +84,49 @@ def compose_with_claude(items: list[dict]) -> str:
     return str(out.get("message") or "").strip()
 
 
+def _held(mem: Memory, speaking: Callable[[], bool] | None) -> bool:
+    """Wait while JARVIS is speaking a live reply, so a report doesn't talk over it. Never
+    longer than MAX_HOLD_SECONDS for the oldest waiting report: then it goes out regardless."""
+    from jarvis.speech import is_speaking
+    if not (speaking or is_speaking)():
+        return False
+    oldest = mem.db.execute("SELECT MIN(at) FROM reports WHERE delivered_at IS NULL").fetchone()[0]
+    if oldest is None:
+        return False
+    waited = (datetime.now(timezone.utc) - datetime.fromisoformat(oldest)).total_seconds()
+    return waited < MAX_HOLD_SECONDS
+
+
+def _merge(items: list[dict]) -> list[dict]:
+    """Same update filed twice (a retry, listener and tick racing): say it once, in order."""
+    seen, out = set(), []
+    for r in items:
+        key = (r["kind"], r["about"], r["text"])
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
+
+
 def deliver(mem: Memory, send: Callable[[str], object], compose: Composer | None = None,
-            send_image: Callable[[str, str], object] | None = None) -> int:
+            send_image: Callable[[str, str], object] | None = None,
+            speaking: Callable[[], bool] | None = None) -> int:
     """Pass on what's waiting as one message, then any images the reports carry (each checked
-    by jarvis.attachments inside `send_image(path, caption)`). Returns how many reports it covered."""
-    items = _claim(mem)
-    if not items:
+    by jarvis.attachments inside `send_image(path, caption)`). Returns how many reports it covered.
+    While a live reply is being spoken, reports stay queued (0) until flush_pending() after it."""
+    if _held(mem, speaking):
         return 0
+    return flush_pending(mem, send, compose, send_image)
+
+
+def flush_pending(mem: Memory, send: Callable[[str], object], compose: Composer | None = None,
+                  send_image: Callable[[str, str], object] | None = None) -> int:
+    """Pass on everything waiting now, oldest first, duplicates merged. Called when a live reply
+    ends, and from the tick as a fallback; the text goes to Telegram straight away."""
+    claimed = _claim(mem)
+    if not claimed:
+        return 0
+    items = _merge(claimed)
     try:
         text = (compose or compose_with_claude)(items) or plain(items)
     except Exception as e:  # never lose a report over the composer
@@ -103,8 +142,8 @@ def deliver(mem: Memory, send: Callable[[str], object], compose: Composer | None
                 send_image(path, r["about"][:200])
             except Exception as e:  # not allowed, gone, or Telegram trouble: say so, keep going
                 send(f"(I couldn't send the picture {Path(path).name}: {str(e)[:150]})")
-    mem.log("reported", json.dumps([r["id"] for r in items]))
-    return len(items)
+    mem.log("reported", json.dumps([r["id"] for r in claimed]))
+    return len(claimed)
 
 
 def strip_ids(text: str) -> str:

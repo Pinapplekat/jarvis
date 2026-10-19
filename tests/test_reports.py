@@ -53,6 +53,36 @@ def test_pictures_go_after_the_message_and_refusals_are_said(tmp_path):
     assert "couldn't send the picture nope.png" in sent[1]
 
 
+def test_reports_wait_while_jarvis_speaks_then_go_out_in_order_once():
+    m = Memory(":memory:")
+    reports.add(m, "task", 1, "done", "site tests", "All green.")
+    reports.add(m, "job", 2, "failed", "the build", "exit 1")
+    reports.add(m, "task", 1, "done", "site tests", "All green.")  # filed twice
+    sent, seen = [], []
+
+    def compose(items):
+        seen.append([r["about"] for r in items])
+        return "Tests green, build failed, sir."
+    assert reports.deliver(m, sent.append, compose, speaking=lambda: True) == 0
+    assert sent == [] and "not passed on" in reports.for_prompt(m)  # queued, not lost
+    assert reports.flush_pending(m, sent.append, compose) == 3
+    assert sent == ["Tests green, build failed, sir."] and seen == [["site tests", "the build"]]
+    assert reports.flush_pending(m, sent.append, compose) == 0
+    assert reports.deliver(m, sent.append, compose, speaking=lambda: False) == 0
+
+
+def test_speaking_flag_holds_reports_but_never_past_the_max_wait():
+    from jarvis import speech
+    m = Memory(":memory:")
+    reports.add(m, "task", 1, "done", "x", "y")
+    sent = []
+    speech.live_reply_started()
+    assert reports.deliver(m, sent.append, lambda items: "ok") == 0  # the real flag is honoured
+    m.db.execute("UPDATE reports SET at = '2000-01-01T00:00:00+00:00'")
+    assert reports.deliver(m, sent.append, lambda items: "ok") == 1 and sent == ["ok"]
+    speech.live_reply_ended()
+
+
 def test_reports_never_carry_internal_numbers():
     m = Memory(":memory:")
     reports.add(m, "task", 1, "done", "x", "y")

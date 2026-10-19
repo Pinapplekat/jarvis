@@ -96,14 +96,17 @@ class Endpointer:
 class Ears:
     def __init__(self, answer: Callable[..., str], transcribe: Callable[[np.ndarray], str],
                  log=print, play: Callable[[str], None] | None = None, voice=None,
-                 report: Callable | None = None, timing: Callable[[int], None] | None = None):
+                 report: Callable | None = None, timing: Callable[[int], None] | None = None,
+                 after_reply: Callable[[], object] | None = None):
         """`answer(text, on_text)` streams the reply's text so far into `on_text`; `voice` is a
         SpeakQueue, so each sentence is spoken as soon as it's written. `report` publishes
-        state for the menu bar indicator; `timing(ms)` gets the time to first audio."""
+        state for the menu bar indicator; `timing(ms)` gets the time to first audio;
+        `after_reply()` runs once each answer is over (it passes on helper reports that waited)."""
         self.answer, self.transcribe, self.log = answer, transcribe, log
         self.report = report or _report
         self.play = play or (lambda path: subprocess.Popen(["afplay", path]))
         self.timing = timing or (lambda ms: None)
+        self.after_reply = after_reply or (lambda: None)
         self.voice = voice
         self.noise = deque(maxlen=50)  # recent chunk levels while idle (~4 s)
         self._wake = None
@@ -186,6 +189,18 @@ class Ears:
         and wait until it's all been said. With `read_chunk` (and BARGE_IN), the mic stays
         open meanwhile: if he talks over JARVIS it stops at once, and what he says ends up
         in `self.barged` as (audio, heard_at) for the next turn."""
+        from jarvis.speech import live_reply_ended, live_reply_started
+        live_reply_started()  # helper reports wait until this answer is over
+        try:
+            return self._reply(text, heard_at, read_chunk)
+        finally:
+            live_reply_ended()  # however it ended (done, barged in on, or an error)
+            try:
+                self.after_reply()  # pass on what waited
+            except Exception as e:
+                self.log(f"after reply: {e}")
+
+    def _reply(self, text: str, heard_at: float, read_chunk) -> str:
         from jarvis.speech import SentenceBuffer, sentences
         voice, buf = self._voice(), SentenceBuffer()
         voice.cancel()  # nothing from an earlier answer talks over this one
@@ -240,10 +255,12 @@ class Ears:
                 if state == "talking":
                     recent.append(chunk)
                 elif state == "barge_in":
+                    from jarvis.speech import live_reply_ended
+                    from jarvis.voice import stop_speaking
                     with lock:
                         cut.set()
+                        live_reply_ended()  # he has the floor; JARVIS isn't talking any more
                         self._voice().cancel()  # stop the sentence playing and drop the rest
-                    from jarvis.voice import stop_speaking
                     stop_speaking()
                     self.log("barge-in")
                     self.report("listening")

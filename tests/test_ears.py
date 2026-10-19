@@ -290,6 +290,54 @@ def test_barge_in_off_keeps_the_mic_closed_while_talking(monkeypatch):
     assert ears.barged is None and "cancel" not in voice.events and len(stream.during) == len(during)
 
 
+def test_reports_wait_for_the_answer_and_are_flushed_after_it():
+    from jarvis import speech
+    during, flushed = [], []
+
+    def answer(text, on_text=None):
+        during.append(speech.is_speaking())
+        return "Fine, sir."
+    ears = Ears(answer=answer, transcribe=lambda a: "x", log=lambda s: None, play=lambda p: None,
+                voice=FakeVoice(), after_reply=lambda: flushed.append(speech.is_speaking()))
+    ears.reply("x", heard_at=1.0)
+    assert during == [True] and flushed == [False] and not speech.is_speaking()
+
+
+def test_a_failed_answer_still_clears_the_flag_and_flushes():
+    from jarvis import speech
+    flushed = []
+
+    def broken(text, on_text=None):
+        raise RuntimeError("claude died")
+    ears = Ears(answer=broken, transcribe=lambda a: "x", log=lambda s: None, play=lambda p: None,
+                voice=FakeVoice(), after_reply=lambda: flushed.append(1))
+    with pytest.raises(RuntimeError):
+        ears.reply("x", heard_at=1.0)
+    assert flushed == [1] and not speech.is_speaking()
+
+
+def test_barge_in_clears_the_flag_and_reports_flush_after(monkeypatch):
+    from jarvis import speech
+    seen = []
+
+    def long_answer_watched(on_text, voice):
+        out = long_answer(on_text, voice)  # returns once he has cut in
+        seen.append(speech.is_speaking())
+        return out
+    during = ECHO[:6] + [LOUD] * 6 + [SILENT] * 20
+    monkeypatch.setattr(config, "BARGE_IN", True)
+    monkeypatch.setattr(config, "FOLLOW_UP_SECONDS", 1)
+    voice, flushed = PlayingVoice(), []
+    ears = Ears(answer=lambda t, on_text=None: long_answer_watched(on_text, voice), transcribe=lambda a: "x",
+                log=lambda s: None, play=lambda p: None, voice=voice, after_reply=lambda: flushed.append(1))
+    ears.noise.extend([0.002] * 10)
+    stream = DeskMic([], during, voice)
+    ears.reply("x", heard_at=1.0, read_chunk=lambda: stream.read(CHUNK)[0][:, 0])
+    assert "cancel" in voice.events and ears.barged is not None
+    assert seen == [False]  # cleared the moment he cut in, not only when the answer returned
+    assert flushed == [1] and not speech.is_speaking()
+
+
 def test_wake_with_no_speech_or_garbled_speech_pops():
     ears, stream, played, _, answered = make([SILENT] * 80)
     ears.converse(stream)

@@ -92,3 +92,18 @@ def test_sentence_buffer_newlines_initials_and_whole_text():
     assert buf.feed_text("One. Tw") == ["One."]
     assert buf.feed_text("One. Two. Th") == ["Two."]
     assert buf.feed_text("Different now.") == []  # stream rewrote itself: ignored
+
+
+def test_live_reply_flag_is_set_cleared_and_expires():
+    import time
+
+    from jarvis import speech
+    assert not speech.is_speaking()
+    speech.live_reply_started(max_seconds=60)
+    assert speech.is_speaking()
+    assert not speech.is_speaking(now=time.time() + 61)  # a crashed reply can never hold reports forever
+    speech.live_reply_ended()
+    speech.live_reply_ended()  # twice is fine (barge-in, then the reply's own end)
+    assert not speech.is_speaking()
+    speech.LIVE.write_text("not json")
+    assert not speech.is_speaking()

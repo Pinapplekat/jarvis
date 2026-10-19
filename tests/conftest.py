@@ -20,7 +20,8 @@ def _no_real_geocoding(monkeypatch):
 @pytest.fixture(autouse=True)
 def _no_real_logs_or_state(monkeypatch, tmp_path):
     """Tests never write to JARVIS's real command log, task folders, build state or browser list."""
-    from jarvis import browser, selfedit, tasks, terminal
+    from jarvis import browser, selfedit, speech, tasks, terminal
+    monkeypatch.setattr(speech, "LIVE", tmp_path / "speaking-test.json")
     monkeypatch.setattr(terminal, "AUDIT", tmp_path / "commands-test.jsonl")
     monkeypatch.setattr(tasks, "TASKS_DIR", tmp_path / "tasks-test")
     monkeypatch.setattr(selfedit, "BUILD_DIR", tmp_path / "build-test")

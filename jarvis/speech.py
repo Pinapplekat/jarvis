@@ -1,11 +1,18 @@
 """Speech, on-device: Whisper transcription (faster-whisper), Daniel-voice audio for
 Telegram voice notes and phone calls (macOS `say` + ffmpeg), and splitting a streaming reply into
-sentences so each can be spoken as soon as it's written. No audio leaves the Mac for this."""
+sentences so each can be spoken as soon as it's written. No audio leaves the Mac for this.
 
+It also keeps the "speaking a live reply" flag, so helper reports wait instead of talking over
+an answer at the desk. The desk mic, the Telegram listener and the tick are separate processes,
+so the flag is a small file with an expiry: a crash can never leave it stuck on."""
+
+import json
+import os
 import re
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -14,8 +21,45 @@ from jarvis import config
 from jarvis.voice import speakable
 
 SAMPLE_RATE = 16000
+LIVE = config.DATA_DIR / "speaking.json"
+LIVE_MAX_SECONDS = 180  # a live reply never holds reports back longer than this
 _model = None
 _model_lock = threading.Lock()
+
+
+def live_reply_started(max_seconds: float = LIVE_MAX_SECONDS) -> None:
+    """A live reply has started (set by the desk mic's answer)."""
+    _write_live({"pid": os.getpid(), "until": time.time() + max_seconds})
+
+
+def live_reply_ended() -> None:
+    """The live reply ended or was barged in on. Safe to call twice."""
+    try:
+        LIVE.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        _write_live({"until": 0})  # can't remove it: at least make it stale
+
+
+def is_speaking(now: float | None = None) -> bool:
+    """Is JARVIS speaking a live reply right now (in any process)?"""
+    try:
+        until = float(json.loads(LIVE.read_text()).get("until") or 0)
+    except (OSError, ValueError, AttributeError):
+        return False
+    return (now or time.time()) < until
+
+
+def _write_live(data: dict) -> None:
+    try:
+        LIVE.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=LIVE.parent, prefix=".speaking-")
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, LIVE)
+    except OSError:
+        pass  # never let the flag break speaking; reports just won't wait
 
 
 def _whisper():
