@@ -10,8 +10,10 @@ Some things are never in the file and can never be loosened: LOCKED is in code. 
 has a floor (unknown commands can't go below "judge"), so the most the file can ever do is let
 JARVIS open pages and search on its own.
 
-Changes only start from Elijah's own Telegram message (chat.py checks that), are shown to him as
-a before/after with Yes / Not now buttons, and apply only on his Yes. Every applied change is
+Changes only start from Elijah's own words: typed or spoken in Telegram, typed on the Mac (HUD or
+inbox), said at the desk mic or on a call (trusted_origin; chat.py checks it, and refuses any turn
+that read pages, email, the screen, search results or files). Wherever they start, they're shown
+to him in Telegram as a before/after with Yes / Not now buttons, and apply only on his Yes. Every applied change is
 logged (time, rule, before, after, reason, who approved) with the previous file kept, and can be
 undone: back to stricter at once, back to looser only with his yes.
 """
@@ -60,6 +62,9 @@ ASKED_FOR = {
                             r"(?:link|page|site))\b", re.I),
     "search": re.compile(r"\b(search|look (?:it |that |this )?up|google|find out|check online|online)\b", re.I),
 }
+# Where Elijah himself is typing or speaking. Each entry point sets its channel in code; it's
+# never read from the message. Anything else (pages, email, screen, search, attachments, jobs) isn't.
+TRUSTED_CHANNELS = {"telegram": "his Telegram chat", "mac": "the Mac panel", "mic": "the desk mic", "call": "a call"}
 BROWSERS = {"Safari", "Google Chrome", "Firefox", "Arc", "Brave Browser", "Microsoft Edge"}
 
 
@@ -137,6 +142,12 @@ def _local(host: str) -> bool:
     except ValueError:
         return False
     return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+
+
+def trusted_origin(channel: str | None, outside_text: bool = False) -> bool:
+    """May a rule change start here? Only Elijah's own words from a known channel, in a turn
+    that took in no outside text (a page, email, the screen, search results, a file)."""
+    return channel in TRUSTED_CHANNELS and not outside_text
 
 
 def asked_for(action: str, message: str) -> bool:

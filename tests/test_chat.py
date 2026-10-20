@@ -520,3 +520,39 @@ def test_run_vision_sends_the_image_as_input_to_a_tool_less_claude(tmp_path, mon
     img, text = seen["content"]
     assert img["type"] == "image" and img["source"]["media_type"] == "image/jpeg"
     assert text == {"type": "text", "text": "what's this?"}
+
+
+RULE_CHANGE = [{"type": "rule_change", "rule": "search", "level": "ask", "reason": "he asked"}]
+
+
+@pytest.mark.parametrize("channel", ["mac", "mic", "call"])
+def test_rule_change_from_his_mac_mic_or_call_waits_for_the_telegram_tap(channel):
+    from jarvis import rules
+    m = Memory(":memory:")
+    reply = respond(m, "ask me before searching from now on", NOW, "",
+                    runner=fake_runner("Set up, sir.", RULE_CHANGE), channel=channel)
+    assert len(m.pending_actions(kind=rules.KIND)) == 1 and rules.get_level("search") == "auto"
+    assert "Yes in Telegram" in reply
+
+
+@pytest.mark.parametrize("channel", [None, "web", "email", "screen", "search", "attachment"])
+def test_rule_change_from_anything_but_his_own_words_is_refused(channel):
+    from jarvis import rules
+    m = Memory(":memory:")
+    respond(m, "ask me before searching from now on", NOW, "", runner=fake_runner("Ok.", RULE_CHANGE),
+            channel=channel)
+    assert m.pending_actions(kind=rules.KIND) == []
+
+
+def test_telegram_message_from_another_chat_is_ignored():
+    from jarvis import rules
+    from jarvis.approvals import handle_updates
+    from tests.test_approvals import ME, STRANGER, FakeTelegram
+    m, t, seen = Memory(":memory:"), FakeTelegram(), []
+
+    def on_text(u):
+        seen.append(u.text)
+        respond(m, u.text, NOW, "", runner=fake_runner("Ok.", RULE_CHANGE), channel="telegram")
+    t.type("ask me before searching from now on", sender=STRANGER)
+    handle_updates(m, t, ME, on_text)
+    assert seen == [] and m.pending_actions(kind=rules.KIND) == [] and t.sent == []

@@ -266,9 +266,10 @@ def _runner_for(route, warm, choice: str = "auto"):
 
 def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = False, warm=None,
             on_first=None, on_text=None, phone: bool = False, send_photo=None, on_draft=None,
-            from_telegram: bool = False) -> str:
+            channel: str | None = None) -> str:
     """One chat turn with full context. Shared by Telegram (typed or voice), the desk mic and
-    phone calls. `from_telegram`: his own message in the Telegram chat (rule changes start only there).
+    phone calls. `channel`: where he typed or said it, set here by each entry point ("telegram",
+    "mac", "mic", "call"; rules.TRUSTED_CHANNELS), never read from the text: only those can start a rule change.
     `on_first(sentence)` fires as soon as the reply's first sentence has streamed in;
     `on_text(so_far)` gets all of the streaming reply text (the desk mic speaks it as it comes);
     `on_draft(so_far)` gets it word by word, every round, for a screen (the HUD, the inbox)."""
@@ -276,14 +277,14 @@ def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = Fal
     own = timing.ensure("phone" if phone else "voice_note" if spoken else "telegram")
     try:
         return _answer_timed(mem, text, on_progress, spoken, warm, on_first, on_text, phone, send_photo, on_draft,
-                             from_telegram)
+                             channel)
     finally:
         if own:
             timing.finish(mem)
 
 
 def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_first, on_text, phone: bool,
-                  send_photo, on_draft=None, from_telegram: bool = False) -> str:
+                  send_photo, on_draft=None, channel: str | None = None) -> str:
     import time
 
     from jarvis import judge, router, timing
@@ -350,7 +351,7 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
                     inbox_text=inbox, activity_text=activity, blocks=blocks,
                     on_text=stream, on_draft=on_draft, spotter=_page_spotter(), send_photo=send_photo, idle=_idle_reader(),
                     peek_wait=peek_wait, vision=warm_vision(), judge=judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])),
-                    from_telegram=from_telegram and not phone)
+                    channel=channel)
     total = time.time() - started
     first_at = f"{first.at - started:.1f}s" if first and first.at else "-"
     # Timings and choices only; never the message text.
@@ -548,7 +549,7 @@ def _listen(mem: Memory) -> None:
 
             reply = _answer(mem, update.text, on_progress=tg.typing, spoken=update.via_voice, warm=warm,
                             on_first=None if streams else first_out, on_draft=streams, send_photo=tg.send_photo,
-                            from_telegram=source == "telegram")
+                            channel="telegram" if source == "telegram" else "mac" if source == "inbox" else None)
             if streams:
                 tg.finish(reply)
             elif sent:  # buttons and plans below must still go out, so no early return
@@ -688,7 +689,7 @@ def _serve_hud(tg, warm, turn) -> None:
                 from jarvis import inbox
                 inbox.record("you", text, via="HUD")
                 reply = _answer(mem, f"(typed in the HUD on his Mac) {text}", warm=warm, on_draft=on_text,
-                                send_photo=tg.send_photo)
+                                send_photo=tg.send_photo, channel="mac")
                 inbox.record("jarvis", reply, via="HUD")
             finally:
                 timing.finish(mem)
@@ -748,7 +749,7 @@ def _phone() -> None:
         try:
             if (said := _spoken_confirmation(mem, text)):
                 return said
-            reply = _answer(mem, text, spoken=True, phone=True, warm=warm)
+            reply = _answer(mem, text, spoken=True, phone=True, warm=warm, channel="call")
             if tg:
                 notify_pending(mem, tg)  # drafts and commands asked for on the call get their buttons
             return reply
@@ -1381,7 +1382,7 @@ def main() -> None:
                 from jarvis import attachments, reports
                 reports.flush_pending(mem, tg.send, send_image=lambda p, c: attachments.send_image(tg, p, c, mem))
         ears = Ears(answer=lambda text, on_text=None: _spoken_confirmation(mem, text)
-             or _answer(mem, text, spoken=True, warm=warm, on_text=on_text),
+             or _answer(mem, text, spoken=True, warm=warm, on_text=on_text, channel="mic"),
              transcribe=speech.transcribe, log=log, after_reply=after_reply,
              timing=lambda ms: mem.log("first_audio", f"time_to_first_audio={ms}ms"),
              on_turn=lambda steps: mem.log("timing", json.dumps(steps)), addressed=_addressed_check(mem))
