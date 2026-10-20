@@ -16,6 +16,19 @@ def _osa(script: str, run=subprocess.run) -> str:
     return (r.stdout or "").strip()
 
 
+def battery(run=subprocess.run) -> tuple[int, bool] | None:
+    """(percent, charging) from pmset, or None when there's no battery or it can't tell. No permission needed."""
+    import re
+    try:
+        r = run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"(\d{1,3})%;\s*([\w ]+?);", r.stdout or "")
+    if r.returncode != 0 or not m:
+        return None
+    return int(m[1]), m[2].strip().lower() in ("charging", "charged", "finishing charge")
+
+
 def control(op: str, value=None, run=subprocess.run) -> str:
     """Do it and return one short line saying what happened."""
     if op not in OPS:

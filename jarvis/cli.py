@@ -772,6 +772,15 @@ def _phone() -> None:
     phone.serve(line, config.PHONE_PORT)
 
 
+def _run_watches(mem: Memory, deadlines: list | None = None) -> str:
+    """The due watches, checked cheaply; the judge only sees a watch's question after its filter matched."""
+    from jarvis import judge, watches
+    from jarvis.canvas import CanvasClient
+    src = watches.Sources(deadlines=lambda: list(deadlines or []),  # this tick's sync; none if it failed
+                          announcements=lambda: CanvasClient().fetch_announcements() if config.CANVAS_TOKEN else [])
+    return watches.run_due(mem, _now_local(), src, judge=judge.fast_engine())
+
+
 def _tick(mem: Memory) -> int:
     """One scheduled pass. Each step runs even if an earlier one fails."""
     from datetime import datetime
@@ -832,6 +841,8 @@ def _tick(mem: Memory) -> int:
         from jarvis.mailwatch import check_new_mail
         from jarvis import judge as _judge
         step("mail-watch", lambda: check_new_mail(mem, _now_local(), fast=_judge.fast_engine()))  # before alerts
+    if config.WATCHES:
+        step("watches", lambda: _run_watches(mem, deadlines))  # after mail and location, before alerts and drafts
     if config.HEARTBEAT:
         from jarvis import heartbeat
         from jarvis.alerts import in_quiet_hours as _quiet, parse_quiet_hours as _hours
@@ -1011,6 +1022,10 @@ def main() -> None:
     wa.add_argument("action", nargs="?", default="run",
                     choices=["run", "once", "timeline", "install-shell-hook", "status"])
     wa.add_argument("--minutes", type=int, default=30, help="for timeline")
+    ws = sub.add_parser("watches", help="Things JARVIS keeps an eye on for you: list them, or check the due ones now")
+    ws.add_argument("action", nargs="?", default="list", choices=["list", "check"])
+    wc = sub.add_parser("watch-cancel", help="Stop a watch (its number from 'jarvis watches', words from its name, or all)")
+    wc.add_argument("which")
     sy = sub.add_parser("say", help="Speak text in JARVIS's voice (ignores presence and quiet hours)")
     sy.add_argument("text")
     st = sub.add_parser("siri-test", help="Try a Siri-style action: timer 5m, alarm 07:30, music QUERY, contact NAME")
@@ -1481,6 +1496,19 @@ def main() -> None:
             counts = {s: sum(o["source"] == s for o in day) for s in ("screen", "terminal", "git")}
             print(f"last 24h: {counts}; repos known: {len(known_repos(mem))}; "
                   f"terminal hook: {'installed' if terminal.hook_installed() else 'not installed'}")
+        return
+    if args.cmd in ("watches", "watch-cancel"):
+        from jarvis import watches
+        if args.cmd == "watch-cancel":
+            try:
+                print("Cancelled: " + ", ".join(watches.cancel(mem, args.which)))
+            except ValueError as e:
+                sys.exit(str(e))
+        elif args.action == "check":
+            print(_run_watches(mem))
+            print("(an alert, if any, goes out with the next tick)")
+        else:
+            print(watches.list_text(mem, _now_local(), ids=True))
         return
     if args.cmd == "plans":
         from jarvis.plans import PLANS_DIR

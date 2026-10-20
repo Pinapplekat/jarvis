@@ -290,6 +290,16 @@ Share your location with the JARVIS bot in Telegram (📎 → Location). A **liv
 - **Live sharing lapses:** Telegram ends a live share after at most 8 hours, unless you pick "until I turn it off". JARVIS reminds you once when a share ends, outside quiet hours. A background reporter on the phone (OwnTracks, or a Shortcuts automation posting to an authenticated endpoint) would avoid the gaps. It isn't built; it would be a later plan.
 - **CLI:** `jarvis location` (what JARVIS sees), `jarvis location history --hours 24`, `jarvis location places`, and `jarvis location forget` (wipes all points, places and visits). `LOCATION=0` turns it off.
 
+## Watches ("tell me when...")
+
+Say what to keep an eye on in plain words, by text, voice, at the desk or on a call: "tell me when a letter from Harvard comes", "ping me when I leave school", "let me know if 'cancelled' shows up on the ferry page", "tell me when Emily replies in the Arboreal channel", "warn me if the battery drops below 20". JARVIS proposes a watch (name, what to check, how often, when it ends), each tick checks the ones that are due, and you get **one** Telegram message when it triggers.
+
+- **Kinds:** location (arriving at or leaving a named place, or a route between two, from your Telegram live share; a stale position is never guessed at), email (new mail matching a sender or subject words, from the inbox headers the tick already reads), screen (words appearing in, or any change to, a window JARVIS already reads; Messages, banking and password apps stay off limits, so they can't be watched), web page (a keyword appears or the page changes; banking sites blocked), Canvas (new calendar items; grades and announcements only with a `CANVAS_TOKEN`), a time, and the battery level. Any watch can be limited to hours of the day ("only 9 to 3").
+- **Cheap:** every check is a plain comparison against what the last check saw (hashes, ids, keywords); no model. A watch whose words can't decide on their own ("are tickets actually on sale?") asks the fast judge, and only after its words matched. Defaults: every 5 min (web pages hourly, at least 30 min; Canvas every 30), ends after 7 days (30 at most), at most `WATCHES_MAX_ACTIVE` (20) running.
+- **Once:** a watch fires once and stops, unless you asked for it to repeat (then it re-arms when the condition goes away and comes back). One that runs out without triggering is mentioned once.
+- **No new sending power:** alerts only go to your chat. A watch may carry a text you asked for ("...and text Emily that Harvard wrote back"); when it triggers, that text is drafted and waits for your yes like any other, every time. Only your own words (Telegram, the Mac, the desk mic, a call) can attach one. Page, email and screen text is only matched as data, never obeyed.
+- **List and cancel:** "what are you watching?", "stop watching the ferry page" (or "cancel all watches"). CLI: `jarvis watches`, `jarvis watches check` (run the due ones now), `jarvis watch-cancel <number or name>`. `WATCHES=0` turns them off.
+
 ## Watching (senses)
 
 `jarvis watch` (a background job) builds a local timeline while you're at the Mac:

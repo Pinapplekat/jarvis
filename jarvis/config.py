@@ -175,6 +175,10 @@ LOCATION_KEEP_DAYS = int(os.getenv("LOCATION_KEEP_DAYS", "14"))
 # Street address of the latest point (Nominatim, at most once a minute, only the latest kept).
 REVERSE_GEOCODE = os.getenv("REVERSE_GEOCODE", "1") == "1"
 
+# Watches: conditions he asks JARVIS to keep an eye on, checked cheaply by each tick.
+WATCHES = os.getenv("WATCHES", "1") == "1"
+WATCHES_MAX_ACTIVE = int(os.getenv("WATCHES_MAX_ACTIVE", "20"))
+
 # Twilio is used only for voice: urgent calls to you, and you calling JARVIS
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")

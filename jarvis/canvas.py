@@ -56,6 +56,17 @@ class CanvasClient:
             params = None  # the next link already carries them
         return out
 
+    def fetch_announcements(self, days: int = 14) -> list[dict]:
+        """Recent announcements in active courses: [{"id", "course", "title"}] (titles only)."""
+        courses = {f"course_{c['id']}": c.get("course_code") or c.get("name", "")
+                   for c in self.get_all("/courses", enrollment_state="active") if "access_restricted_by_date" not in c}
+        if not courses:
+            return []
+        start = (date.today() - timedelta(days=days)).isoformat()
+        found = self.get_all("/announcements", **{"context_codes[]": list(courses), "start_date": start})
+        return [{"id": a["id"], "course": courses.get(a.get("context_code", ""), ""), "title": a.get("title", "")}
+                for a in found]
+
     def fetch_deadlines(self, tz: ZoneInfo, today: date) -> list[Deadline]:
         deadlines = []
         for course in self.get_all("/courses", enrollment_state="active"):

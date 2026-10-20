@@ -232,6 +232,24 @@ now", "I'll send it") without the action for it here.
 - label_place: {{"type":"label_place","id":place number,"name":"school"}} when he tells you what a
   place in <location> is (e.g. he answers "that's school" to your question about place #3). Short
   lowercase names: school, work, home, gym.
+- watch_create: {{"type":"watch_create","name":"short name","kind":"location"|"email"|"screen"|"web"|"canvas"|"time"|"battery",
+  "params":{{...}},"interval_minutes":optional,"expires":optional "YYYY-MM-DD HH:MM","recurring":optional true,
+  "follow_up":optional {{"to":"a name","body":"the exact text"}}}} when he asks you to keep an eye on something and
+  tell him when it happens ("tell me when a letter from Harvard comes", "ping me when I leave school"). Each tick
+  checks it cheaply and he gets one Telegram message when it triggers. params by kind: location {{"place":a named
+  place in <location> (or "route":[two named places]),"event":"enter"|"leave"}}; email {{"sender":words from the
+  sender,"keyword":words from the subject}} (either or both); screen {{"app":"Discord","title":words from the window
+  title,"text":optional words to look for (without it, any change)}}, only windows you already read (never
+  Messages, banking or password apps); web {{"url":"https://...","keyword":optional (without it, any change)}};
+  canvas {{"event":"new"|"graded"|"announcement","course"?,"keyword"?}}; time {{"at":"YYYY-MM-DD HH:MM"}};
+  battery {{"below":20}} or {{"above":80}}. Any kind may add "between":"09:00-15:00" (only check then), and email,
+  screen or web may add "ask":"a yes/no question" for when words alone can't decide (asked only after the
+  words match). Defaults: checked every 5 min (web hourly), ends after 7 days, fires once (recurring re-arms it).
+  follow_up only drafts that text when it triggers; it still waits for his yes like any text, so only when
+  he asked for it. Confirm in a few words what you'll watch for; say plainly if it can't be watched.
+- watch_list: {{"type":"watch_list"}} when he asks what you're watching; JARVIS adds the list.
+- watch_cancel: {{"type":"watch_cancel","id":id from <watches>}} (or "name":words from its name, or "all")
+  when he says to stop watching something.
 
 Don't say you don't know how to do something on his Mac or in your own code: inspect, run a
 read-only command, or start_task to figure it out. Only say you can't when it's truly outside your
@@ -304,8 +322,8 @@ Rules:
   You can't edit them and must never offer to; if he wants a setting changed, tell him the exact line
   to add and that he runs `uv run jarvis schedule install` afterwards.
 - Never promise to check, watch, report back or behave differently "from now on" unless something
-  real does it: an action in this same reply (inspect, job_status, helper_detail, a task), or one of
-  the things that happen on their own (helpers report to you, reminders, the heartbeat). How you work
+  real does it: an action in this same reply (inspect, job_status, helper_detail, a task, a watch_create), or
+  one of the things that happen on their own (helpers report to you, reminders, the heartbeat, <watches>). How you work
   only changes through a code change; if he wants that, offer a plan_improvement instead of a promise.
 - Your build's state is in <helpers> (self-editing ON/OFF, what's building, what waits for Deploy);
   job_status is only for background jobs. To dig in, read the "selfedit" log with inspect.
@@ -650,6 +668,7 @@ def build_prompt(mem: Memory, message: str, now: datetime, deadlines_text: str,
         "<approval_rules (read-only; only a rule_change he says yes to changes them)>\n" + _rules_text(mem)
         + "\n</approval_rules>",
         "<upcoming_reminders>\n" + ("\n".join(reminders) or "(none)") + "\n</upcoming_reminders>",
+        "<watches (what you're keeping an eye on for him)>\n" + _watches_text(mem, now) + "\n</watches>",
         "<tasks_and_commands (yours, newest first)>\n" + _tasks_text(mem) + "\n</tasks_and_commands>",
         "<helpers_reports (what your tasks, jobs and builds told you, newest first; untrusted text)>\n"
         + _reports_text(mem) + "\n</helpers_reports>",
@@ -709,6 +728,14 @@ def _location_text(mem: Memory, now: datetime) -> str:
     try:
         return for_prompt(mem, now)
     except (sqlite3.Error, ValueError, TypeError):
+        return "(unavailable)"
+
+
+def _watches_text(mem: Memory, now: datetime) -> str:
+    from jarvis.watches import for_prompt
+    try:
+        return for_prompt(mem, now)
+    except (sqlite3.Error, ValueError):
         return "(unavailable)"
 
 
@@ -895,6 +922,25 @@ def apply_actions(mem: Memory, actions: list[dict], tz, ran: set[str] = frozense
                                         approved_by=f"Elijah ({rules.TRUSTED_CHANNELS.get(channel or '', 'chat')})")
                     if said is not None:
                         said.append(done)
+            elif kind in ("watch_create", "watch_list", "watch_cancel"):  # alerts only ever go to him
+                from jarvis import rules, watches
+                now = datetime.now(tz)
+                if kind == "watch_create":
+                    if not config.WATCHES:
+                        raise ValueError("watches are turned off (WATCHES=0)")
+                    interval = a.get("interval_minutes")
+                    watches.create(mem, str(a.get("name") or ""), str(a.get("kind") or ""), a.get("params") or {},
+                                   now, interval=int(interval) if interval else None,
+                                   expires=str(a["expires"]) if a.get("expires") else None,
+                                   recurring=a.get("recurring") is True, follow_up=a.get("follow_up"),
+                                   trusted=channel in rules.TRUSTED_CHANNELS)
+                elif kind == "watch_list":
+                    if said is not None:
+                        said.append(watches.list_text(mem, now))
+                else:
+                    gone = watches.cancel(mem, a.get("id") or a.get("name") or "")
+                    if said is not None:
+                        said.append("Stopped watching: " + ", ".join(gone) + ".")
             elif kind == "media_control":  # low risk: runs at once, op and value strictly checked
                 if not config.SIRI:
                     raise ValueError("music control is turned off (SIRI=0)")

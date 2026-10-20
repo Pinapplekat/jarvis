@@ -196,6 +196,22 @@ CREATE TABLE IF NOT EXISTS reports (
     text TEXT NOT NULL,
     delivered_at TEXT                -- passed on to Elijah (progress: set at once, never sent)
 );
+
+-- Conditions Elijah asked JARVIS to keep an eye on (jarvis.watches), checked by each tick.
+CREATE TABLE IF NOT EXISTS watches (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,              -- location | email | screen | web | canvas | time | battery
+    params TEXT NOT NULL,            -- JSON
+    interval_min INTEGER NOT NULL,
+    expires_at TEXT NOT NULL,
+    recurring INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    last_checked TEXT,
+    last_state TEXT,                 -- JSON: what the last check saw, for the cheap comparison
+    fired_at TEXT,
+    status TEXT NOT NULL DEFAULT 'active'  -- active | fired | expired | cancelled
+);
 """
 
 MIGRATIONS = [
