@@ -232,7 +232,7 @@ now", "I'll send it") without the action for it here.
 - label_place: {{"type":"label_place","id":place number,"name":"school"}} when he tells you what a
   place in <location> is (e.g. he answers "that's school" to your question about place #3). Short
   lowercase names: school, work, home, gym.
-- watch_create: {{"type":"watch_create","name":"short name","kind":"location"|"email"|"screen"|"web"|"canvas"|"time"|"battery",
+- watch_create: {{"type":"watch_create","name":"short name","kind":"location"|"email"|"screen"|"web"|"canvas"|"time"|"battery"|"messages",
   "params":{{...}},"interval_minutes":optional,"expires":optional "YYYY-MM-DD HH:MM","recurring":optional true,
   "follow_up":optional {{"to":"a name","body":"the exact text"}}}} when he asks you to keep an eye on something and
   tell him when it happens ("tell me when a letter from Harvard comes", "ping me when I leave school"). Each tick
@@ -242,7 +242,9 @@ now", "I'll send it") without the action for it here.
   title,"text":optional words to look for (without it, any change)}}, only windows you already read (never
   Messages, banking or password apps); web {{"url":"https://...","keyword":optional (without it, any change)}};
   canvas {{"event":"new"|"graded"|"announcement","course"?,"keyword"?}}; time {{"at":"YYYY-MM-DD HH:MM"}};
-  battery {{"below":20}} or {{"above":80}}. Any kind may add "between":"09:00-15:00" (only check then), and email,
+  battery {{"below":20}} or {{"above":80}}; messages {{"from":["Arboreal"]}}, only when he himself asks to hear about
+  new texts, naming exactly the group chat name or the sender's phone number or email he gave (a contact's name alone
+  won't match); it alerts once per new text and you never see what they say. Any kind may add "between":"09:00-15:00" (only check then), and email,
   screen or web may add "ask":"a yes/no question" for when words alone can't decide (asked only after the
   words match). Defaults: checked every 5 min (web hourly), ends after 7 days, fires once (recurring re-arms it).
   follow_up only drafts that text when it triggers; it still waits for his yes like any text, so only when

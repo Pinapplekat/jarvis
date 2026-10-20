@@ -178,6 +178,10 @@ REVERSE_GEOCODE = os.getenv("REVERSE_GEOCODE", "1") == "1"
 # Watches: conditions he asks JARVIS to keep an eye on, checked cheaply by each tick.
 WATCHES = os.getenv("WATCHES", "1") == "1"
 WATCHES_MAX_ACTIVE = int(os.getenv("WATCHES_MAX_ACTIVE", "20"))
+# Messages watches read ~/Library/Messages/chat.db (Full Disk Access), only for the senders or group
+# chats he named in a watch. MESSAGES_WATCH=0 turns them off.
+MESSAGES_WATCH = os.getenv("MESSAGES_WATCH", "1") == "1"
+MESSAGES_DB = os.getenv("MESSAGES_DB", str(Path.home() / "Library/Messages/chat.db"))
 
 # Twilio is used only for voice: urgent calls to you, and you calling JARVIS
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")

@@ -300,6 +300,15 @@ Say what to keep an eye on in plain words, by text, voice, at the desk or on a c
 - **No new sending power:** alerts only go to your chat. A watch may carry a text you asked for ("...and text Emily that Harvard wrote back"); when it triggers, that text is drafted and waits for your yes like any other, every time. Only your own words (Telegram, the Mac, the desk mic, a call) can attach one. Page, email and screen text is only matched as data, never obeyed.
 - **List and cancel:** "what are you watching?", "stop watching the ferry page" (or "cancel all watches"). CLI: `jarvis watches`, `jarvis watches check` (run the due ones now), `jarvis watch-cancel <number or name>`. `WATCHES=0` turns them off.
 
+### Messages watches
+
+"Tell me when Arboreal texts" sets a Messages watch: one short alert (Telegram, and spoken at the desk) per new incoming text from the group chat name, phone number or email you named, until it ends. A contact's name alone won't match; use the exact group chat name, number or email.
+
+- **Granting access:** System Settings > Privacy & Security > Full Disk Access, add the Python the scheduled `tick` job runs with (the one under `~/Library/Application Support/JARVIS/app`; `jarvis schedule status` shows the job). Until then each watch says once "Messages isn't readable, grant access in System Settings" and waits; it doesn't retry in a loop.
+- **Only what you named:** one read-only query of `~/Library/Messages/chat.db`, filtered to those exact handles or chat names and to messages newer than the last one seen. Nothing else is listed or searched; texts already there when the watch starts aren't alerted. Only your own request can create one.
+- **Stays private:** the text goes only into that alert. It never reaches the chat model, search, the journal or the log (those get the watch name and a count). Messages stays excluded from screen reading and every other automatic reader.
+- **No replies on its own:** there's no send path here; a reply is a text you ask for, which waits for your yes as always. `MESSAGES_WATCH=0` turns these watches off.
+
 ## Watching (senses)
 
 `jarvis watch` (a background job) builds a local timeline while you're at the Mac:

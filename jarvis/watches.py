@@ -10,6 +10,10 @@ cheap filter matched. Page, email and screen text are untrusted data: matched an
 
 A watch never sends anything to anyone but Elijah. It may carry a proposed text (to Emily, say);
 when it triggers, that text is queued like any other and waits for his yes every time.
+
+A messages watch (only one he asked for himself) reads new texts from the exact senders or group
+chats he named, through jarvis.messagesread, and alerts once per message. Their text goes only into
+that alert (Telegram and voice): never the chat history, the judge, search, the journal or the log.
 """
 
 import hashlib
@@ -23,8 +27,9 @@ from typing import Callable
 from jarvis import config
 from jarvis.memory import Memory
 
-TYPES = ("location", "email", "screen", "web", "canvas", "time", "battery")
-DEFAULT_INTERVAL = {"location": 5, "email": 5, "screen": 5, "web": 60, "canvas": 30, "time": 5, "battery": 10}
+TYPES = ("location", "email", "screen", "web", "canvas", "time", "battery", "messages")
+DEFAULT_INTERVAL = {"location": 5, "email": 5, "screen": 5, "web": 60, "canvas": 30, "time": 5, "battery": 10,
+                    "messages": 5}
 MIN_INTERVAL = {"web": 30, "canvas": 15}  # pages and Canvas are the costly ones; the rest follow the tick
 MAX_INTERVAL = 24 * 60
 DEFAULT_EXPIRY = timedelta(days=7)
@@ -41,6 +46,7 @@ class Result:
     summary: str = ""
     state: object = None     # saved as last_state, compared next time
     detail: str = ""         # untrusted text for the judge, only if the filter matched
+    each: list = field(default_factory=list)  # messages: one private alert per new text (id, summary)
 
 
 @dataclass
@@ -50,6 +56,7 @@ class Sources:
     announcements: Callable[[], list[dict]] | None = None  # [{"id","course","title"}] (API token only)
     fetch_page: Callable[[str], object] | None = None    # jarvis.web.fetch_page
     battery: Callable[[], tuple[int, bool] | None] | None = None
+    read_messages: Callable[[list[str], int | None], tuple[list, int]] | None = None  # messagesread.read_new
 
 
 def _iso(dt: datetime) -> str:
@@ -145,6 +152,18 @@ def _clean_params(kind: str, p: dict, now: datetime, mem: Memory) -> dict:
                 break
         else:
             raise ValueError("a battery watch needs below or above (a percent)")
+    elif kind == "messages":
+        from jarvis.messagesread import MAX_TARGETS
+        if not config.MESSAGES_WATCH:
+            raise ValueError("Messages watches are turned off (MESSAGES_WATCH=0)")
+        raw = p.get("from")
+        raw = [raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []
+        names = list(dict.fromkeys(t for t in (_text(x, 80) for x in raw) if t))
+        if not names:
+            raise ValueError("a Messages watch needs the exact sender (phone or email) or group chat name to watch")
+        if len(names) > MAX_TARGETS:
+            raise ValueError(f"a Messages watch can name at most {MAX_TARGETS} senders or chats")
+        out = {"from": names}
     else:
         raise ValueError(f"unknown watch type {kind!r} ({', '.join(TYPES)})")
     if (between := p.get("between")):
@@ -179,6 +198,10 @@ def create(mem: Memory, name: str, kind: str, params: dict, now: datetime, inter
     name = _text(name, 60)
     if not name:
         raise ValueError("a watch needs a short name")
+    if kind == "messages" and not trusted:
+        raise ValueError("a Messages watch can only be set when he asks for it himself")
+    if kind == "messages" and follow_up:
+        raise ValueError("a Messages watch only alerts him; a reply is a separate text he asks for")
     if len(active(mem)) >= config.WATCHES_MAX_ACTIVE:
         raise ValueError(f"already {config.WATCHES_MAX_ACTIVE} watches running; cancel one first")
     clean = _clean_params(kind, params or {}, now, mem)
@@ -194,6 +217,8 @@ def create(mem: Memory, name: str, kind: str, params: dict, now: datetime, inter
     if kind == "time":
         until = max(until, _dt(clean["at"]) + timedelta(hours=1))
         recurring = False
+    if kind == "messages":
+        recurring = True  # one alert per new text until it ends, not just the first
     if not now < until <= now + MAX_EXPIRY + timedelta(days=1):
         raise ValueError("expiry must be in the next 30 days")
     state = _baseline(mem, kind, clean, now)
@@ -268,6 +293,8 @@ def describe(w) -> str:
         text = what + (f" in {p['course']}" if "course" in p else "") + (f" about {p['keyword']!r}" if "keyword" in p else "")
     elif kind == "time":
         text = f"the time {_dt(p['at']).astimezone():%a %b %-d %-I:%M %p}"
+    elif kind == "messages":
+        text = "new texts from " + " or ".join(p["from"])
     else:
         text = f"battery {'below' if 'below' in p else 'above'} {p.get('below', p.get('above'))}%"
     if "between" in p:
@@ -466,8 +493,28 @@ def check_battery(mem: Memory, w, p: dict, state, now: datetime, src: Sources) -
     return Result(cond and state != "true", f"battery at {level}% ({how})", new)
 
 
+def check_messages(mem: Memory, w, p: dict, state, now: datetime, src: Sources) -> Result:
+    """Only the senders or chats he named, only rows newer than the last seen. state: {"last": id}."""
+    from jarvis.messagesread import MessagesUnreadable, read_new
+    state = state if isinstance(state, dict) else {}
+    if not config.MESSAGES_WATCH:
+        return Result(False, state=state)
+    try:
+        texts, last = (src.read_messages or read_new)(p.get("from") or [], state.get("last"))
+    except MessagesUnreadable as e:
+        if not state.get("unreadable"):  # say it once, then wait quietly for him to grant access
+            mem.log("watch", f"'{w['name']}': {e}")
+            mem.raise_alert("high", f"👁 {w['name']}: {e}, sir.", f"watch-unreadable:{w['id']}")
+        return Result(False, state=state | {"unreadable": True})
+    new = {"last": last}
+    if state.get("last") is None:
+        return Result(False, state=new)  # first look: texts already there aren't news
+    each = [(t.rowid, f"new text from {t.target}: {_text(t.text, 80) or '(no text, maybe a photo)'}") for t in texts]
+    return Result(bool(each), f"{len(each)} new text{'s' * (len(each) != 1)}", new, each=each)
+
+
 CHECKERS = {"location": check_location, "email": check_email, "screen": check_screen, "web": check_web,
-            "canvas": check_canvas, "time": check_time, "battery": check_battery}
+            "canvas": check_canvas, "time": check_time, "battery": check_battery, "messages": check_messages}
 
 
 # ----- the gate and the pass -----
@@ -488,6 +535,15 @@ def gate(w, p: dict, result: Result, judge) -> tuple[bool, str]:
         return True, f" (couldn't double-check: {str(e)[:60]})"
     yes = answer.confidence if answer.value else 1 - answer.confidence
     return yes >= JUDGE_AT, ""
+
+
+def _fire_messages(mem: Memory, w, result: Result) -> None:
+    """One alert per text, to Telegram and voice only. Chat history and the log get the watch's
+    name and a count, never what the text said."""
+    for rowid, summary in result.each:
+        mem.raise_alert("high", f"👁 {w['name']}: {summary}", f"watch:{w['id']}:msg:{rowid}")
+    mem.add_chat("assistant", f"👁 {w['name']}: told you about {result.summary} in Telegram.")
+    mem.log("watch", f"'{w['name']}' triggered: {result.summary}")
 
 
 def _fire(mem: Memory, w, p: dict, summary: str, now: datetime) -> None:
@@ -528,7 +584,8 @@ def run_due(mem: Memory, now: datetime, src: Sources | None = None, judge=None) 
             result = CHECKERS[w["type"]](mem, w, p, state, now, src)
             hit, note = gate(w, p, result, judge)
         except Exception as e:  # one broken source shouldn't stop the others
-            mem.log("watch", f"'{w['name']}' check failed: {str(e)[:150]}")
+            why = type(e).__name__ if w["type"] == "messages" else str(e)[:150]  # no text in the log
+            mem.log("watch", f"'{w['name']}' check failed: {why}")
             continue
         checked += 1
         status = "fired" if hit and not w["recurring"] else "active"
@@ -536,7 +593,10 @@ def run_due(mem: Memory, now: datetime, src: Sources | None = None, judge=None) 
                        (_iso(now), json.dumps(result.state) if result.state is not None else None, status,
                         _iso(now) if hit else w["fired_at"], w["id"]))
         mem.db.commit()
-        if hit:
+        if hit and w["type"] == "messages":
+            _fire_messages(mem, w, result)
+            fired += 1
+        elif hit:
             _fire(mem, w, p, result.summary + note, now)
             fired += 1
     return f"checked {checked}, triggered {fired}" + (f", expired {expired}" if expired else "")
