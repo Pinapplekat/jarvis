@@ -90,6 +90,15 @@ def notify_pending(mem: Memory, tg: TelegramClient, say: Callable[[str], None] |
     from jarvis.terminal import notify_commands
     count = notify_commands(mem, tg, say=say)
     for action in mem.unnotified_actions():
+        if action["kind"] == "rule_change":  # his approval rules: the before/after, and only his Yes applies it
+            from jarvis.rules import format_request as format_rule
+            aid = action["id"]
+            tg.send(format_rule(action), buttons=[("Yes ✅", f"rule_yes:{aid}"), ("Not now", f"rule_no:{aid}")])
+            if say:
+                say("Sir, a change to my approval rules is waiting for your tap in Telegram.")
+            mem.mark_notified(aid)
+            count += 1
+            continue
         if action["kind"] in SIRI_KINDS:
             from jarvis.siri import format_request
             aid = action["id"]
@@ -234,8 +243,12 @@ def _handle(mem: Memory, tg: TelegramClient, u: Update, on_text=None, on_button=
         if not raw_id.isdigit():
             tg.answer(u.callback_id, "Unknown button")
             return False
-        if verb not in ("approve", "reject"):
+        if verb in ("rule_yes", "rule_no"):  # only a tap applies a rule change, never typed words
+            from jarvis.rules import handle_button as handle_rule
+            toast = handle_rule(mem, verb, int(raw_id))
+        elif verb not in ("approve", "reject"):
             toast = on_button(verb, int(raw_id)) if on_button else "Unknown button"
+        if verb not in ("approve", "reject"):
             tg.answer(u.callback_id, toast)
             if u.message_id and toast not in ("Unknown button", "Already handled"):
                 tg.edit(u.message_id, f"{u.message_text or ''}\n\n— {toast}")

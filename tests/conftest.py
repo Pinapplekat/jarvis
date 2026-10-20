@@ -46,6 +46,10 @@ def _no_real_logs_or_state(monkeypatch, tmp_path):
     monkeypatch.setattr(selfedit, "STATUS", tmp_path / "build-test" / "status.json")
     monkeypatch.setattr(selfedit, "LOG", tmp_path / "selfedit-test.log")
     monkeypatch.setattr(browser, "SITES", tmp_path / "browser-sites-test.json")
+    from jarvis import rules
+    monkeypatch.setattr(rules, "PATH", tmp_path / "rules-test" / "rules.json")
+    monkeypatch.setattr(rules, "LOG", tmp_path / "rules-test" / "rules_log.jsonl")
+    monkeypatch.setattr(rules, "VERSIONS", tmp_path / "rules-test" / "versions")
 
 
 class FakeKeychain:

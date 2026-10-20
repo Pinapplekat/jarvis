@@ -52,7 +52,8 @@ HOME = Path.home()
 SECRET_DIRS = [HOME / ".ssh", HOME / ".gnupg", HOME / ".aws", HOME / ".config/gh", HOME / ".docker",
                HOME / "Library/Keychains", HOME / "Library/Cookies", HOME / "Library/Messages",
                HOME / "Library/Application Support/Google/Chrome", HOME / "Library/Safari",
-               HOME / "Library/Application Support/Firefox", config.BROWSER_PROFILE]
+               HOME / "Library/Application Support/Firefox", config.BROWSER_PROFILE,
+               config.DATA_DIR / "approval-rules"]  # rules.RULES_DIR: changed only with his yes, never by a command
 
 
 def _sb(path) -> str:

@@ -265,23 +265,25 @@ def _runner_for(route, warm, choice: str = "auto"):
 
 
 def _answer(mem: Memory, text: str, on_progress=lambda: None, spoken: bool = False, warm=None,
-            on_first=None, on_text=None, phone: bool = False, send_photo=None, on_draft=None) -> str:
+            on_first=None, on_text=None, phone: bool = False, send_photo=None, on_draft=None,
+            from_telegram: bool = False) -> str:
     """One chat turn with full context. Shared by Telegram (typed or voice), the desk mic and
-    phone calls.
+    phone calls. `from_telegram`: his own message in the Telegram chat (rule changes start only there).
     `on_first(sentence)` fires as soon as the reply's first sentence has streamed in;
     `on_text(so_far)` gets all of the streaming reply text (the desk mic speaks it as it comes);
     `on_draft(so_far)` gets it word by word, every round, for a screen (the HUD, the inbox)."""
     from jarvis import timing
     own = timing.ensure("phone" if phone else "voice_note" if spoken else "telegram")
     try:
-        return _answer_timed(mem, text, on_progress, spoken, warm, on_first, on_text, phone, send_photo, on_draft)
+        return _answer_timed(mem, text, on_progress, spoken, warm, on_first, on_text, phone, send_photo, on_draft,
+                             from_telegram)
     finally:
         if own:
             timing.finish(mem)
 
 
 def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_first, on_text, phone: bool,
-                  send_photo, on_draft=None) -> str:
+                  send_photo, on_draft=None, from_telegram: bool = False) -> str:
     import time
 
     from jarvis import judge, router, timing
@@ -347,7 +349,8 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
     reply = respond(mem, message, now, deadlines_text, runner=runner, on_progress=on_progress,
                     inbox_text=inbox, activity_text=activity, blocks=blocks,
                     on_text=stream, on_draft=on_draft, spotter=_page_spotter(), send_photo=send_photo, idle=_idle_reader(),
-                    peek_wait=peek_wait, vision=warm_vision(), judge=judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])))
+                    peek_wait=peek_wait, vision=warm_vision(), judge=judge.engine(on_fallback=lambda e: mem.log("jev_fallback", str(e)[:200])),
+                    from_telegram=from_telegram and not phone)
     total = time.time() - started
     first_at = f"{first.at - started:.1f}s" if first and first.at else "-"
     # Timings and choices only; never the message text.
@@ -544,7 +547,8 @@ def _listen(mem: Memory) -> None:
                     sent["id"], sent["text"] = tg.send(sentence), sentence
 
             reply = _answer(mem, update.text, on_progress=tg.typing, spoken=update.via_voice, warm=warm,
-                            on_first=None if streams else first_out, on_draft=streams, send_photo=tg.send_photo)
+                            on_first=None if streams else first_out, on_draft=streams, send_photo=tg.send_photo,
+                            from_telegram=source == "telegram")
             if streams:
                 tg.finish(reply)
             elif sent:  # buttons and plans below must still go out, so no early return
@@ -944,6 +948,9 @@ def main() -> None:
     pl = sub.add_parser("plans", help="Improvement plans JARVIS proposed (approved ones are built in Claude Code)")
     pl.add_argument("action", nargs="?", choices=["list", "show", "done"], default="list")
     pl.add_argument("id", nargs="?")
+    ru = sub.add_parser("rules", help="JARVIS's approval rules: show them, the change log, or undo a change")
+    ru.add_argument("action", nargs="?", choices=["show", "log", "revert"], default="show")
+    ru.add_argument("n", nargs="?", help="for revert: the change number (default: the latest)")
     se = sub.add_parser("self-edit", help="Background worker for applying approved plans (off unless JARVIS_REPO is set)")
     se.add_argument("action", choices=["build", "deploy"])
     se.add_argument("id", nargs="?")
@@ -1491,6 +1498,15 @@ def main() -> None:
                                      summary="built in a Claude Code session"):
                 sys.exit(f"No approved plan #{args.id}")
             print(f"Marked #{args.id} as built")
+        return
+    if args.cmd == "rules":
+        from jarvis import rules
+        if args.action == "show":
+            print(rules.show_text() + f"\n\nFile: {rules.PATH}")
+        elif args.action == "log":
+            print(rules.log_text())
+        else:  # stricter applies now; looser waits for his tap in Telegram
+            print(rules.revert(mem, int(args.n) if args.n else None, approved_by="Elijah (CLI)"))
         return
     if args.cmd == "self-edit":
         from jarvis import selfedit

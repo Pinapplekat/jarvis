@@ -404,19 +404,29 @@ def review(judge, goal: str, blocked: dict, root: Path,
     Jev grades the risk tier: low or medium (and clearly what Elijah asked for) runs at once and
     he hears afterwards what it did; high, critical, unsure or any failure asks him. Elijah's side
     of the line (terminal.elijahs_call) is never graded: it always asks him. The stated reason is
-    untrusted, so it can't set its own tier."""
+    untrusted, so it can't set its own tier. Elijah's approval rules (jarvis/rules.py) come next:
+    "auto" runs without Jev (opening a web page), "ask" always asks him."""
+    from jarvis import rules
     from jarvis.judge import grade_command
     from jarvis.terminal import classify
     command = str(blocked.get("command", ""))
     v = classify(command, Path(blocked.get("cwd") or root), root)
     if v.kind == "auto":  # safe by the rules, just outside the session's own sandbox
         return True, v.reason
-    if not config.SELF_APPROVE or judge is None:
+    if not config.SELF_APPROVE:
         return False, "JARVIS doesn't approve steps itself right now"
     if v.kind != "approval":
         return False, v.reason
     if v.yours:
         return False, f"Elijah's call: {v.yours}"
+    action = rules.command_action(v.argv)
+    level = rules.get_level(action)
+    if level == "ask":
+        return False, f"your rules say ask first ({action})"
+    if level == "auto":
+        return True, f"your rules: {action} is fine without asking"
+    if judge is None:
+        return False, "JARVIS doesn't approve steps itself right now"
     state = (f"Elijah asked JARVIS for this (his words, trusted):\n<goal>\n{goal}\n</goal>\n\n"
              f"{asker}, working in {root}, wants to run:\n$ {command}\n"
              f"in {blocked.get('cwd') or root}\nWhy JARVIS's rules couldn't place it: {v.reason}\n"

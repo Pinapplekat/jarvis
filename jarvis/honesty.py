@@ -45,7 +45,8 @@ SUCCESS = re.compile(r"\b(?:playing|played|paused|resumed|skipp(?:ed|ing)|sent|s
                      r"done|redoing|revising|putting|put it on|scheduled|added|saved|texted|calling|"
                      r"on it|here it is|here you go|here you are)\b", re.I)
 
-QUEUED_KINDS = {"draft_email", "send_text", "make_call", "run_command", "plan_improvement", "revise_plan"}
+QUEUED_KINDS = {"draft_email", "send_text", "make_call", "run_command", "plan_improvement", "revise_plan",
+                "rule_change", "rule_revert"}
 WORK_KINDS = {"start_task", "plan_improvement", "run_command", "revise_plan"}
 FAILED_AS = {
     "play_music": "start the music", "media_control": "do that with the music",
@@ -55,6 +56,7 @@ FAILED_AS = {
     "cancel_reminder": "cancel that reminder", "run_command": "run that command", "attach_image": "send that picture",
     "add_deadline": "add that deadline", "deadline_done": "mark that done", "show": "show that",
     "switch_model": "switch models", "dont_remind": "note that", "deploy_build": "deploy that", "mac": "do that on the Mac", "click": "click that", "panel": "do that with the panel",
+    "rule_change": "set up that rule change", "rule_revert": "undo that rule change",
 }
 
 
