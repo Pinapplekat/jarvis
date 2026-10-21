@@ -497,7 +497,8 @@ def _listen(mem: Memory) -> None:
     if not tg:
         sys.exit("Telegram isn't set up: add TELEGRAM_BOT_TOKEN to .env, then run jarvis telegram-setup")
     warm = _warm(mem)
-    from jarvis import tasks
+    from jarvis import camera, tasks
+    camera.sweep()  # camera stills a crash left behind
     worker = _task_worker(mem, tg)
     if (n := tasks.recover(mem)):
         print(f"requeued {n} task(s) cut off by a restart", flush=True)
@@ -1391,6 +1392,8 @@ def main() -> None:
         log = lambda s: print(s, flush=True)  # noqa: E731
         warm = _warm(mem)
         tg = _messenger()
+        from jarvis import camera
+        camera.sweep()  # camera stills a crash left behind
 
         def after_reply():  # helper reports that waited while JARVIS was talking: text only, since
             if tg:          # the mic is open for his follow-up and mustn't hear JARVIS's own voice

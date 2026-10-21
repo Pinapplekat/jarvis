@@ -58,6 +58,7 @@ FAILED_AS = {
     "switch_model": "switch models", "dont_remind": "note that", "deploy_build": "deploy that", "mac": "do that on the Mac", "click": "click that", "panel": "do that with the panel",
     "rule_change": "set up that rule change", "rule_revert": "undo that rule change",
     "watch_create": "set up that watch", "watch_cancel": "stop that watch",
+    "look_through_camera": "look through the camera",
 }
 
 

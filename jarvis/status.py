@@ -31,6 +31,7 @@ ACTIONS: dict[str, tuple[str, str]] = {
     "thinking": ("brain.head.profile", "Thinking"),
     "screenshot": ("camera.viewfinder", "Taking a screenshot"),
     "look_at_screen": ("eye", "Looking at your screen"),
+    "look_through_camera": ("camera", "Looking through the camera"),
     "peek": ("eye", "Glancing at your screen"),
     "open_url": ("globe", "Reading a web page"),
     "browse": ("globe", "Opening a web page"),

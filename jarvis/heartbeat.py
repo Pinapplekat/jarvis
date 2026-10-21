@@ -42,7 +42,7 @@ HEALTH_EVENTS = {"jev_fallback": "Jev (fast decisions)", "route_failed": "Jev (r
                  "listen_error": "the Telegram connection"}
 QUIET_EVENTS = {"heartbeat", "answered", "first_audio", "spoke", "tick_error", "canvas_sync",
                 "warm_fallback", "jev_fallback", "inspect", "web_open", "reported", "route_failed",
-                "listen_error", "self_approved", "self_approve_declined", "screenshot", "report_compose_failed"}
+                "listen_error", "self_approved", "self_approve_declined", "screenshot", "camera", "report_compose_failed"}
 DUE_BUCKETS = (1, 3, 6, 12, 24, 48)  # hours; crossing one is a change worth a fresh look
 DISMISSIVE = re.compile(r"\b(i know|i'?m aware|already|done it|did it|handled|dealt with|took care|"
                         r"don'?t worry|not an emergency|stop (?:reminding|bringing)|leave it|i got it|"

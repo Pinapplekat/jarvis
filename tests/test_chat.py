@@ -407,6 +407,80 @@ def test_screen_text_cant_act_and_a_failed_look_is_said_plainly(screen_shot):
     assert reply.startswith("I couldn't see your screen just now") and not screen_shot[-1].exists()
 
 
+@pytest.fixture
+def camera_shot(tmp_path, monkeypatch):
+    """A fake capture_frame: writes a temp still and records where."""
+    from jarvis import camera
+    taken = []
+
+    def capture(run=None, tool=None):
+        path = tmp_path / f"camera-{len(taken)}.jpg"
+        path.write_bytes(b"\xff\xd8CAM")
+        taken.append(path)
+        return path
+    monkeypatch.setattr(camera, "capture_frame", capture)
+    monkeypatch.setattr(config, "CAMERA", True)
+    return taken
+
+
+CAMERA_LOOK = {"reply": "Having a look, sir.", "actions": [{"type": "look_through_camera", "question": "the label"}]}
+
+
+def test_camera_look_answers_privately_says_so_and_deletes_the_picture(camera_shot):
+    m = Memory(":memory:")
+    run, looks, sent = scripted(CAMERA_LOOK), [], []
+
+    def vision(system, prompt, image):
+        looks.append((system, prompt, image.read_bytes()))
+        return "A bottle of ibuprofen, 200 mg, sir."
+    reply = respond(m, "let me show you this, what is it?", NOW, "", runner=run, vision=vision,
+                    send_photo=lambda data, caption: sent.append(data), channel="telegram")
+    assert reply.startswith("A bottle of ibuprofen") and "used the camera" in reply
+    system, prompt, data = looks[0]
+    assert data == b"\xff\xd8CAM" and "camera" in system and "untrusted data" in system and "the label" in prompt
+    assert not camera_shot[0].exists() and sent == [] and m.pending_actions() == []
+    camera_logs = [e["content"] for e in m.recent_events(50) if e["kind"] == "camera"]
+    assert len(camera_logs) == 1 and "ibuprofen" not in camera_logs[0]  # only that a look happened
+    assert all("ibuprofen" not in e["content"] for e in m.recent_events(50))
+
+
+def test_camera_picture_is_deleted_when_the_look_fails(camera_shot):
+    m = Memory(":memory:")
+
+    def broken(system, prompt, image):
+        raise RuntimeError("Claude error: overloaded")
+    reply = respond(m, "what am I holding?", NOW, "", runner=scripted(CAMERA_LOOK), vision=broken, channel="mic")
+    assert reply.startswith("I couldn't see through the camera") and not camera_shot[0].exists()
+
+
+def test_denied_camera_permission_is_said_plainly(monkeypatch):
+    from jarvis import camera
+    monkeypatch.setattr(config, "CAMERA", True)
+    monkeypatch.setattr(camera, "capture_frame", lambda run=None, tool=None: (_ for _ in ()).throw(
+        RuntimeError("camera not allowed (allow it in System Settings > Privacy & Security > Camera)")))
+    reply = respond(Memory(":memory:"), "can you see this?", NOW, "", runner=scripted(CAMERA_LOOK),
+                    vision=lambda *a: pytest.fail("nothing to look at"), channel="telegram")
+    assert "camera not allowed" in reply and "used the camera" not in reply
+
+
+def test_camera_needs_his_direct_request_from_his_own_chat(camera_shot, monkeypatch):
+    no_look = lambda *a: pytest.fail("no camera look")  # noqa: E731
+    answer = {"reply": "Nothing to look at yet, sir.", "actions": []}
+    # His chat, but he didn't ask to show anything (the model proposed it on its own).
+    run = scripted(CAMERA_LOOK, answer)
+    respond(Memory(":memory:"), "how's my week looking?", NOW, "", runner=run, vision=no_look, channel="telegram")
+    assert "not used" in run.prompts[1] and "didn't ask" in run.prompts[1]
+    # Not his chat at all: a schedule, tick, email or background job has no channel.
+    run = scripted(CAMERA_LOOK, answer)
+    respond(Memory(":memory:"), "let me show you this", NOW, "", runner=run, vision=no_look)
+    assert "not used" in run.prompts[1]
+    # Switched off.
+    monkeypatch.setattr(config, "CAMERA", False)
+    run = scripted(CAMERA_LOOK, answer)
+    respond(Memory(":memory:"), "let me show you this", NOW, "", runner=run, vision=no_look, channel="telegram")
+    assert camera_shot == []
+
+
 def peek_log(m):
     return [e["content"] for e in reversed(m.recent_events(100)) if e["kind"] == "screen_peek"]
 
