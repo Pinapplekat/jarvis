@@ -559,6 +559,15 @@ def look_through_camera(message: str, question: str, vision: Vision | None = Non
         path.unlink(missing_ok=True)
 
 
+def camera_step(message: str, channel: str | None, question: str, vision: Vision | None = None) -> tuple[str, str]:
+    """The agent loop's camera step: ("refused", why) or ("ok", what was seen). The gate and the
+    capture stay here, so nothing outside chat.py reaches the camera."""
+    refused = camera_refusal(message, channel)
+    if refused:
+        return "refused", refused
+    return "ok", look_through_camera(message, question, vision)
+
+
 CAMERA_USED = "I used the camera for one picture; it's already deleted."
 
 PEEK_QUESTION = ("For your own reference before you reply (he won't see this): in a few short lines, what on "
@@ -1096,7 +1105,16 @@ def _busy(mem: Memory) -> bool:
         return False
 
 
-def respond(mem: Memory, message: str, now: datetime, deadlines_text: str,
+def respond(mem: Memory, message: str, now: datetime, deadlines_text: str, **kw) -> str:
+    """Answer one message: the agent loop (jarvis.loop) with AGENT_LOOP on, else the one-pass
+    respond_legacy. Both take the same arguments."""
+    if config.AGENT_LOOP:
+        from jarvis import loop
+        return loop.respond(mem, message, now, deadlines_text, **kw)
+    return respond_legacy(mem, message, now, deadlines_text, **kw)
+
+
+def respond_legacy(mem: Memory, message: str, now: datetime, deadlines_text: str,
             runner: Runner = run_claude, fetcher: Callable[[str], Page] = fetch_page,
             on_progress: Callable[[], None] = lambda: None, inbox_text: str = "(not checked)",
             activity_text: str = "(not observed)", blocks: frozenset[str] | None = None,

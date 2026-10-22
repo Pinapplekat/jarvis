@@ -212,6 +212,18 @@ CREATE TABLE IF NOT EXISTS watches (
     fired_at TEXT,
     status TEXT NOT NULL DEFAULT 'active'  -- active | fired | expired | cancelled
 );
+
+-- Chat turns waiting on his yes, a task or a background job (jarvis.loop). Each resumes at most
+-- once: whoever flips consumed 0 -> 1 carries it on.
+CREATE TABLE IF NOT EXISTS parked_turns (
+    id INTEGER PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    deadline TEXT NOT NULL,          -- after this, he's told what's still pending
+    channel TEXT,                    -- telegram | mac | mic | call
+    message TEXT NOT NULL,
+    state TEXT NOT NULL,             -- JSON: turn log, findings, what it waits on, active seconds
+    consumed INTEGER NOT NULL DEFAULT 0
+);
 """
 
 MIGRATIONS = [

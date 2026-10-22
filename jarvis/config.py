@@ -153,6 +153,15 @@ COMMANDS = os.getenv("COMMANDS", "1") == "1"                # terminal commands 
 COMMAND_APPROVAL_MINUTES = int(os.getenv("COMMAND_APPROVAL_MINUTES", "30"))  # unanswered requests expire
 JOB_STALL_MINUTES = int(os.getenv("JOB_STALL_MINUTES", "10"))  # ping once if a background job prints nothing this long
 
+# Chat turns as an explicit agent loop (jarvis/loop.py): every action is a step whose result JARVIS
+# sees, Jev picks the next move, and a turn waiting on him or a helper is parked and resumed.
+# 0 = the old one-pass respond. A parked turn gives up after COMMAND_APPROVAL_MINUTES.
+AGENT_LOOP = os.getenv("AGENT_LOOP", "1") == "1"
+NEXT_STEP_CONFIDENCE = float(os.getenv("NEXT_STEP_CONFIDENCE", "0.6"))  # below this, Jev's pick means respond
+LOOP_NO_PROGRESS_STEPS = int(os.getenv("LOOP_NO_PROGRESS_STEPS", "3"))  # steps in a row with no new ok result
+LOOP_MAX_STEPS = int(os.getenv("LOOP_MAX_STEPS", "20"))
+LOOP_BUDGET_SECONDS = float(os.getenv("LOOP_BUDGET_SECONDS", "90"))     # active time only, not waiting
+
 # Siri-style actions: texts and calls wait for Elijah's yes; alarms, timers and music just run.
 SIRI = os.getenv("SIRI", "1") == "1"
 SIRI_TIMER_SHORTCUT = os.getenv("SIRI_TIMER_SHORTCUT", "")  # a Shortcut that starts a Clock timer (input: seconds)

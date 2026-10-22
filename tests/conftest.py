@@ -52,6 +52,15 @@ def _no_real_logs_or_state(monkeypatch, tmp_path):
     monkeypatch.setattr(rules, "VERSIONS", tmp_path / "rules-test" / "versions")
 
 
+@pytest.fixture(autouse=True)
+def _one_pass_chat(monkeypatch):
+    """The chat tests written for the one-pass respond (first sentence streamed early, a look's
+    answer as the reply) keep testing it: AGENT_LOOP=0 is still a supported path. The agent loop
+    is tested in tests/test_loop.py, which turns it on with a mocked Jev."""
+    from jarvis import config
+    monkeypatch.setattr(config, "AGENT_LOOP", False)
+
+
 class FakeKeychain:
     def __init__(self):
         self.items = {}

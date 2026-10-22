@@ -459,15 +459,23 @@ def _task_worker(mem: Memory, tg):
                   log=lambda s: print(s, flush=True), say=_say_if_present)
 
 
-def _carry_on(worker):
-    """After a command Elijah answered: a task waiting on it resumes; a build gets the output."""
-    from jarvis import tasks
+def _carry_on(worker, tg=None):
+    """After a command Elijah answered: a task waiting on it resumes; a build gets the output; a
+    chat turn parked on it (jarvis.loop) carries on, right away when Telegram is at hand."""
+    from jarvis import loop, tasks
 
     def carry_on(db, payload, action_id, outcome):
         if payload.get("build_id"):
             db.set_kv(f"agent_outcome:{action_id}", outcome[:6000])
         if tasks.requeue(db, payload, action_id, outcome) and worker:
             tasks.start_queued(db, worker)
+        if not payload.get("task_id") and not payload.get("build_id"):
+            loop.save_outcome(db, action_id, outcome)
+            if tg:
+                try:
+                    loop.check_parked(db, loop.sender_for(tg))
+                except Exception as e:  # the listener's next pass tries again
+                    db.log("loop_resume_failed", str(e)[:200])
     return carry_on
 
 
@@ -576,7 +584,7 @@ def _listen(mem: Memory) -> None:
         def on_button(verb, edit_id):
             if verb.startswith("cmd_"):
                 from jarvis import terminal
-                return terminal.handle_button(mem, tg, verb, edit_id, on_done=_carry_on(worker))
+                return terminal.handle_button(mem, tg, verb, edit_id, on_done=_carry_on(worker, tg))
             if verb.startswith("plan_"):
                 on_approved = (lambda i: selfedit.queue_approved(mem, tg, i)) if selfedit.enabled() else None
                 return plans.handle_button(mem, verb, edit_id, on_approved)
@@ -616,6 +624,8 @@ def _listen(mem: Memory) -> None:
     from jarvis.reminders import deliver_reminders
     from jarvis.voice import Announcer
     announcer = Announcer(tg, mem)
+    from jarvis import inbox, loop
+    park_send = loop.sender_for(tg, announcer, inbox.MacChat(tg) if config.INBOX else None)
 
     print(f"Listening as chat {config.TELEGRAM_CHAT_ID}", flush=True)
     outage = Outage()
@@ -625,6 +635,8 @@ def _listen(mem: Memory) -> None:
             outbox.flush(mem, tg.send, tz=_now_local().tzinfo)  # anything held while Telegram was unreachable
             deliver_reminders(mem, announcer, _now_local())
             tasks.start_queued(mem, worker)  # tasks from the desk mic, or resumed after an expiry
+            with turn:  # chat turns parked on his yes, a task or a job: carried on (or timed out) first,
+                loop.check_parked(mem, park_send)  # so their reply covers the helper's report
             reports.deliver(mem, announcer.send, send_image=lambda path, caption: attachments.send_image(
                 tg, path, caption, mem))  # what tasks, jobs and builds told JARVIS, in one message, with pictures
             # Short long-poll so reminders go out within ~25s of their time.
