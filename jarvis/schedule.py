@@ -171,6 +171,15 @@ def install(interval: int = 300, listen: bool = True, watch: bool = True, ears: 
         })
     else:
         _unload(INBOX)
+    from jarvis import config as settings
+    if settings.CAMERA and settings.CAMERA_PREVIEW:
+        from jarvis import camera
+        try:  # not a background job: opened on demand for each picture (else imagesnap, no preview)
+            camera.build()
+        except (RuntimeError, OSError, subprocess.CalledProcessError) as e:
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            with open(LOG_DIR / "listen.log", "a") as f:
+                f.write(f"camera app not built ({str(e)[:200]}); camera looks use imagesnap with no preview\n")
 
 
 def uninstall() -> bool:

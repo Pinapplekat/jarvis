@@ -40,6 +40,7 @@ def _no_real_logs_or_state(monkeypatch, tmp_path):
     monkeypatch.setattr(inbox, "INBOX_DIR", tmp_path / "inbox-test")
     monkeypatch.setattr(inbox, "FEED", tmp_path / "inbox-test" / "feed.json")
     monkeypatch.setattr(inbox, "REQUESTS", tmp_path / "inbox-test" / "requests")
+    monkeypatch.setattr(inbox, "TURNS", tmp_path / "inbox-test" / "turns")
     from jarvis import jobs
     monkeypatch.setattr(jobs, "JOBS_DIR", tmp_path / "jobs-test")
     monkeypatch.setattr(selfedit, "BUILD_DIR", tmp_path / "build-test")
@@ -50,6 +51,14 @@ def _no_real_logs_or_state(monkeypatch, tmp_path):
     monkeypatch.setattr(rules, "PATH", tmp_path / "rules-test" / "rules.json")
     monkeypatch.setattr(rules, "LOG", tmp_path / "rules-test" / "rules_log.jsonl")
     monkeypatch.setattr(rules, "VERSIONS", tmp_path / "rules-test" / "versions")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_camera_app(monkeypatch):
+    """Tests never open JARVIS Camera.app; the camera tests turn the preview on with a fake app."""
+    from jarvis import camera, config
+    monkeypatch.setattr(config, "CAMERA_PREVIEW", False)
+    monkeypatch.setattr(camera, "_launch", lambda: pytest.fail("the real camera app was opened"))
 
 
 @pytest.fixture(autouse=True)

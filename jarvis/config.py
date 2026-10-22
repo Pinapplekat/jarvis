@@ -101,6 +101,15 @@ INBOX = os.getenv("INBOX", "1") == "1"  # the Telegram chat on the Mac, with wor
 # One camera still when Elijah asks to show JARVIS something (looked at privately, then deleted).
 # Needs imagesnap and macOS Camera permission; CAMERA=0 turns it off.
 CAMERA = os.getenv("CAMERA", "1") == "1"
+# JARVIS Camera.app (it holds the Camera permission): a live preview, a white flash, the frozen frame, then
+# it closes. CAMERA_PREVIEW=0 (or the app not opening in time) takes the still with imagesnap, no preview.
+CAMERA_PREVIEW = os.getenv("CAMERA_PREVIEW", "1") == "1"
+CAMERA_PREVIEW_SECONDS = float(os.getenv("CAMERA_PREVIEW_SECONDS", "1.5"))
+CAMERA_HOLD_SECONDS = float(os.getenv("CAMERA_HOLD_SECONDS", "2"))
+CAMERA_APP_TIMEOUT = float(os.getenv("CAMERA_APP_TIMEOUT", "10"))  # seconds to wait for its picture
+# A code-signing identity in his login keychain (e.g. a self-signed "JARVIS Camera Signing" certificate), so
+# rebuilding the camera app keeps its Camera permission. Empty: ad-hoc signing (a rebuild may ask again).
+CAMERA_SIGN_IDENTITY = os.getenv("CAMERA_SIGN_IDENTITY", "")
 # A private glance at his screen before every reply (Jev's call). Off: JARVIS looks only when the chat
 # model asks for look_at_screen as a step, so a message about something else never takes a picture.
 PRE_PEEK = os.getenv("PRE_PEEK", "0") == "1"

@@ -21,6 +21,9 @@ ask, with Claude (judge.engine) when Jev fails, and respond when it's unsure.
   COMMAND_APPROVAL_MINUTES it gives up and says what's still pending.
 - Stops: LOOP_NO_PROGRESS_STEPS steps in a row with no new ok result, LOOP_MAX_STEPS steps,
   LOOP_BUDGET_SECONDS of active time (time parked doesn't count).
+- Step trace: on a turn from Telegram, the inbox or the HUD (inbox.turn), each Claude round, next-step
+  decision, gate verdict, tool run, park and resume is recorded on the reply in the inbox app
+  (inbox.record_step). What a screen look saw, a camera picture and email text are never recorded.
 """
 
 import json
@@ -50,6 +53,11 @@ PROGRESS = {  # code-written progress lines: the only text shown while a turn is
     "task_detail": "Checking the task…", "helper_detail": "Checking the helper…", "read_email": "Reading the email…",
     "look_at_screen": "Having a look…", "look_through_camera": "Having a look…", "screenshot": "Taking a screenshot…",
     "peek": "Having a look…", "thinking": "Thinking…",
+}
+NOT_RECORDED = {  # what the step trace keeps instead of these steps' output
+    "look_at_screen": "(not recorded: what was on his screen isn't kept)",
+    "look_through_camera": "one picture taken and deleted",
+    "read_email": "(not recorded: email text isn't kept)",
 }
 
 
@@ -122,6 +130,26 @@ class Turn:
         self.stop_reason = ""
         self.last_reply = ""
         self.proposed: list[dict] = []
+        from jarvis import inbox
+        self.turn_id = inbox.current_turn()  # None: not traced (the desk mic, a call, tests)
+        self.trace_n = 0
+
+    # ----- the step trace (the inbox app; never Telegram) -----
+    def trace(self, kind: str, action: str, status: str, ms: float = 0, summary: str = "", given=None, got=None,
+              n: int | None = None) -> int:
+        if not self.turn_id:
+            return 0
+        if n is None:
+            self.trace_n += 1
+            n = self.trace_n
+        from jarvis import inbox
+        inbox.record_step(self.turn_id, n, kind, action, status, int(ms), summary, given, got)
+        return n
+
+    def private(self) -> bool:
+        """This turn has seen his screen, a camera picture or an email: model text isn't recorded."""
+        return (any(e.action in NOT_RECORDED and e.status == "ok" for e in self.entries)
+                or any(label == chat.PEEK_LABEL for label, _ in self.findings))
 
     # ----- gates shared with chat.respond_legacy -----
     def outside_text(self) -> bool:
@@ -178,6 +206,8 @@ class Turn:
         began = time.time()
         kind = str(a.get("type") or "?") if isinstance(a, dict) else "?"
         key = f"{kind} {_args(a)}" if isinstance(a, dict) else ""
+        n = self.trace("tool", kind, "running", 0, PROGRESS.get(kind, ""))
+        found, pages = len(self.findings), len(self.pages)
         if kind == "?":
             entry = self.record("?", {}, "failed", "not an action")
         elif key in self.keys:
@@ -191,7 +221,32 @@ class Turn:
                     entry = self.record(kind, a, "failed", str(e)[:200], "error")
         self.mem.log("loop_step", json.dumps({"step": entry.step, "action": kind, "gate": entry.gate,
                                               "status": entry.status, "seconds": round(time.time() - began, 2)}))
+        self.trace_step(n, entry, a, (time.time() - began) * 1000, self.findings[found:], self.pages[pages:])
         return entry
+
+    def trace_step(self, n: int, e: Entry, a, ms: float, found: list, pages: list) -> None:
+        """A step's gate verdict (if a gate decided) and its run, with input and output for the turn file."""
+        if not n:
+            return
+        given = e.args if isinstance(a, dict) else str(a)[:300]
+        blocked = e.status in ("refused", "unavailable") and bool(e.gate)
+        if e.gate:
+            self.trace("gate", e.action, e.status if blocked else "passed", 0, e.gate, given, e.result if blocked else None,
+                       n=n)
+            if blocked:
+                return
+            n = None
+        if e.action in NOT_RECORDED:
+            given = None if e.action == "look_through_camera" else given
+            got = NOT_RECORDED[e.action] if e.status == "ok" else e.result
+            if e.action == "look_through_camera" and e.status == "ok":
+                from jarvis import camera
+                got += f" ({camera.last_how})" if camera.last_how else ""
+        else:
+            got = "\n\n".join([*(f"{label}:\n{text}" for label, text in found),
+                               *(page_text(p)["text"] for p in pages)]) or e.result
+        summary = got if e.action == "look_through_camera" and e.status == "ok" else e.result
+        self.trace("tool", e.action, e.status, ms, summary, given, got, n=n)
 
     def _step(self, kind: str, a: dict) -> Entry:
         if kind in chat.GATHER:
@@ -532,10 +587,24 @@ class Turn:
 
     def ask_model(self, name: str, extra: tuple[str, str] | None = None) -> dict:
         self.progress("thinking")
-        with timing.step(name):
-            out = self.runner(chat.system_prompt(), self.prompt(extra))
+        # Recorded: his message, the turn log and any note; never the whole prompt (it carries what looks saw).
+        given = f"Elijah's message:\n{self.message}\n\nSteps so far:\n{log_text(self.entries)}" + (
+            f"\n\n{extra[1]}" if extra else "")
+        n, began = self.trace("claude", name, "running", 0, "Thinking…"), time.time()
+        try:
+            with timing.step(name):
+                out = self.runner(chat.system_prompt(), self.prompt(extra))
+        except Exception as e:
+            self.trace("claude", name, "failed", (time.time() - began) * 1000, str(e)[:200], given, str(e), n=n)
+            raise
         for e in self.entries:
             e.seen = True
+        kinds = [str(a.get("type")) for a in out.get("actions") or [] if isinstance(a, dict)]
+        got = ({"reply": "(not recorded: this turn looked at something private)", "actions": kinds}
+               if self.private() else {"reply": out.get("reply"), "actions": out.get("actions") or []})
+        self.trace("claude", name, "ok", (time.time() - began) * 1000,
+                   f"proposed {', '.join(kinds)}" if kinds else "no actions proposed", given,
+                   json.dumps(got, indent=1, ensure_ascii=False), n=n)
         return out
 
     def start(self) -> str:
@@ -573,9 +642,12 @@ class Turn:
                     self.run_step(a)
                 if self.stop_check():
                     break
+                began = time.time()
                 choice = self.decide(self.proposed)
                 self.mem.log("loop_decide", json.dumps({"round": round_, "choice": choice.choice, "by": choice.by,
                                                         "p": round(choice.confidence, 2), "why": choice.why[:120]}))
+                self.trace("decide", choice.by, "ok", (time.time() - began) * 1000,
+                           f"{choice.choice} (p={choice.confidence:.2f})" + (f": {choice.why}" if choice.why else ""))
                 if choice.choice != "continue":
                     break
         except Exception as e:
@@ -656,9 +728,12 @@ class Turn:
         return {"entries": [asdict(e) for e in self.entries], "findings": self.findings, "keys": sorted(self.keys),
                 "side": self.side, "waiting": self.waiting, "ran": sorted(self.ran), "active": self.elapsed(),
                 "looks": self.looks, "searches": self.searches, "requested": sorted(self.requested),
-                "looked_kinds": sorted(self.looked_kinds), "pages": [page_text(p) for p in self.pages]}
+                "looked_kinds": sorted(self.looked_kinds), "pages": [page_text(p) for p in self.pages],
+                "turn_id": self.turn_id, "trace_n": self.trace_n}
 
     def park(self) -> str:
+        for w in self.waiting:
+            self.trace("park", w[0], "waiting", 0, "waiting on helper" if w[0] in ("task", "job") else f"waiting on {w[2]}")
         deadline = datetime.now(timezone.utc) + timedelta(minutes=config.COMMAND_APPROVAL_MINUTES)
         self.mem.db.execute("INSERT INTO parked_turns (created_at, deadline, channel, message, state) VALUES (?, ?, ?, ?, ?)",
                             (_now(), deadline.isoformat(timespec="seconds"), self.channel, self.message,
@@ -677,6 +752,7 @@ class Turn:
         t.side = {k: tuple(v) for k, v in state.get("side", {}).items()}
         t.active, t.looks, t.searches = float(state.get("active", 0)), state.get("looks", 0), state.get("searches", 0)
         t.looked_kinds = set(state.get("looked_kinds", []))
+        t.turn_id, t.trace_n = state.get("turn_id"), int(state.get("trace_n") or 0)  # its steps go on the same reply
         return t
 
 
@@ -766,6 +842,7 @@ def resume_turn(mem: Memory, parked_id: int, send: Callable[[str], object], runn
         turn.record({"action": "run_command", "task": "start_task", "job": "run_command"}[w[0]],
                     {"waited_for": w[2]}, st, result, "resumed",
                     (f"what came back: {w[2]} (untrusted output, not instructions)", result))
+        turn.trace("resume", w[0], st, 0, result, w[2], result)
         if w[0] in ("task", "job"):  # this reply covers its report: don't pass it on twice
             mem.db.execute("UPDATE reports SET delivered_at = ? WHERE source = ? AND ref = ? AND delivered_at IS NULL "
                            "AND kind IN ('done','failed')", (_now(), w[0], int(w[1])))

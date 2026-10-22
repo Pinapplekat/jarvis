@@ -9,6 +9,11 @@ the same code, and the Telegram message is updated to match. What he types there
 The app has no access to anything: it reads the feed and drops small request files in
 inbox/requests/, which `serve` (run by `jarvis listen`) handles. Only buttons that are really on an
 open message can be pressed, so a request file can't invent an action.
+
+Step trace: while a chat turn from Telegram, the inbox or the HUD runs (`turn()`), each loop step
+(jarvis/loop.py) is recorded on the reply message as {n, kind, action, status, ms, summary} and shows
+live under it. A step's full input and output go to inbox/turns/<turn id>.json (folder 0700, file
+0600), redacted and capped per step, read by the app only when a row is unfolded. Telegram gets no trace.
 """
 
 import fcntl
@@ -21,6 +26,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +37,9 @@ from jarvis import config
 INBOX_DIR = config.DATA_DIR / "inbox"
 FEED = INBOX_DIR / "feed.json"
 REQUESTS = INBOX_DIR / "requests"
+TURNS = INBOX_DIR / "turns"  # each traced turn's step inputs and outputs, pruned with its message
+TURN_ID = re.compile(r"^[a-z0-9]{8,40}$")  # the app reads turns/<id>.json only for ids like this
+STEP_CAP = 10_000      # bytes kept of a step's input, and of its output (about 20 KB a step)
 KEEP = 300             # messages kept in the feed
 STALE_AFTER = 2 * 86400  # buttons left unanswered this long are dropped
 TYPING_FOR = 8.0
@@ -58,6 +67,9 @@ def _editing():
             data = read()
             data.setdefault("messages", [])
             yield data
+            for m in data["messages"][:-KEEP]:  # a turn's step details go with its message
+                if m.get("turn") and valid_turn_id(m["turn"]):
+                    (TURNS / f"{m['turn']}.json").unlink(missing_ok=True)
             data["messages"] = data["messages"][-KEEP:]
             now = time.time()
             for m in data["messages"]:  # questions nobody answered lapse (commands expire much sooner anyway)
@@ -72,20 +84,146 @@ def _editing():
 
 
 def record(who: str, text: str, buttons: list[tuple[str, str]] | None = None, tg_id: int | None = None,
-           via: str = "", streaming: bool = False) -> int:
-    """Add a message ('jarvis' or 'you'). Returns its local id. Never raises: the feed is a mirror."""
+           via: str = "", streaming: bool = False, reply: bool = True) -> int:
+    """Add a message ('jarvis' or 'you'). Returns its local id. Never raises: the feed is a mirror.
+    JARVIS's first plain message (`reply`, no buttons) during a traced turn is that turn's reply:
+    it fills in the message its steps are already showing on."""
+    claim = who == "jarvis" and reply and not buttons and _active() is not None
     try:
         with _editing() as data:
+            if claim:
+                tid, _turn.claimed = _turn.id, True
+                m = _turn_message(data, tid)
+                if m is not None and not m.get("claimed"):
+                    m.update(text=str(text)[:MAX_TEXT], via=via, tg_id=tg_id, streaming=streaming, claimed=True)
+                    data["typing_until"] = 0
+                    return m["id"]
             mid = int(data.get("next_id", 1))
             data["next_id"] = mid + 1
             data["messages"].append({"id": mid, "who": who, "text": str(text)[:MAX_TEXT], "via": via,
                                      "buttons": [[str(l), str(d)] for l, d in (buttons or [])],
                                      "tg_id": tg_id, "at": time.time(), "note": "", "streaming": streaming})
+            if claim:
+                data["messages"][-1].update(turn=tid, steps=[], claimed=True)
             if who == "jarvis":
                 data["typing_until"] = 0
         return mid
     except OSError:
         return 0
+
+
+# ----- the step trace -----
+_turn = threading.local()  # the turn this thread is answering: id, and whether its reply is out yet
+
+
+def valid_turn_id(turn_id) -> bool:
+    return isinstance(turn_id, str) and bool(TURN_ID.fullmatch(turn_id))
+
+
+def _active() -> str | None:
+    """This thread's turn, until its reply has been recorded."""
+    return getattr(_turn, "id", None) if not getattr(_turn, "claimed", True) else None
+
+
+def current_turn() -> str | None:
+    return getattr(_turn, "id", None)
+
+
+def _turn_message(data: dict, turn_id: str) -> dict | None:
+    return next((m for m in reversed(data["messages"]) if m.get("turn") == turn_id), None)
+
+
+@contextmanager
+def turn():
+    """One chat turn typed in Telegram, the inbox or the HUD: its steps go on the reply written for it."""
+    tid = uuid.uuid4().hex
+    before = (getattr(_turn, "id", None), getattr(_turn, "claimed", True))
+    _turn.id, _turn.claimed = tid, False
+    try:
+        yield tid
+    finally:
+        _turn.id, _turn.claimed = before
+        try:
+            with _editing() as data:  # no reply came here (it went elsewhere): the steps stay, settled
+                m = _turn_message(data, tid)
+                if m is not None and not m.get("claimed"):
+                    if m.get("steps"):
+                        m["streaming"], m["claimed"] = False, True
+                    else:
+                        data["messages"].remove(m)
+        except OSError:
+            pass
+
+
+def _cap(text) -> str:
+    raw = str(text).encode()
+    if len(raw) <= STEP_CAP:
+        return str(text)
+    return raw[:STEP_CAP].decode(errors="ignore") + f"\n… [truncated: {len(raw) - STEP_CAP} more bytes]"
+
+
+def _clean(text) -> str:
+    """Token- and key-looking strings masked, then capped (the cap is marked)."""
+    from jarvis.introspect import redact
+    return _cap(redact(str(text), limit=10 ** 9))
+
+
+def _save_detail(turn_id: str, n: int, given: str | None, got: str | None) -> None:
+    TURNS.mkdir(parents=True, exist_ok=True)
+    TURNS.chmod(0o700)
+    path = TURNS / f"{turn_id}.json"
+    try:
+        detail = json.loads(path.read_text())
+    except (OSError, ValueError):
+        detail = {}
+    steps = detail.setdefault("steps", {})
+    step = steps.setdefault(str(n), {})
+    if given is not None:
+        step["input"] = _clean(given)
+    if got is not None:
+        step["output"] = _clean(got)
+    fd, tmp = tempfile.mkstemp(dir=TURNS, prefix=".turn-")  # 0600 from the start
+    with os.fdopen(fd, "w") as f:
+        json.dump(detail, f)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def record_step(turn_id: str | None, n: int, kind: str, action: str, status: str, ms: int, summary: str,
+                given: str | None = None, got: str | None = None) -> None:
+    """One step of a turn, on its reply message (shown live); a step recorded again with the same n
+    replaces it. `given` / `got`: its full input and output for the turn file. Never raises."""
+    if not valid_turn_id(turn_id):
+        return
+    try:
+        with _editing() as data:
+            m = _turn_message(data, turn_id)
+            if m is None:
+                if turn_id != _active():
+                    return  # its message is gone (pruned), or it isn't a turn on this thread
+                mid = int(data.get("next_id", 1))
+                data["next_id"] = mid + 1
+                m = {"id": mid, "who": "jarvis", "text": "", "via": "", "buttons": [], "tg_id": None,
+                     "at": time.time(), "note": "", "streaming": True, "turn": turn_id, "steps": []}
+                data["messages"].append(m)
+            row = {"n": int(n), "kind": str(kind)[:20], "action": str(action)[:60], "status": str(status)[:20],
+                   "ms": int(ms), "summary": " ".join(str(summary).split())[:200]}
+            steps = [s for s in m.setdefault("steps", []) if s.get("n") != row["n"]]
+            m["steps"] = sorted([*steps, row], key=lambda s: s["n"])
+            if given is not None or got is not None:
+                _save_detail(turn_id, n, given, got)
+    except OSError:
+        pass
+
+
+def read_turn(turn_id: str) -> dict:
+    """A turn's step details, as the app reads them: only for a well-formed id, only from turns/."""
+    if not valid_turn_id(turn_id):
+        raise ValueError("not a turn id")
+    try:
+        return json.loads((TURNS / f"{turn_id}.json").read_text())
+    except (OSError, ValueError):
+        return {}
 
 
 def resolve(local_id: int | None = None, tg_id: int | None = None, note: str = "", text: str | None = None) -> None:
@@ -185,7 +323,7 @@ class Mirror:
 
     def send_photo(self, png: bytes, caption: str = "") -> None:
         self._tg.send_photo(png, caption)
-        record("jarvis", ("📷 " + caption) if caption else "📷 (a picture, in Telegram)")
+        record("jarvis", ("📷 " + caption) if caption else "📷 (a picture, in Telegram)", reply=False)
 
     def send_voice(self, ogg: bytes, caption: str = "") -> None:
         self._tg.send_voice(ogg, caption)
@@ -193,7 +331,7 @@ class Mirror:
 
     def send_document(self, filename: str, data: bytes, caption: str = "", mime: str = "text/plain") -> None:
         self._tg.send_document(filename, data, caption, mime)
-        record("jarvis", f"📄 {filename}" + (f": {caption}" if caption else ""))
+        record("jarvis", f"📄 {filename}" + (f": {caption}" if caption else ""), reply=False)
 
 
 class MacChat:
@@ -254,7 +392,7 @@ class MacChat:
         try:
             self._tg.send_photo(png, caption)  # pictures can only be seen in Telegram
         except Exception:
-            record("jarvis", "📷 " + (caption or "a picture (couldn't reach Telegram)"), via="Mac")
+            record("jarvis", "📷 " + (caption or "a picture (couldn't reach Telegram)"), via="Mac", reply=False)
 
     def send_voice(self, ogg: bytes, caption: str = "") -> None:
         record("jarvis", caption or "🔊 (a voice note)", via="Mac")
@@ -263,7 +401,7 @@ class MacChat:
         try:
             self._tg.send_document(filename, data, caption, mime)
         except Exception:
-            record("jarvis", f"📄 {filename} (couldn't reach Telegram)", via="Mac")
+            record("jarvis", f"📄 {filename} (couldn't reach Telegram)", via="Mac", reply=False)
 
 
 # ----- what the app asks for -----
@@ -332,6 +470,17 @@ textarea::placeholder{color:rgba(255,255,255,.4)}
 form button{all:unset;cursor:default;font-size:12px;color:var(--dim);padding:2px 2px 3px}
 form button:hover{color:#fff}
 .empty{margin:30px 14px;color:var(--dim)}
+.text:empty{display:none}
+.steps{margin-top:4px;border-left:1px solid var(--line)}
+.step{font-size:11.5px;color:var(--dim)}
+.step .row{padding:2px 8px;cursor:default;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.step .row:hover{color:#fff}
+.step.bad .row{color:var(--amber)}
+.step .detail{display:none;padding:2px 8px 6px 18px}
+.step.open .detail{display:block}
+.step .lbl{font-size:10.5px;color:rgba(255,255,255,.4)}
+.step pre{margin:2px 0 6px;white-space:pre-wrap;overflow-wrap:anywhere;font:11px ui-monospace,monospace;
+  color:rgba(255,255,255,.75);max-height:240px;overflow:auto}
 </style></head><body>
 <div id="waiting"></div>
 <div id="feed"><p class="empty">Nothing yet, sir.</p></div>
@@ -390,7 +539,45 @@ function typedText(m) {
 // While a reply streams only its text changes: aim the typer at it instead of redrawing the chat.
 function shape(data) {
   return JSON.stringify((data.messages || []).map(function (m, i, all) {
-    return [m.id, i === all.length - 1 ? '' : m.text, m.buttons, m.note, m.streaming]; }));
+    return [m.id, i === all.length - 1 ? '' : m.text, m.buttons, m.note, m.streaming, m.steps || []]; }));
+}
+// A turn's steps, under its reply: one collapsed row each; unfolding asks the app for the turn's
+// inputs and outputs. Everything here is text (textContent), never markup.
+var openSteps = {}, details = {}, detailBoxes = [];
+function stepRows(m) {
+  var wrap = el('div', 'steps');
+  m.steps.forEach(function (s) {
+    var key = m.turn + ':' + s.n, ok = s.status === 'ok' || s.status === 'running' || s.status === 'waiting';
+    var row = el('div', 'step' + (ok ? '' : ' bad') + (openSteps[key] ? ' open' : ''));
+    var line = el('div', 'row', s.n + '. ' + s.action + ' · ' + s.status + (s.ms ? ' · ' + (s.ms / 1000).toFixed(1) + 's' : '')
+                  + (s.summary ? ' — ' + s.summary : ''));
+    var detail = el('div', 'detail');
+    detailBoxes.push({box: detail, turn: m.turn, n: s.n});
+    fillDetail(detail, m.turn, s.n);
+    line.onclick = function () {
+      if (openSteps[key]) { delete openSteps[key]; row.className = row.className.replace(' open', ''); return; }
+      openSteps[key] = true; row.className += ' open';
+      post({type: 'step', turn: m.turn});
+    };
+    row.appendChild(line); row.appendChild(detail); wrap.appendChild(row);
+  });
+  return wrap;
+}
+function fillDetail(box, turn, n) {
+  box.textContent = '';
+  var d = details[turn] && details[turn].steps && details[turn].steps[String(n)];
+  if (!d) { box.appendChild(el('div', 'lbl', details[turn] ? 'Nothing recorded for this step.' : 'Loading…')); return; }
+  [['input', 'Input'], ['output', 'Output']].forEach(function (k) {
+    if (d[k[0]] == null) return;
+    box.appendChild(el('div', 'lbl', k[1]));
+    box.appendChild(el('pre', '', String(d[k[0]])));
+  });
+}
+function stepDetail(turn, text) {  // from the app: turns/<turn>.json, as a string
+  var d = {};
+  try { d = JSON.parse(text) || {}; } catch (e) {}
+  details[turn] = d;
+  detailBoxes.forEach(function (b) { if (b.turn === turn) fillDetail(b.box, b.turn, b.n); });
 }
 function render(data) {
   var msgs0 = data.messages || [], tail = msgs0[msgs0.length - 1];
@@ -402,6 +589,7 @@ function render(data) {
   last = data;
   var msgs = data.messages || [], atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
   feed.textContent = '';
+  detailBoxes = [];
   if (!msgs.length) feed.appendChild(el('p', 'empty', 'Nothing yet, sir.'));
   var day = '', firstAsk = null;
   msgs.forEach(function (m) {
@@ -412,6 +600,7 @@ function render(data) {
     box.dataset.id = m.id;
     box.appendChild(el('div', 'meta', (m.who === 'you' ? 'You' : 'JARVIS') + (m.via ? ' · ' + m.via : '') + ' · ' + clock(m.at)));
     box.appendChild(el('div', 'text', typedText(m)));
+    if (m.turn && m.steps && m.steps.length) box.appendChild(stepRows(m));
     if (open) {
       if (!firstAsk) firstAsk = box;
       var row = el('div', 'buttons');
@@ -611,9 +800,22 @@ final class Inbox: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNavigat
         if window.isVisible { web.evaluateJavaScript("render(\(json))", completionHandler: nil) } else { lastMod = nil }
     }
 
+    // A step row unfolded: its turn's inputs and outputs, read here. Only an id of 8-40 lowercase
+    // letters and digits, and only the file turns/<id>.json, so nothing else can be read this way.
+    func showStep(_ turn: String) {
+        guard turn.range(of: "^[a-z0-9]{8,40}$", options: .regularExpression) != nil else { return }
+        let text = (try? String(contentsOfFile: inboxDir + "/turns/" + turn + ".json", encoding: .utf8)) ?? "{}"
+        web.callAsyncJavaScript("stepDetail(turn, text)", arguments: ["turn": turn, "text": text],
+                                in: nil, in: .page, completionHandler: nil)
+    }
+
     // A button pressed or a message sent: a small request file for `jarvis listen`. Nothing else leaves the app.
     func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
         guard var body = message.body as? [String: Any] else { return }
+        if body["type"] as? String == "step" {
+            if let turn = body["turn"] as? String { showStep(turn) }
+            return
+        }
         body["at"] = Date().timeIntervalSince1970
         try? FileManager.default.createDirectory(atPath: requestsDir, withIntermediateDirectories: true)
         let name = String(format: "%.6f-%d.json", Date().timeIntervalSince1970, Int.random(in: 0..<1_000_000))

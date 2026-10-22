@@ -520,12 +520,13 @@ def _listen(mem: Memory) -> None:
         or the inbox app's (its own thread, so its own connection)."""
         def on_text(update):
             from jarvis.status import set_state
-            from jarvis import timing
+            from jarvis import inbox, timing
             with turn:
                 set_state(source, "working", detail="answering a voice note" if update.via_voice else "answering")
                 timing.start("voice_note" if update.via_voice else "telegram")
                 try:
-                    _on_text(update)
+                    with inbox.turn():  # the loop's steps show under the reply in the inbox app (never Telegram)
+                        _on_text(update)
                 finally:
                     timing.finish(mem)
                     set_state(source, "idle")
@@ -702,9 +703,10 @@ def _serve_hud(tg, warm, turn) -> None:
             try:
                 from jarvis import inbox
                 inbox.record("you", text, via="HUD")
-                reply = _answer(mem, f"(typed in the HUD on his Mac) {text}", warm=warm, on_draft=on_text,
-                                send_photo=tg.send_photo, channel="mac")
-                inbox.record("jarvis", reply, via="HUD")
+                with inbox.turn():
+                    reply = _answer(mem, f"(typed in the HUD on his Mac) {text}", warm=warm, on_draft=on_text,
+                                    send_photo=tg.send_photo, channel="mac")
+                    inbox.record("jarvis", reply, via="HUD")
             finally:
                 timing.finish(mem)
                 set_state("hud", "idle")

@@ -277,6 +277,91 @@ def test_only_code_written_progress_shows_mid_turn(monkeypatch, screen, no_claud
     assert streamed == [] and set(drafts) <= set(loop.PROGRESS.values()) and "Having a look…" in drafts
 
 
+# ----- the step trace (inbox app) -----
+def trace_of(tid):
+    from jarvis import inbox
+    [m] = [m for m in inbox.read()["messages"] if m.get("turn") == tid]
+    return m["steps"], inbox.read_turn(tid).get("steps", {})
+
+
+def test_each_kind_of_step_is_recorded_on_the_reply(monkeypatch, commands, no_claude_judge):
+    from jarvis import inbox
+    m = Memory(":memory:")
+    use_jev(monkeypatch, ("continue", 0.87))
+    run = scripted({"reply": "Checking.", "actions": [{"type": "run_command", "command": "ls notes"},
+                                                      {"type": "run_command", "command": "bad x"},
+                                                      {"type": "start_task", "goal": "tidy the notes"}]},
+                   {"reply": "A helper is tidying them, sir.", "actions": []})
+    with inbox.turn() as tid:
+        chat.respond(m, "what's in notes? and tidy them", NOW, "", runner=run, channel="mac")
+        inbox.record("jarvis", "A helper is tidying them, sir.", via="HUD")
+    steps, detail = trace_of(tid)
+    kinds = [(s["kind"], s["action"], s["status"]) for s in steps]
+    assert kinds[0] == ("claude", "model_1", "ok")
+    assert ("gate", "run_command", "passed") in kinds and ("tool", "run_command", "ok") in kinds
+    assert ("gate", "run_command", "refused") in kinds  # stopped at the gate: no run row for it
+    assert ("tool", "start_task", "waiting") in kinds and ("park", "task", "waiting") in kinds
+    [park] = [s for s in steps if s["kind"] == "park"]
+    assert park["summary"] == "waiting on helper"
+    [ran] = [s for s in steps if s["kind"] == "tool" and s["action"] == "run_command"]
+    assert "plan.md" in detail[str(ran["n"])]["output"] and "ls notes" in detail[str(ran["n"])]["input"]
+    assert "what's in notes?" in detail["1"]["input"] and "run_command" in detail["1"]["output"]
+    assert [s["n"] for s in steps] == list(range(1, len(steps) + 1))
+    # the helper finishes: its result goes on the same reply, then the rest of the turn
+    [task] = tasks.recent(m, 5)
+    tasks._save(m, task["id"], status="done", summary="tidied")
+    reports.add(m, "task", task["id"], "done", "tidy the notes", "Tidied 2 files.")
+    sent = []
+    loop.check_parked(m, loop.sender_for(SimpleNamespace(send=sent.append)),
+                      runner=scripted({"reply": "All tidy, sir.", "actions": []}))
+    steps, detail = trace_of(tid)
+    [resumed] = [s for s in steps if s["kind"] == "resume"]
+    assert resumed["status"] == "ok" and "Tidied 2 files." in detail[str(resumed["n"])]["output"]
+    after = [(s["kind"], s["action"]) for s in steps if s["n"] > resumed["n"]]
+    assert after == [("claude", "model_1"), ("decide", "rule")]
+
+
+def test_a_decision_records_its_probability(monkeypatch, no_claude_judge):
+    from jarvis import inbox, introspect
+    monkeypatch.setattr(introspect, "inspect", lambda op, arg: "# JARVIS")
+    use_jev(monkeypatch, ("respond", 0.83))
+    run = scripted({"reply": "It's the README, sir.", "actions": [{"type": "inspect", "op": "read", "arg": "README.md"}]})
+    with inbox.turn() as tid:
+        chat.respond(Memory(":memory:"), "what's in the readme?", NOW, "", runner=run, channel="mac")
+    steps, _ = trace_of(tid)
+    [d] = [s for s in steps if s["kind"] == "decide"]
+    assert d["action"] == "jev" and d["summary"].startswith("respond (p=0.83)")
+
+
+def test_camera_and_screen_steps_carry_no_content(monkeypatch, screen, no_claude_judge, tmp_path):
+    from jarvis import camera, inbox
+    use_jev(monkeypatch, ("continue", 0.9), ("respond", 0.9))
+    monkeypatch.setattr(chat, "look_through_camera", lambda message, question, vision=None: "A RED MUG on the desk.")
+    monkeypatch.setattr(camera, "last_how", "no preview: the camera app didn't answer in time; taken with imagesnap")
+    run = scripted({"reply": "Looking.", "actions": [{"type": "look_at_screen", "question": "the error"},
+                                                     {"type": "look_through_camera", "question": "what he holds"}]},
+                   {"reply": "A red mug, sir, and a KeyError.", "actions": []})
+    vision = lambda system, prompt, image: "SECRET SCREEN TEXT KeyError"  # noqa: E731
+    with inbox.turn() as tid:
+        chat.respond(Memory(":memory:"), "what am I holding, and what's this error?", NOW, "", runner=run,
+                     vision=vision, channel="mac")
+    steps, detail = trace_of(tid)
+    everything = json.dumps(steps) + json.dumps(detail)
+    assert "SECRET SCREEN TEXT" not in everything and "RED MUG" not in everything and "red mug" not in everything
+    [cam] = [s for s in steps if s["kind"] == "tool" and s["action"] == "look_through_camera"]
+    assert detail[str(cam["n"])] == {"output": "one picture taken and deleted (" + camera.last_how + ")"}
+    assert "imagesnap" in cam["summary"]  # the fallback is said in the trace
+    [look] = [s for s in steps if s["kind"] == "tool" and s["action"] == "look_at_screen"]
+    assert detail[str(look["n"])]["output"].startswith("(not recorded")
+
+
+def test_no_trace_outside_a_turn(monkeypatch, no_claude_judge):
+    from jarvis import inbox
+    run = scripted({"reply": "Hello, sir.", "actions": []})
+    chat.respond(Memory(":memory:"), "hi", NOW, "", runner=run, channel="mic")
+    assert inbox.read().get("messages", []) == [] and not inbox.TURNS.exists()
+
+
 # ----- AGENT_LOOP off -----
 def test_agent_loop_off_is_the_one_pass_respond(monkeypatch, screen):
     monkeypatch.setattr(config, "AGENT_LOOP", False)
