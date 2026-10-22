@@ -101,6 +101,9 @@ INBOX = os.getenv("INBOX", "1") == "1"  # the Telegram chat on the Mac, with wor
 # One camera still when Elijah asks to show JARVIS something (looked at privately, then deleted).
 # Needs imagesnap and macOS Camera permission; CAMERA=0 turns it off.
 CAMERA = os.getenv("CAMERA", "1") == "1"
+# A private glance at his screen before every reply (Jev's call). Off: JARVIS looks only when the chat
+# model asks for look_at_screen as a step, so a message about something else never takes a picture.
+PRE_PEEK = os.getenv("PRE_PEEK", "0") == "1"
 VISION_MODEL = os.getenv("VISION_MODEL", "")  # empty = JARVIS_MODEL (the fast one); "sonnet" for sharper reading
 
 # Self-editing: the git repo JARVIS improves (your project folder), the model that writes

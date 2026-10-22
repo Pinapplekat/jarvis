@@ -26,12 +26,13 @@ _DOING = (r"draft|send|check|look|redo|revis|rebuild|build|run|start|play|put|pu
 PROMISE = re.compile(
     r"\b(?:i'?m|i am|i'?ll|i will|i'?ve|let me|i'?m going to|going to|now|currently)\s+"
     r"(?:just\s+|now\s+|going\s+to\s+|also\s+|quickly\s+|already\s+)*(?:" + _DOING + r")\w*"
-    r"|\bon it\b|\bright away\b|\bstand by\b|\bone moment\b", re.I)
+    r"|\bon it\b|\bright away\b|\bstand by\b|\bone moment\b|\blet me see\b|\b(?:having|taking) a (?:quick\s+)?look\b", re.I)
 # "Playing study lo-fi now." / "Redoing it now." / "Sending it over." (short ones only: "Looking at the
 # error, it's a missing import." is an answer, not a promise)
 GERUND = re.compile(
     r"^\s*(?:playing|redoing|sending|drafting|checking|looking|starting|putting|pulling|texting|calling|"
-    r"opening|fetching|building|deploying|searching|setting|queu(?:e)?ing|pausing|skipping|revising)\b", re.I)
+    r"opening|fetching|building|deploying|searching|setting|queu(?:e)?ing|pausing|skipping|revising|"
+    r"having a look|taking a look)\b", re.I)
 # Claims about things that exist somewhere else, which need a matching action or real state.
 DRAFT_CLAIM = re.compile(r"\bdraft(?:'s|\s+is)\s+(?:above|below|ready|up|in\s+telegram|there)\b|"
                          r"\b(?:drafted|wrote)\s+(?:it|the\s+(?:email|text|message|reply))\b", re.I)

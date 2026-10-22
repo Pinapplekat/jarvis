@@ -533,7 +533,7 @@ class Turn:
     def ask_model(self, name: str, extra: tuple[str, str] | None = None) -> dict:
         self.progress("thinking")
         with timing.step(name):
-            out = self.runner(chat.SYSTEM_PROMPT, self.prompt(extra))
+            out = self.runner(chat.system_prompt(), self.prompt(extra))
         for e in self.entries:
             e.seen = True
         return out

@@ -47,6 +47,26 @@ def test_discard_deletes_an_unused_capture(tmp_path):
     assert not (tmp_path / "shot.jpg").exists()
 
 
+def test_a_message_about_something_else_takes_no_screenshot(monkeypatch):
+    """PRE_PEEK is off by default: no capture while routing, no Jev screen question, no peek for chat."""
+    import pytest
+
+    from jarvis import chat, cli, config, judge, router, screen
+    assert config.PRE_PEEK is False
+    asked, handed = [], {}
+    monkeypatch.setattr(judge, "fast_engine", lambda: lambda state, qs: asked.extend(q.key for q in qs) or {
+        q.key: judge.Answer(q.key == "look_at_screen", 0.9) for q in qs})
+    monkeypatch.setattr(judge, "engine", lambda *a, **k: None)
+    monkeypatch.setattr(chat, "EarlyPeek", lambda *a, **k: pytest.fail("no screen capture"))
+    monkeypatch.setattr(screen, "capture_for_vision", lambda *a, **k: pytest.fail("no screen capture"))
+    monkeypatch.setattr(chat, "warm_vision", lambda: None)
+    monkeypatch.setattr(cli, "_runner_for", lambda *a: (None, "haiku", "warm"))
+    monkeypatch.setattr(chat, "respond", lambda *a, **k: handed.update(k) or "Nothing due, sir.")
+    assert cli._answer(Memory(":memory:"), "remind me what my sister's name is", channel="telegram") == "Nothing due, sir."
+    assert handed["peek_wait"] is None and "look_at_screen" not in asked
+    assert not router.route("what's on my screen?", [], judge.fast_engine()).look  # looks are loop steps now
+
+
 class FakeSession:
     started = 0
 

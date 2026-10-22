@@ -2,7 +2,8 @@
 send everything every time, (2) whether it needs the heavy model (Sonnet) or the quick
 one (Haiku), and (3) whether to peek at his screen first. One fast Jev call answers all three;
 it leans toward including context and looking, since a missing block hurts more than an extra
-one. Without Jev, every block is included, JARVIS looks, and a keyword check picks the model."""
+one. Without Jev, every block is included, JARVIS looks, and a keyword check picks the model.
+The screen peek (3) only happens with PRE_PEEK=1; otherwise looks are loop steps the chat model asks for."""
 
 import re
 from dataclasses import dataclass
@@ -100,18 +101,22 @@ def media_command(text: str) -> tuple[str, object] | None:
     return None
 
 
+PRE_PEEK_OFF = (False, "pre-peek off (PRE_PEEK=0); looks only when the chat model asks")
+
+
 def route(message: str, recent: list[str], fast: Engine | None, on_error=None) -> Route:
     forced = config.JARVIS_MODEL_ROUTING
+    pre_peek = config.PRE_PEEK
     def finish(blocks, heavy, how, look=(True, "no judgment from Jev; looking to be safe")):
         if forced in ("fast", "heavy"):
             heavy = forced == "heavy"
-        return Route(frozenset(blocks), heavy, how, *look)
+        return Route(frozenset(blocks), heavy, how, *(look if pre_peek else PRE_PEEK_OFF))
 
     if fast is None:
         return finish(ALL, heavy_by_keywords(message), "keywords")
     state = "Recent conversation:\n" + ("\n".join(recent[-4:]) or "(none)") + f"\n\nNew message from Elijah:\n{message}"
     questions = ([Question(k, ask) for k, ask in BLOCKS.items()] + [Question("heavy", HEAVY_ASK)]
-                 + [Question("look_at_screen", SCREEN_ASK)])
+                 + ([Question("look_at_screen", SCREEN_ASK)] if pre_peek else []))
     try:
         answers = fast(state, questions)
     except Exception as e:

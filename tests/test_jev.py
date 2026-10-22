@@ -105,7 +105,8 @@ def test_router_picks_blocks_and_falls_back_to_all():
     assert r.blocks == router.ALL and r.how == "keywords" and errors
 
 
-def test_jev_decides_whether_to_peek_at_the_screen():
+def test_jev_decides_whether_to_peek_at_the_screen(monkeypatch):
+    monkeypatch.setattr(config, "PRE_PEEK", True)  # the pre-peek is opt-in
     yes = router.route("what's this error?", [], routed({"look_at_screen"}))
     assert yes.look and "help" in yes.look_why
     no = router.route("thanks", [], routed(set()))
@@ -122,6 +123,15 @@ def test_jev_decides_whether_to_peek_at_the_screen():
     def broken(s, qs):
         raise JevError("down")
     assert router.route("x", [], broken).look and router.route("x", [], None).look
+
+
+def test_no_pre_peek_unless_turned_on(monkeypatch):
+    monkeypatch.setattr(config, "PRE_PEEK", False)
+    asked = []
+    fast = lambda s, qs: asked.extend(q.key for q in qs) or {q.key: Answer(True, 0.9) for q in qs}  # noqa: E731
+    r = router.route("what's this error?", [], fast)
+    assert not r.look and "PRE_PEEK" in r.look_why and "look_at_screen" not in asked
+    assert not router.route("x", [], None).look
 
 
 def test_model_choice(monkeypatch):

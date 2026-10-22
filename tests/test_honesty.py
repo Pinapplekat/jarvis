@@ -21,6 +21,10 @@ NOW = datetime(2026, 10, 18, 15, 0, tzinfo=TZ)
     ("Redoing it now.", set(), False, False),
     ("I'm checking your inbox.", set(), False, False),
     ("I'll send it to her.", set(), False, False),
+    ("Having a look, sir.", set(), False, False),                 # a look promised with no look
+    ("I'm taking a look at it now.", set(), False, False),
+    ("Taking a quick look, sir.", set(), False, False),
+    ("Let me see, sir.", set(), False, False),
 ])
 def test_unbacked_claims_are_caught(sentence, kinds, pending, busy):
     assert honesty.is_unbacked(sentence, kinds, pending, busy)
@@ -28,6 +32,7 @@ def test_unbacked_claims_are_caught(sentence, kinds, pending, busy):
 
 @pytest.mark.parametrize("sentence,kinds,pending,busy", [
     ("Putting it on, sir.", {"play_music"}, False, False),
+    ("Having a look, sir.", {"look_at_screen"}, False, False),    # the look really is happening
     ("Draft is above, sir.", {"draft_email"}, False, False),
     ("It's waiting in Telegram for your OK.", set(), True, False),   # something really is waiting
     ("The build is running.", set(), False, True),                   # a task really is running

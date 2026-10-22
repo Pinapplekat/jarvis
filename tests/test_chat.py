@@ -481,6 +481,26 @@ def test_camera_needs_his_direct_request_from_his_own_chat(camera_shot, monkeypa
     assert camera_shot == []
 
 
+def test_with_the_camera_off_the_prompt_never_mentions_it(monkeypatch):
+    from jarvis.chat import system_prompt
+    seen = []
+
+    def run(system, prompt, **kw):
+        seen.append(system + prompt)
+        return {"reply": "Navy, I'd guess, sir.", "actions": []}
+    monkeypatch.setattr(config, "CAMERA", False)
+    respond(Memory(":memory:"), "what color is my shirt?", NOW, "", runner=run, channel="telegram")
+    assert seen and all("camera" not in s.lower() for s in seen)
+    assert "- screenshot:" in system_prompt() and "- look_at_screen:" in system_prompt()  # the rest stays
+    monkeypatch.setattr(config, "CAMERA", True)
+    assert "- look_through_camera:" in system_prompt()
+
+
+def test_looks_promise_nothing_before_their_result():
+    from jarvis.chat import SYSTEM_PROMPT
+    assert "Having a look" not in SYSTEM_PROMPT
+
+
 def peek_log(m):
     return [e["content"] for e in reversed(m.recent_events(100)) if e["kind"] == "screen_peek"]
 

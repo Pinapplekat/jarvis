@@ -71,6 +71,28 @@ def test_startup_sweep_deletes_leftover_stills(data_dir):
     assert [p.name for p in d.iterdir()] == ["other.txt"]
 
 
+def test_his_own_question_about_himself_can_use_the_camera(data_dir, monkeypatch):
+    """"What color is my shirt" from his Telegram: the camera step the chat model proposed runs,
+    though he never said "let me show you". The same words from anywhere else still can't."""
+    from jarvis import chat
+    taken = []
+
+    def capture(run=None, tool=None):
+        path = data_dir / f"camera-{len(taken)}.jpg"
+        path.write_bytes(b"\xff\xd8CAM")
+        taken.append(path)
+        return path
+    monkeypatch.setattr(camera, "capture_frame", capture)
+    vision = lambda system, prompt, image: "A navy crew-neck, sir."  # noqa: E731
+    assert chat.camera_refusal("what color is my shirt", "telegram") == ""
+    assert chat.camera_step("what color is my shirt", "telegram", "his shirt", vision) == ("ok", "A navy crew-neck, sir.")
+    assert len(taken) == 1 and not taken[0].exists()  # one still, deleted
+    for channel in (None, "email", "web"):
+        assert chat.camera_step("what color is my shirt", channel, "", vision)[0] == "refused"
+    assert chat.camera_step("how's my week looking?", "telegram", "", vision)[0] == "refused"  # not about him
+    assert len(taken) == 1
+
+
 def test_only_chat_can_use_the_camera():
     """Background jobs (tick, heartbeat, watches, mail, tasks) never reach the capture: only the
     chat's validated action calls it, and the CLI only sweeps leftovers."""

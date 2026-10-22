@@ -168,7 +168,7 @@ def _warm(mem: Memory):
     """A persistent Claude session for chat (much faster per reply), or None if turned off."""
     if not config.WARM_CLAUDE:
         return None
-    from jarvis.chat import REPLY_SCHEMA, SYSTEM_PROMPT, run_claude
+    from jarvis.chat import REPLY_SCHEMA, run_claude, system_prompt
     from jarvis.warm import WarmClaude
     def log(s: str) -> None:
         import sqlite3
@@ -180,7 +180,7 @@ def _warm(mem: Memory):
                 other.log("warm_fallback", s[:200])
             finally:
                 other.db.close()
-    return WarmClaude(SYSTEM_PROMPT, REPLY_SCHEMA, fallback=run_claude, log=log)
+    return WarmClaude(system_prompt(), REPLY_SCHEMA, fallback=run_claude, log=log)
 
 
 def latency_summary(lines: list[str]) -> str:
@@ -310,7 +310,7 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
     from jarvis.chat import EarlyPeek, warm_vision
     now = _now_local()
     started = time.time()
-    early_peek = EarlyPeek()  # the screen capture runs while Jev routes
+    early_peek = EarlyPeek() if config.PRE_PEEK else None  # the screen capture runs while Jev routes
     recent = [f"{'Elijah' if h['role'] == 'user' else 'JARVIS'}: {h['text'][:300]}" for h in mem.chat_history(4)]
     route = router.route(text, recent, judge.fast_engine(),
                          on_error=lambda e: mem.log("route_failed", str(e)[:200]))
@@ -319,10 +319,11 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
     timing.mark("route", routed)
     message = (f"(on the phone, transcribed) {text}" if phone
                else f"(said out loud, transcribed) {text}" if spoken else text)
-    if route.look:  # the look runs in the background while the rest of the context is gathered
+    if route.look and early_peek:  # the look runs in the background while the rest of the context is gathered
         peek_wait = early_peek.look(message, (route.look, route.look_why), vision=warm_vision())
     else:
-        early_peek.discard()
+        if early_peek:
+            early_peek.discard()
         mem.log("screen_peek", f"skipped: {route.look_why}")
         peek_wait = None
     runner, model, temp = _runner_for(route, warm, chat_model_choice(mem))
@@ -772,9 +773,9 @@ def _phone() -> None:
     def start_call():  # one warm Claude session per call, closed when it ends (RAM is tight)
         if not config.WARM_CLAUDE:
             return None
-        from jarvis.chat import REPLY_SCHEMA, SYSTEM_PROMPT, run_claude
+        from jarvis.chat import REPLY_SCHEMA, run_claude, system_prompt
         from jarvis.warm import WarmClaude
-        return WarmClaude(SYSTEM_PROMPT, REPLY_SCHEMA, fallback=run_claude, log=log)
+        return WarmClaude(system_prompt(), REPLY_SCHEMA, fallback=run_claude, log=log)
 
     line = phone.PhoneLine(answer, phone_audio, config.PHONE_PUBLIC_URL, config.TWILIO_AUTH_TOKEN,
                            config.MY_PHONE_NUMBER, pin=config.PHONE_PIN,

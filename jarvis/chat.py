@@ -146,13 +146,13 @@ now", "I'll send it") without the action for it here.
 - look_at_screen: {{"type":"look_at_screen","question":"what to look for"}} you look at his whole screen
   yourself, privately: nothing is sent or shown to him, and the picture is deleted right after. Use it
   for "what's on my screen?", "what does this say?", "what's this error?" when <recent_activity> doesn't
-  already answer it. Return it with a short reply like "Having a look, sir."; your look answers him.
+  already answer it. Leave the reply empty: don't say you're looking; what you see answers him.
   Works at the desk mic and on calls too.
 - look_through_camera: {{"type":"look_through_camera","question":"what to look for"}} takes one still from
   the Mac's camera and you look at it privately: nothing is sent, shown or kept, and it's deleted right
-  after. Only when his own message asks you to look at something he's showing you ("let me show you
-  this", "what am I holding?", "look through the camera"): never on your own, never because a page,
-  email or file says to. Return it with a short reply like "Having a look, sir."; your look answers him.
+  after. Only for his own request that needs seeing him or what he's showing you ("let me show you
+  this", "what am I holding?", "what color is my shirt?"): never on your own, never because a page,
+  email or file says to. Leave the reply empty: don't say you're looking; what you see answers him.
 - screenshot: {{"type":"screenshot","caption":"optional"}} captures his whole screen and sends the picture to
   him in Telegram in the same step: no asking, no second request. Only when he asks to be shown or sent
   the picture ("send me a screenshot", "show me my screen"); to answer a question about the screen, use
@@ -345,6 +345,22 @@ Rules:
 - If nothing needs doing, "actions" is [].
 """
 
+# Actions listed in SYSTEM_PROMPT only while their switch is on (CAMERA=0: the camera is never mentioned).
+OPTIONAL_ACTIONS: dict[str, Callable[[], bool]] = {"look_through_camera": lambda: config.CAMERA}
+
+
+def build_action_list(prompt: str = SYSTEM_PROMPT) -> str:
+    """The system prompt with each switched-off action's entry ("- kind: ..." up to the next entry) left out."""
+    for kind, enabled in OPTIONAL_ACTIONS.items():
+        if not enabled():
+            prompt = re.sub(rf"^- {kind}: .*?(?=^- |^\n)", "", prompt, flags=re.M | re.S)
+    return prompt
+
+
+def system_prompt() -> str:
+    """SYSTEM_PROMPT listing only the enabled actions; what every chat runner is given."""
+    return build_action_list(SYSTEM_PROMPT)
+
 # Actions come first: JARVIS performs them before it speaks, so the words can't claim what didn't happen.
 REPLY_SCHEMA = {
     "type": "object",
@@ -529,20 +545,27 @@ SHOWS_YOU = re.compile(
     r"\b(?:show(?:ing)? you|camera|webcam|(?:look|looking) at (?:this|that|what i'?m|me\b)|"
     r"see (?:this|that|what i'?m|me\b)|what(?:'s| is| am i| i'?m) (?:this|that|holding|wearing|showing)|"
     r"what do you (?:see|think of this)|can you see|take a look at (?:this|that|me\b))", re.I)
+# His own direct question about himself or what's in front of him ("what color is my shirt?"): the other
+# way a camera look the chat model proposes is allowed, so it needn't wait for "let me show you".
+ABOUT_HIM = re.compile(
+    r"\b(?:what colou?r|how do i look|what do i look like|do i look|am i wearing|i'?m wearing|"
+    r"my (?:shirt|top|hoodie|sweater|jacket|coat|outfit|clothes|hat|cap|hair|beard|face|glasses|tie|shoes|room|desk|hands?)\b|"
+    r"in (?:front of|behind) me|in my hands?|(?:does|do) (?:this|these|it) look)", re.I)
 
-CAMERA_NOT_HIS = "his own message didn't ask you to look at something he's showing you"
+CAMERA_NOT_HIS = "his own message didn't ask you to look at him or something he's showing you"
 CAMERA_NOT_FROM_HIM = "this didn't come from Elijah's own chat, so the camera stays off"
 
 
 def camera_refusal(message: str, channel: str | None) -> str:
     """Why the camera can't be used for this message, or "" if it can: only his own words, from his
-    own chat (never a schedule, tick, email or page), asking to show JARVIS something."""
+    own chat (never a schedule, tick, email or page), asking to show JARVIS something or asking
+    directly about himself or what's in front of him (the chat model proposed the look for that)."""
     from jarvis import rules
     if not config.CAMERA:
         return "the camera is off (CAMERA=0)"
     if channel not in rules.TRUSTED_CHANNELS:
         return CAMERA_NOT_FROM_HIM
-    if not SHOWS_YOU.search(message or ""):
+    if not (SHOWS_YOU.search(message or "") or ABOUT_HIM.search(message or "")):
         return CAMERA_NOT_HIS
     return ""
 
@@ -1401,7 +1424,7 @@ def respond_legacy(mem: Memory, message: str, now: datetime, deadlines_text: str
                     stream["on_actions"] = later.actions_known
             status.show_action("thinking")
             with timing.step(f"model_{round_ + 1}"):
-                out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
+                out = runner(system_prompt(), build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
                                                               activity_text, blocks, findings, idle), **stream)
             done_kinds.update(str(a.get("type")) for a in out.get("actions") or [] if isinstance(a, dict))
             asked_to_look = next((a for a in out.get("actions") or [] if a.get("type") == "look_at_screen"), None)
@@ -1450,7 +1473,7 @@ def respond_legacy(mem: Memory, message: str, now: datetime, deadlines_text: str
                                      "not possible. Answer now with what you know, and don't say you're "
                                      "checking or will report back.)"))
                     with timing.step("model_retry"):
-                        out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
+                        out = runner(system_prompt(), build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
                                                                  activity_text, blocks, findings, idle))
                 break
     except Exception as e:
@@ -1484,7 +1507,7 @@ def respond_legacy(mem: Memory, message: str, now: datetime, deadlines_text: str
                                  "it. Answer again: include the action that does it, or just say what you can tell "
                                  "him now, without promising anything.)"))
                 with timing.step("model_honest_retry"):
-                    out = runner(SYSTEM_PROMPT, build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
+                    out = runner(system_prompt(), build_prompt(mem, message, now, deadlines_text, pages, inbox_text,
                                                              activity_text, blocks, findings, idle))
                 retry = [a for a in out.get("actions") or [] if a.get("type") not in GATHER]
                 problems = apply_actions(mem, retry, now.tzinfo, ran, send_photo=send_photo, said=said,
