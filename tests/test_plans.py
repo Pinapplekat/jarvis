@@ -130,6 +130,17 @@ def test_combined_plan_is_marked_built_once_its_host_deploys(monkeypatch):
     assert plans.settle_combined(m) == []
 
 
+def test_prod_mode_replaces_the_daily_idea(monkeypatch):
+    from jarvis import prodmode
+    m = Memory(":memory:")
+    started = []
+    monkeypatch.setattr(prodmode, "enabled", lambda: True)
+    monkeypatch.setattr(prodmode, "maybe_start", lambda mem, now, tg=None: started.append((now, tg)) or "not due")
+    run = runner_returning({"idea": {"title": "Photo support", "request": "read shift screenshots"}})
+    assert plans.maybe_propose_idea(m, EVENING, run, tg="tg") is None
+    assert run.calls == [] and m.self_edits() == [] and started == [(EVENING, "tg")]
+
+
 def test_no_idea_is_fine():
     m = Memory(":memory:")
     assert plans.maybe_propose_idea(m, EVENING, runner_returning({"idea": None})) is None

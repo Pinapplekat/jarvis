@@ -62,6 +62,13 @@ def _no_real_camera_app(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _prod_mode_off(monkeypatch):
+    """Prod mode stays off in tests whatever .env says; tests/test_prodmode.py turns it on with fakes."""
+    from jarvis import prodmode
+    monkeypatch.setattr(prodmode, "PROD_MODE", False)
+
+
+@pytest.fixture(autouse=True)
 def _one_pass_chat(monkeypatch):
     """The chat tests written for the one-pass respond (first sentence streamed early, a look's
     answer as the reply) keep testing it: AGENT_LOOP=0 is still a supported path. The agent loop

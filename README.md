@@ -74,7 +74,7 @@ Message the bot like a person: "what's due this week?", "remember rent is due on
 - **Character:** Tony Stark's JARVIS: calls you "sir", dry wit, candid pushback, still brief.
 - **Speaks out loud:** reminders, alerts and important-mail pings are spoken through the Mac's speakers (macOS `say`, voice `VOICE_NAME`, default British "Daniel") when you've used the keyboard or mouse in the last `VOICE_IDLE_SECONDS` (180) and it isn't quiet hours. Telegram always gets the text too. `jarvis say "..."` tests the voice. `VOICE=0` turns it off.
 - **Reminders:** "text me at 9 to finish econ" → JARVIS messages you then (within ~25s; late reminders say so).
-- **Improving itself:** ask "add a /status command" (or JARVIS spots a gap; it may suggest one idea a day after `IDEA_HOUR`). JARVIS writes a plan (steps, files, risks) and sends it with **Yes / Not now**. Reply with changes to get a revised plan. A "yes" saves it to `~/Library/Application Support/JARVIS/plans/`. Then either:
+- **Improving itself:** ask "add a /status command" (or JARVIS spots a gap; it may suggest one idea a day after `IDEA_HOUR`, or, with prod mode on, fix bugs overnight and propose features weekly: see Prod mode). JARVIS writes a plan (steps, files, risks) and sends it with **Yes / Not now**. Reply with changes to get a revised plan. A "yes" saves it to `~/Library/Application Support/JARVIS/plans/`. Then either:
   - **self-editing off (default):** in Claude Code, say "build the approved JARVIS plans" (`jarvis plans` lists them, `jarvis plans done <id>` marks one built); or
   - **self-editing on:** JARVIS builds it itself (see below) and sends you the result with **Deploy / Discard**.
   - In short, JARVIS can propose and build changes to its own code once you approve a plan and self-editing is on.
@@ -226,6 +226,20 @@ To turn it on yourself (from this folder):
 4. `uv run jarvis schedule install`
 
 To turn it off: remove `JARVIS_REPO` from `.env` and run `uv run jarvis schedule install`.
+
+### Prod mode (nightly fixes, weekly plans; off unless you turn it on)
+
+JARVIS studies its own logs overnight, builds tested fixes on separate branches, and hands you a morning digest where you tap Deploy or Discard. With it on, it replaces the daily idea.
+
+- **The standing permission (in `jarvis/prodmode.py`, which is protected):** nightly **bug fixes** that touch no protected file may be **built** without plan approval. They carry origin `prodmode` and the digest labels them so. **Deploy always needs you.** Features, and anything touching a protected file, need normal plan approval.
+- **Nightly:** at the first tick after `NIGHTLY_HOUR` (2) when the Mac is awake, you're idle and nothing is building (skipped for the day if that hasn't happened by `NIGHTLY_DEADLINE_HOUR`, 6). It collects the last 24 hours of signals (unbacked claims, failed actions, routing failures, Jev fallbacks, slow replies, you correcting JARVIS, step-trace failures once they're logged), groups duplicates, and Opus ranks them and plans the top `NIGHTLY_MAX_FIXES` (3), marking decision points. Each fix is built one at a time through self-edit's own build queue and lock, on its own branch, by Sonnet: first a test that fails because of the bug, then the fix. No failing repro test means no fix ("needs a human look"). Sonnet gets Opus only at a marked decision point or after 2 failed attempts. If Opus isn't available through `claude -p`, Sonnet stands in and the digest says so.
+- **Weekly:** on `WEEKLY_DAY` (`sun`), after the nightly run, Opus reviews the week's signals and proposes up to 3 feature plans with evidence from the logs, as normal **Yes / Not now** plans. Nothing is built until you approve one.
+- **Morning digest** (Telegram and the inbox, after quiet hours): signals found, fixes built (repro test and diff, each with its own **Deploy / Discard**), skipped items and why, plans needing your approval, stale fixes, and the Opus calls, build sessions and minutes spent.
+- **Protected files** (prod mode can never change them; a fix that needs one becomes a plan for you): approvals, honesty, terminal, rules, agenthook, selfedit, the camera gate (`camera.py`), `config.py`, `.env.example`, `prodmode.py` itself (which holds the list), and their tests (`test_approvals`, `test_honesty`, `test_terminal`, `test_rules`, `test_selfedit_build`, the camera tests, `test_prodmode`). They're checked in Opus's plan and again on the branch's final diff (new, deleted and renamed files too) before Deploy is offered and when it's pressed.
+- **Deploy:** the fix is rebased onto the current main and the full suite rerun. A conflict or a failure marks it stale (not deployed) with a **Rebuild** button; otherwise self-edit's usual deploy takes over (there's no second deploy path). Discard deletes the branch, and undecided fixes are cleaned up after `PROD_BRANCH_DAYS` (7).
+- **Budgets:** `NIGHTLY_MAX_FIXES`, `MAX_OPUS_CALLS` (8 per run) and `WALL_CLOCK_MINUTES` (180). When one runs out, the run stops and the digest says which.
+- **Untrusted signals:** log text only reaches a prompt quoted and labelled as untrusted data; nothing parses it for commands. Self-edit's rules (sandboxed builder, tests must pass, tests can't shrink, no secrets) are unchanged.
+- **Turning it on:** self-editing must be on (`JARVIS_REPO`), then add `PROD_MODE=1` to `.env` yourself and run `uv run jarvis schedule install`. The settings above are optional `.env` lines (`NIGHTLY_HOUR=2`, `WEEKLY_DAY=sun`, ...). `PROD_MODE=0` (the default) turns all of it off. `jarvis prodmode nightly|weekly` runs one by hand.
 
 ## Texts, calls, alarms, timers and music
 

@@ -164,8 +164,13 @@ def settle_combined(mem: Memory) -> list[int]:
     return settled
 
 
-def maybe_propose_idea(mem: Memory, now: datetime, runner: Runner | None = None) -> int | None:
-    """Once a day after IDEA_HOUR, maybe queue one self-improvement idea for planning."""
+def maybe_propose_idea(mem: Memory, now: datetime, runner: Runner | None = None, tg=None) -> int | None:
+    """Once a day after IDEA_HOUR, maybe queue one self-improvement idea for planning.
+    With prod mode on, its nightly fixes and weekly plans replace the daily idea."""
+    from jarvis import prodmode
+    if prodmode.enabled():
+        prodmode.maybe_start(mem, now, tg)
+        return None
     if now.hour < config.IDEA_HOUR or mem.get_kv("last_idea_date") == now.date().isoformat():
         return None
     mem.set_kv("last_idea_date", now.date().isoformat())

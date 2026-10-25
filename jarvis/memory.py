@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE TABLE IF NOT EXISTS self_edits (
     id INTEGER PRIMARY KEY,
-    origin TEXT NOT NULL CHECK (origin IN ('request', 'idea')),
+    origin TEXT NOT NULL CHECK (origin IN ('request', 'idea', 'prodmode')),  -- prodmode: a nightly fix (prodmode.py)
     title TEXT NOT NULL,
     request TEXT NOT NULL,           -- what to change, in plain words
     plan TEXT,                       -- JARVIS's plan, shown to Elijah for approval
@@ -262,7 +262,22 @@ class Memory:
             cols = {r["name"] for r in self.db.execute(f"PRAGMA table_info({table})")}
             if column not in cols:
                 self.db.execute(sql)
+        self._allow_prodmode_origin()
         self.db.commit()
+
+    def _allow_prodmode_origin(self) -> None:
+        """Older databases only allow origins 'request' and 'idea'; SQLite can't change a CHECK in
+        place, so the table is copied once into the current shape."""
+        row = self.db.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'self_edits'").fetchone()
+        if not row or "'prodmode'" in row["sql"]:
+            return
+        cols = "id, origin, title, request, plan, status, notified, summary, created_at, updated_at"
+        create = SCHEMA[SCHEMA.index("CREATE TABLE IF NOT EXISTS self_edits"):]
+        create = create[:create.index(");") + 2]
+        self.db.execute("ALTER TABLE self_edits RENAME TO self_edits_old")
+        self.db.execute(create)
+        self.db.execute(f"INSERT INTO self_edits ({cols}) SELECT {cols} FROM self_edits_old")
+        self.db.execute("DROP TABLE self_edits_old")
 
     def remember(self, category: str, key: str, value: str, source: str | None = None) -> None:
         self.db.execute(

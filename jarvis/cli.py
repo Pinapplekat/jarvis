@@ -590,6 +590,9 @@ def _listen(mem: Memory) -> None:
             if verb.startswith("plan_"):
                 on_approved = (lambda i: selfedit.queue_approved(mem, tg, i)) if selfedit.enabled() else None
                 return plans.handle_button(mem, verb, edit_id, on_approved)
+            if verb.startswith("pm_"):
+                from jarvis import prodmode
+                return prodmode.handle_button(mem, tg, verb, edit_id)
             return selfedit.handle_button(mem, tg, verb, edit_id)
         return on_text, on_button
 
@@ -893,7 +896,7 @@ def _tick(mem: Memory) -> int:
 
         def ideas():
             plans.settle_combined(mem)
-            new = plans.maybe_propose_idea(mem, _now_local())
+            new = plans.maybe_propose_idea(mem, _now_local(), tg=tg)  # or prod mode's runs, when it's on
             plans.draft_plans(mem, tg)
             return f"new idea #{new}" if new else "none"
         step("ideas", ideas)
@@ -982,7 +985,10 @@ def main() -> None:
     se = sub.add_parser("self-edit", help="Background worker for applying approved plans (off unless JARVIS_REPO is set)")
     se.add_argument("action", choices=["build", "deploy"])
     se.add_argument("id", nargs="?")
-    cm = sub.add_parser("cmd", help="Terminal commands JARVIS runs: audit log, or how a command would be treated")
+    pm = sub.add_parser("prodmode", help="Prod mode's background runs: nightly fixes, weekly plans (off unless PROD_MODE=1)")
+    pm.add_argument("action", choices=["nightly", "weekly", "build", "deploy"])
+    pm.add_argument("id", nargs="?")
+    cm =sub.add_parser("cmd", help="Terminal commands JARVIS runs: audit log, or how a command would be treated")
     cm.add_argument("action", choices=["log", "try"])
     cm.add_argument("command", nargs="?", default="", help='for try: the command, quoted ("git log -5")')
     cm.add_argument("-n", type=int, default=20)
@@ -1559,7 +1565,17 @@ def main() -> None:
         from jarvis import selfedit
         if not selfedit.enabled():
             sys.exit("Self-editing is off. To turn it on, set JARVIS_REPO in .env to this project folder.")
+        if args.action == "deploy" and args.id:  # every Deploy (button, words) lands here
+            job = mem.get_self_edit(int(args.id))
+            if job and job["origin"] == "prodmode":  # final-diff gate, rebase and full suite first
+                from jarvis import prodmode
+                prodmode.main(["deploy", args.id])
+                return
         selfedit.main([args.action, *([args.id] if args.id else [])])
+        return
+    if args.cmd == "prodmode":
+        from jarvis import prodmode
+        prodmode.main([args.action, *([args.id] if args.id else [])])
         return
     if args.cmd == "search":
         from jarvis import websearch
