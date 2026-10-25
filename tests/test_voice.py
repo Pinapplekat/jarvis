@@ -230,6 +230,111 @@ def test_the_same_words_are_not_spoken_twice_in_a_row():
     assert spoken == ["Econ is due tonight, sir."] and len(msg.sent) == 2
 
 
+class FakePlayer:
+    """Stands in for subprocess.Popen: records what would have run (say or afplay)."""
+    runs = []
+
+    def __init__(self, argv, **kw):
+        self.argv, self.pid = argv, 4242
+        FakePlayer.runs.append(argv)
+
+    def wait(self):
+        return 0
+
+    def poll(self):
+        return 0
+
+
+@pytest.fixture
+def player(monkeypatch):
+    from jarvis import voice
+    FakePlayer.runs = []
+    monkeypatch.setattr(voice.subprocess, "Popen", FakePlayer)
+    monkeypatch.setattr(config, "VOICE_NAME", "Daniel")
+    monkeypatch.setattr(config, "KOKORO_VOICE", "bm_george")
+    monkeypatch.setattr(voice, "kokoro_ready", lambda: True)
+    return FakePlayer.runs
+
+
+def _ran(runs, n=1):
+    for _ in range(200):
+        if len(runs) >= n:
+            break
+        time.sleep(0.01)
+    return runs
+
+
+def test_kokoro_speaks_with_afplay_then_deletes_the_clip(player, tmp_path, monkeypatch):
+    from jarvis import voice
+    clip, rendered = tmp_path / "clip.wav", []
+    monkeypatch.setattr(voice, "kokoro_wav", lambda t: rendered.append(t) or clip.write_bytes(b"RIFF") and str(clip))
+    assert voice.speak("Econ is due at nine, sir. ```rm -rf x``` Don't forget the quiz.")
+    assert _ran(player)[0] == ["afplay", str(clip)]
+    for _ in range(200):
+        if not clip.exists():
+            break
+        time.sleep(0.01)
+    assert rendered == ["Econ is due at nine, sir. Don't forget the quiz."] and not clip.exists()
+
+
+def test_kokoro_failure_falls_back_to_say(player, monkeypatch, capsys):
+    from jarvis import voice
+
+    def broken(text):
+        raise ImportError("No module named 'kokoro_onnx'")
+    monkeypatch.setattr(voice, "kokoro_wav", broken)
+    assert voice.speak("The tests finished, sir.")
+    assert _ran(player)[0] == ["say", "-v", "Daniel", "-r", str(config.VOICE_RATE), "The tests finished, sir."]
+    assert "kokoro failed, using say" in capsys.readouterr().out
+
+
+def test_slow_kokoro_times_out_to_say(player, monkeypatch, tmp_path):
+    from jarvis import voice
+    gate = threading.Event()
+    monkeypatch.setattr(voice, "kokoro_wav", lambda t: gate.wait(2) and str(tmp_path / "late.wav"))
+    monkeypatch.setattr(voice, "KOKORO_TIMEOUT", 0.05)
+    voice.speak("Rent is due tomorrow, sir.")
+    assert _ran(player)[0][0] == "say"
+    gate.set()
+
+
+def test_kokoro_needs_its_files_and_the_setting(tmp_path, monkeypatch):
+    from jarvis import voice
+    monkeypatch.setattr(config, "KOKORO_MODEL_DIR", tmp_path)
+    monkeypatch.setattr(config, "KOKORO_ENABLED", True)
+    assert not voice.kokoro_ready()  # no model files: straight to `say`, no waiting
+    for name in voice.KOKORO_FILES:
+        (tmp_path / name).write_bytes(b"x")
+    monkeypatch.setattr(config, "KOKORO_ENABLED", False)
+    assert not voice.kokoro_ready()
+
+
+def test_voice_off_or_away_never_reaches_kokoro_either(player, monkeypatch):
+    from jarvis import voice
+    monkeypatch.setattr(voice, "kokoro_wav", lambda t: pytest.fail("spoke while it shouldn't"))
+    monkeypatch.setattr(config, "VOICE", False)
+    a = Announcer(FakeMessenger(), Memory(":memory:"), now=lambda: NOON, busy=lambda: False,
+                  presence=lambda now: should_speak(now, idle=1))
+    a.send("Rent due tomorrow")
+    monkeypatch.setattr(config, "VOICE", True)
+    Announcer(FakeMessenger(), now=lambda: NIGHT, busy=lambda: False,
+              presence=lambda now: should_speak(now, idle=1)).send("Quiet hours, sir.")
+    assert player == []
+
+
+def test_spoken_text_drops_code_links_markdown_and_lists():
+    from jarvis.voice import for_speaking
+    reply = ("**Done**, sir. I fixed `parse()` in [the tests](https://x.test/a).\n"
+             "```python\nprint('hi')\n```\n"
+             "## Changes\n- one\n- two\n1. three\n"
+             "It also runs faster now. And a fourth sentence nobody needs.")
+    assert for_speaking(reply) == "Done, sir. I fixed in the tests."
+    assert for_speaking("Due this week:\n- HW 3\n- Quiz 2") == "Due this week."
+    assert for_speaking("Dr. G moved the exam. It's Friday now. Bring a pencil.") == \
+        "Dr. G moved the exam. It's Friday now."
+    assert for_speaking("```\nonly code\n```") == ""
+
+
 def test_conversation_flag_makes_the_desk_busy():
     from jarvis import speech
     assert not speech.busy()

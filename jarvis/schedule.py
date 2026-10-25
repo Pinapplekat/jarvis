@@ -16,7 +16,8 @@ SOURCE = Path(__file__).resolve().parent.parent
 # Jobs run from a copy outside iCloud Drive: iCloud offloads files ("dataless") and
 # background reads of them intermittently fail with EDEADLK.
 PROJECT = Path.home() / "Library/Application Support/JARVIS/app"
-COPY_EXCLUDES = [".git", ".venv", ".venv.nosync", "__pycache__", ".pytest_cache", "data"]
+COPY_EXCLUDES = [".git", ".venv", ".venv.nosync", "__pycache__", ".pytest_cache", "data",
+                 "/models"]  # Kokoro's ~300 MB stays in the repo (config.KOKORO_MODEL_DIR points there)
 LOG_DIR = Path.home() / "Library/Logs/JARVIS"
 AGENTS = Path.home() / "Library/LaunchAgents"
 TICK, LISTEN, WATCH, EARS = "com.jarvis.tick", "com.jarvis.listen", "com.jarvis.watch", "com.jarvis.ears"
@@ -86,7 +87,9 @@ def deploy(uv: str) -> None:
     (PROJECT / ".jarvis-source").write_text(str(SOURCE))  # so the copy knows where its repo lives
     if (PROJECT / ".env").exists():
         (PROJECT / ".env").chmod(0o600)
-    subprocess.run([uv, "sync", "-q", "--project", str(PROJECT)], check=True)
+    from jarvis import config
+    extras = ["--extra", "kokoro"] if config.KOKORO_ENABLED else []  # the British voice, if it installs here
+    subprocess.run([uv, "sync", "-q", "--project", str(PROJECT), *extras], check=True)
 
 
 def install(interval: int = 300, listen: bool = True, watch: bool = True, ears: bool = True,

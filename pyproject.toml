@@ -18,6 +18,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# Kokoro-82M voice (kokoro-onnx doesn't support Python 3.14 yet; there JARVIS uses macOS `say`)
+kokoro = ["kokoro-onnx>=0.4; python_version < '3.14'", "soundfile>=0.12; python_version < '3.14'"]
 
 [project.scripts]
 jarvis = "jarvis.cli:main"

@@ -1103,9 +1103,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.cmd == "say":
-        from jarvis.voice import speak, speakable
+        from jarvis.voice import for_speaking, kokoro_ready, speak
+        print(f"Saying ({'Kokoro ' + config.KOKORO_VOICE if kokoro_ready() else config.VOICE_NAME}): "
+              f"{for_speaking(args.text)}", flush=True)
         speak(args.text)
-        print(f"Saying: {speakable(args.text)}")
         return
 
     if args.cmd == "telegram-setup":

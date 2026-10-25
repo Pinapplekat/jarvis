@@ -51,6 +51,11 @@ VOICE = os.getenv("VOICE", "1") == "1"
 VOICE_NAME = os.getenv("VOICE_NAME", "Daniel")
 VOICE_RATE = int(os.getenv("VOICE_RATE", "185"))
 VOICE_IDLE_SECONDS = int(os.getenv("VOICE_IDLE_SECONDS", "180"))
+# Kokoro-82M, a local text-to-speech model, for a British voice (`uv sync --extra kokoro`, model files in
+# KOKORO_MODEL_DIR). If it's missing, slow or fails, JARVIS says it with VOICE_NAME instead.
+KOKORO_ENABLED = os.getenv("KOKORO_ENABLED", "1") == "1"
+KOKORO_VOICE = os.getenv("KOKORO_VOICE", "bm_george")  # bm_george, bm_daniel, bm_lewis, bf_emma...
+KOKORO_MODEL_DIR_SETTING = os.getenv("KOKORO_MODEL_DIR", "")  # empty = models/kokoro in the JARVIS repo
 
 # Talking to JARVIS: on-device Whisper model, and the "Hey Jarvis" desk listener
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base.en")         # small.en is more accurate, slower
@@ -163,6 +168,7 @@ _HERE = Path(__file__).resolve().parent.parent
 _SOURCE_MARK = _HERE / ".jarvis-source"
 PROJECT_DIR = Path(os.getenv("JARVIS_PROJECT_DIR") or (
     _SOURCE_MARK.read_text().strip() if _SOURCE_MARK.is_file() else _HERE)).expanduser()
+KOKORO_MODEL_DIR = Path(KOKORO_MODEL_DIR_SETTING or PROJECT_DIR / "models" / "kokoro").expanduser()
 SELF_INSPECT = os.getenv("SELF_INSPECT", "1") == "1"        # read own files, run read-only checks
 COMMANDS = os.getenv("COMMANDS", "1") == "1"                # terminal commands (risky ones need Approve)
 COMMAND_APPROVAL_MINUTES = int(os.getenv("COMMAND_APPROVAL_MINUTES", "30"))  # unanswered requests expire

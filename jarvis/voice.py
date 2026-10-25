@@ -1,4 +1,5 @@
-"""JARVIS speaking out loud on the Mac (macOS `say`, free, on-device).
+"""JARVIS speaking out loud on the Mac: Kokoro-82M (a local model, British voice) when it's
+installed, macOS `say` when it isn't or fails. Both are free and on-device.
 
 Speech is only used when Elijah is at the Mac (recent keyboard/mouse activity) and it's
 not quiet hours. Telegram always gets the text too, so nothing is lost if he's away.
@@ -49,30 +50,143 @@ def speakable(text: str, limit: int = MAX_SPOKEN) -> str:
     return text
 
 
-_speaking: subprocess.Popen | None = None  # the `say` started by speak(), so it can be stopped
-ANNOUNCE_PID = config.DATA_DIR / "announcing.pid"  # an announcement's `say`, so the desk mic can stop it
+CODE_BLOCK = re.compile(r"```.*?(?:```|\Z)", re.S)
+INLINE_CODE = re.compile(r"`[^`\n]*`")
+MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+LIST_OR_HEADING = re.compile(r"^\s*(?:(?:[-*•+]|\d+[.)]|#{1,6})\s|\|)")
+EMPHASIS = re.compile(r"\*{1,3}|~~|(?<!\w)_{1,2}|_{1,2}(?!\w)")
+SPOKEN_SENTENCES = 2
+
+
+def for_speaking(text: str, sentences: int = SPOKEN_SENTENCES) -> str:
+    """What speak() says aloud: no code, links, markdown, headings or list items, and only the
+    first couple of sentences (the full text is on Telegram)."""
+    from jarvis.speech import SentenceBuffer
+    text = INLINE_CODE.sub("", CODE_BLOCK.sub("\n", MD_LINK.sub(r"\1", text)))
+    text = "\n".join(re.sub(r"^\s*>\s?", "", line) for line in text.splitlines() if not LIST_OR_HEADING.match(line))
+    buf = SentenceBuffer()
+    parts = [s for s in (speakable(EMPHASIS.sub("", s)) for s in buf.feed(text) + buf.flush()) if s]
+    spoken = speakable(" ".join(parts[:sentences]))
+    return spoken[:-1].rstrip() + "." if spoken.endswith(":") else spoken  # "Due:" lost its list
+
+
+_speaking: subprocess.Popen | None = None  # the `say`/`afplay` started by speak(), so it can be stopped
+_generation = 0  # bumped by stop_speaking(), so a Kokoro clip still rendering isn't played afterwards
+ANNOUNCE_PID = config.DATA_DIR / "announcing.pid"  # an announcement's player, so the desk mic can stop it
 HOLD_MAX_SECONDS = 300   # an announcement waits at most this long for a conversation to end
 REPEAT_WINDOW = 600      # the same words aren't said aloud twice within this many seconds
+KOKORO_FILES = ("kokoro-v1.0.onnx", "voices-v1.0.bin")
+KOKORO_TIMEOUT = 20      # seconds to render (the first load reads ~300 MB); slower than this, `say` speaks
+
+_kokoro = None
+_kokoro_lock = threading.Lock()
 
 
-def speak(text: str) -> bool:
-    """Say it out loud without blocking. Returns False if there was nothing to say."""
+def kokoro_ready() -> bool:
+    """Is Kokoro turned on, installed, and are its model files there?"""
+    from importlib.util import find_spec
+    return (config.KOKORO_ENABLED and all((config.KOKORO_MODEL_DIR / f).is_file() for f in KOKORO_FILES)
+            and find_spec("kokoro_onnx") is not None and find_spec("soundfile") is not None)
+
+
+def _kokoro_model():
+    """Load the model once per process (slow the first time) and keep it."""
+    global _kokoro
+    with _kokoro_lock:
+        if _kokoro is None:
+            from kokoro_onnx import Kokoro
+            d = config.KOKORO_MODEL_DIR
+            _kokoro = Kokoro(str(d / KOKORO_FILES[0]), str(d / KOKORO_FILES[1]))
+        return _kokoro
+
+
+def kokoro_wav(text: str) -> str:
+    """Render text to a temp WAV in the Kokoro voice; returns its path (the caller deletes it)."""
+    import soundfile
+    voice = config.KOKORO_VOICE
+    samples, rate = _kokoro_model().create(text, voice=voice, speed=1.0,
+                                           lang="en-gb" if voice.startswith("b") else "en-us")
+    fd, path = tempfile.mkstemp(prefix="jarvis-kokoro-", suffix=".wav")
+    os.close(fd)
+    try:
+        soundfile.write(path, samples, rate)
+    except Exception:
+        _unlink(path)
+        raise
+    return path
+
+
+def render_kokoro(text: str, timeout: float | None = None) -> str:
+    """kokoro_wav, but give up after `timeout` (KOKORO_TIMEOUT) seconds; a clip that finishes later is deleted."""
+    timeout = KOKORO_TIMEOUT if timeout is None else timeout
+    box, done, late = {}, threading.Event(), threading.Event()
+
+    def run():
+        try:
+            box["path"] = kokoro_wav(text)
+        except Exception as e:
+            box["error"] = e
+        done.set()
+        if late.is_set() and "path" in box:
+            _unlink(box["path"])
+    threading.Thread(target=run, daemon=True).start()
+    if not done.wait(timeout):
+        late.set()
+        if done.is_set() and "path" in box:
+            _unlink(box["path"])
+        raise TimeoutError(f"Kokoro took over {timeout:g}s")
+    if "error" in box:
+        raise box["error"]
+    return box["path"]
+
+
+def _start(argv: list[str]) -> subprocess.Popen:
     global _speaking
-    spoken = speakable(text)
-    if not spoken:
-        return False
-    _speaking = subprocess.Popen(["say", "-v", config.VOICE_NAME, "-r", str(config.VOICE_RATE), spoken],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    _speaking = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     try:
         ANNOUNCE_PID.write_text(str(_speaking.pid))
     except (OSError, AttributeError):
         pass
+    return _speaking
+
+
+def _say(spoken: str) -> subprocess.Popen:
+    return _start(["say", "-v", config.VOICE_NAME, "-r", str(config.VOICE_RATE), spoken])
+
+
+def _speak_kokoro(spoken: str, generation: int) -> None:
+    try:
+        path = render_kokoro(spoken)
+    except Exception as e:  # not installed right, bad voice name, too slow...: the old voice says it
+        print(f"kokoro failed, using say: {type(e).__name__}: {str(e)[:150]}", flush=True)
+        if generation == _generation:
+            _say(spoken)
+        return
+    if generation != _generation:  # stopped while it was rendering
+        _unlink(path)
+        return
+    try:
+        _start(["afplay", path]).wait()
+    finally:
+        _unlink(path)
+
+
+def speak(text: str) -> bool:
+    """Say it out loud without blocking (Kokoro if ready, else `say`). Returns False if there was nothing to say."""
+    spoken = for_speaking(text)
+    if not spoken:
+        return False
+    if kokoro_ready():
+        # not a daemon: a short-lived command (`jarvis say`, tick) stays up until it has spoken
+        threading.Thread(target=_speak_kokoro, args=(spoken, _generation)).start()
+    else:
+        _say(spoken)
     return True
 
 
 def stop_announcement() -> bool:
     """Stop an announcement another JARVIS process is saying (he just woke JARVIS at the desk, so only
-    one voice talks). Only ever stops a `say` process. True if one was stopped."""
+    one voice talks). Only ever stops a `say` or `afplay` process. True if one was stopped."""
     import signal
     try:
         pid = int(ANNOUNCE_PID.read_text().strip())
@@ -83,7 +197,7 @@ def stop_announcement() -> bool:
                               timeout=3).stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
         return False
-    if not name.endswith("say"):
+    if not name.endswith(("say", "afplay")):
         return False
     try:
         os.kill(pid, signal.SIGTERM)
@@ -94,7 +208,8 @@ def stop_announcement() -> bool:
 
 def stop_speaking() -> bool:
     """Cut off whatever speak() is saying. True if something was still talking."""
-    global _speaking
+    global _speaking, _generation
+    _generation += 1
     proc, _speaking = _speaking, None
     if proc is None or proc.poll() is not None:
         return False
@@ -106,7 +221,12 @@ def stop_speaking() -> bool:
 
 
 def synthesize(text: str) -> str:
-    """Render one sentence to an AIFF file in JARVIS's voice; returns its path."""
+    """Render one sentence to an audio file in JARVIS's voice (Kokoro WAV, else `say` AIFF); returns its path."""
+    if kokoro_ready():
+        try:
+            return render_kokoro(text)
+        except Exception as e:
+            print(f"kokoro failed, using say: {type(e).__name__}: {str(e)[:150]}", flush=True)
     fd, path = tempfile.mkstemp(prefix="jarvis-say-", suffix=".aiff")
     os.close(fd)
     subprocess.run(["say", "-v", config.VOICE_NAME, "-r", str(config.VOICE_RATE), "-o", path, text],
@@ -138,6 +258,8 @@ class SpeakQueue:
         self.first_audio_at: float | None = None
         for target in (self._render_loop, self._play_loop):
             threading.Thread(target=target, daemon=True).start()
+        if synth is synthesize and kokoro_ready():  # load the model now, not on his first question
+            threading.Thread(target=lambda: _quietly(_kokoro_model), daemon=True).start()
 
     def say(self, text: str) -> None:
         spoken = speakable(text)
@@ -229,6 +351,13 @@ class SpeakQueue:
                 if clip is not None:
                     self._discard(clip)
                 self._done_one()
+
+
+def _quietly(fn) -> None:
+    try:
+        fn()
+    except Exception:
+        pass  # synthesize() falls back to `say` and says why
 
 
 def _unlink(path) -> None:

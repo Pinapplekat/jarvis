@@ -62,6 +62,14 @@ def _no_real_camera_app(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_kokoro(monkeypatch, tmp_path):
+    """Tests never load the real Kokoro model; tests/test_voice.py turns it on with a fake."""
+    from jarvis import config
+    monkeypatch.setattr(config, "KOKORO_ENABLED", False)
+    monkeypatch.setattr(config, "KOKORO_MODEL_DIR", tmp_path / "kokoro-test")
+
+
+@pytest.fixture(autouse=True)
 def _prod_mode_off(monkeypatch):
     """Prod mode stays off in tests whatever .env says; tests/test_prodmode.py turns it on with fakes."""
     from jarvis import prodmode
