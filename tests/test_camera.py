@@ -191,6 +191,132 @@ def test_his_own_question_about_himself_can_use_the_camera(data_dir, monkeypatch
     assert len(taken) == 1
 
 
+# ----- the preview stays up: reuse, close, fallback notes -----
+def answer_on_wait(data_dir, write=b"\xff\xd8APP"):
+    """An app that's already open: it answers the request while JARVIS waits (no launch)."""
+    def sleep(s):
+        d = data_dir / "camera-app"
+        req = json.loads((d / "request.json").read_text())
+        with open(req["out"], "r+b") as f:
+            f.write(write)
+        (d / "ack.json").write_text(json.dumps({"id": req["id"], "state": "captured"}))
+    return sleep
+
+
+def open_preview(data_dir, pid=None):
+    import os
+    d = data_dir / "camera-app"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "state.json").write_text(json.dumps({"pid": pid or os.getpid()}))
+
+
+def test_the_request_asks_for_a_moment_then_a_preview_that_stays(data_dir, preview):
+    app = fake_app(data_dir)
+    camera.capture_frame(run=fake_run(), launch=app, sleep=lambda s: None)
+    [req] = app.seen
+    assert req["max"] == config.CAMERA_PREVIEW_MAX_SECONDS
+    assert camera.last_note == camera.STILL_UP and "close the camera" in camera.last_note
+    src = camera.SWIFT
+    assert 'clamp(o["preview"], 1)' in src  # about a second of live preview before the flash
+    assert src.count("stopRunning()") == 1  # only closing stops the camera, not the picture
+    assert "● LIVE" in src and "keyCode == 53" in src and "#selector(close)" in src  # plainly live, closable
+    assert "closePath" in src and "statePath" in src
+
+
+def test_a_second_look_reuses_the_open_preview(data_dir, preview):
+    open_preview(data_dir)
+    assert camera.preview_open()
+    path = camera.capture_frame(run=fake_run(), launch=lambda: pytest.fail("a second app opened"),
+                                sleep=answer_on_wait(data_dir))
+    assert path.read_bytes() == b"\xff\xd8APP" and camera.last_how == "with the preview (already open)"
+    path.unlink()
+
+
+def test_a_crashed_apps_state_isnt_an_open_preview(data_dir):
+    open_preview(data_dir, pid=2 ** 22 + 12345)  # no such process
+    assert not camera.preview_open()
+    assert not (data_dir / "camera-app" / "state.json").exists()
+
+
+def test_close_preview_asks_the_app_and_waits_for_it(data_dir):
+    assert camera.close_preview() is False  # nothing open
+    open_preview(data_dir)
+    d = data_dir / "camera-app"
+
+    def app_closes(s):
+        assert (d / "close.json").exists()
+        (d / "state.json").unlink()
+    assert camera.close_preview(sleep=app_closes) is True
+    open_preview(data_dir)
+    with pytest.raises(RuntimeError, match="didn't close"):
+        camera.close_preview(timeout=0.05, sleep=lambda s: None)
+
+
+def test_no_preview_says_so_plainly_and_still_takes_the_picture(data_dir, preview):
+    def broken():
+        raise camera.AppUnavailable("the camera app isn't built")
+    path = camera.capture_frame(run=fake_run(), tool="imagesnap", launch=broken, sleep=lambda s: None)
+    assert path.exists() and camera.last_note.startswith("The camera preview didn't open")
+    assert "isn't built" in camera.last_note
+    # headless (no screen): the app says so and imagesnap takes it
+    path = camera.capture_frame(run=fake_run(), tool="imagesnap", sleep=lambda s: None,
+                                launch=fake_app(data_dir, answer=camera.NO_SCREEN, write=b""))
+    assert path.exists() and camera.NO_SCREEN in camera.last_note
+    # the app has no permission but imagesnap does
+    path = camera.capture_frame(run=fake_run(), tool="imagesnap", sleep=lambda s: None,
+                                launch=fake_app(data_dir, answer="camera not allowed", write=b""))
+    assert path.exists() and "not allowed" in camera.last_note
+
+
+def test_closing_the_preview_mid_look_takes_no_picture_at_all(data_dir, preview):
+    run = fake_run()
+    with pytest.raises(camera.Closed):
+        camera.capture_frame(run=run, tool="imagesnap", sleep=lambda s: None,
+                             launch=fake_app(data_dir, answer=camera.CLOSED_EARLY, write=b""))
+    assert run.calls == [] and list((data_dir / "tmp" / "camera").iterdir()) == []
+
+
+def test_the_still_is_deleted_after_the_look_while_the_preview_stays(data_dir, preview, monkeypatch):
+    from jarvis import chat
+    open_preview(data_dir)
+    real = camera.capture_frame
+    monkeypatch.setattr(camera, "capture_frame", lambda: real(run=fake_run(), sleep=answer_on_wait(data_dir)))
+    assert chat.look_through_camera("look at me", "", lambda s, p, img: "You, sir.") == "You, sir."
+    assert list((data_dir / "tmp" / "camera").iterdir()) == [] and camera.preview_open()
+    assert chat.preview_note() == camera.STILL_UP
+
+
+@pytest.mark.parametrize("message", ["look at me", "Look at what I’m holding", "look at what I am holding",
+                                     "can you look at this thing", "what's in my hand?", "take a picture of me",
+                                     "have a look at what I've got", "check me out, jarvis"])
+def test_his_explicit_asks_to_look_at_him_pass_the_gate(message):
+    from jarvis import chat
+    assert chat.camera_refusal(message, "telegram") == ""
+    assert chat.camera_refusal(message, "email") == chat.CAMERA_NOT_FROM_HIM
+
+
+@pytest.mark.parametrize("message", ["what's the weather", "> look at me\nwhat does this quote mean?",
+                                     "summarize my week"])
+def test_other_words_and_quoted_text_dont(message):
+    from jarvis import chat
+    assert chat.camera_refusal(message, "telegram") == chat.CAMERA_NOT_HIS
+
+
+def test_close_camera_is_an_action_and_an_instant_command(data_dir):
+    from jarvis import chat, router
+    from jarvis.memory import Memory
+    m = Memory(":memory:")
+    said = []
+    assert chat.apply_actions(m, [{"type": "close_camera"}], None, said=said) == []
+    assert said == [camera.NOT_OPEN]
+    assert "- close_camera:" in chat.system_prompt()
+    assert router.camera_command("close the camera", False) == "close"
+    assert router.camera_command("Turn the camera off please", False) == "close"
+    assert router.camera_command("close that", True) == "close"
+    assert router.camera_command("close that", False) is None  # not about the camera when it isn't up
+    assert router.camera_command("what camera should I buy", True) is None
+
+
 def test_only_chat_can_use_the_camera():
     """Background jobs (tick, heartbeat, watches, mail, tasks) never reach the capture: only the
     chat's validated action calls it, and the CLI only sweeps leftovers."""

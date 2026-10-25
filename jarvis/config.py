@@ -101,11 +101,14 @@ INBOX = os.getenv("INBOX", "1") == "1"  # the Telegram chat on the Mac, with wor
 # One camera still when Elijah asks to show JARVIS something (looked at privately, then deleted).
 # Needs imagesnap and macOS Camera permission; CAMERA=0 turns it off.
 CAMERA = os.getenv("CAMERA", "1") == "1"
-# JARVIS Camera.app (it holds the Camera permission): a live preview, a white flash, the frozen frame, then
-# it closes. CAMERA_PREVIEW=0 (or the app not opening in time) takes the still with imagesnap, no preview.
+# JARVIS Camera.app (it holds the Camera permission): a live preview, a white flash, the frozen frame a
+# moment, then the live preview stays up until he closes it or asks JARVIS to (or after
+# CAMERA_PREVIEW_MAX_SECONDS without a look; 0 = no limit). CAMERA_PREVIEW=0 (or the app not opening in
+# time) takes the still with imagesnap, no preview.
 CAMERA_PREVIEW = os.getenv("CAMERA_PREVIEW", "1") == "1"
-CAMERA_PREVIEW_SECONDS = float(os.getenv("CAMERA_PREVIEW_SECONDS", "1.5"))
-CAMERA_HOLD_SECONDS = float(os.getenv("CAMERA_HOLD_SECONDS", "2"))
+CAMERA_PREVIEW_SECONDS = float(os.getenv("CAMERA_PREVIEW_SECONDS", "1"))
+CAMERA_HOLD_SECONDS = float(os.getenv("CAMERA_HOLD_SECONDS", "0.6"))
+CAMERA_PREVIEW_MAX_SECONDS = float(os.getenv("CAMERA_PREVIEW_MAX_SECONDS", "900"))
 CAMERA_APP_TIMEOUT = float(os.getenv("CAMERA_APP_TIMEOUT", "10"))  # seconds to wait for its picture
 # A code-signing identity in his login keychain (e.g. a self-signed "JARVIS Camera Signing" certificate), so
 # rebuilding the camera app keeps its Camera permission. Empty: ad-hoc signing (a rebuild may ask again).

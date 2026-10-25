@@ -294,6 +294,11 @@ def _answer_timed(mem: Memory, text: str, on_progress, spoken: bool, warm, on_fi
     if config.PANEL and (op := router.panel_command(text, panel.visible())):  # "close that", "bigger", "show me the screenshot"
         timing.mark("instant", 0)
         return _instant(mem, text, ("panel", op), spoken=spoken, phone=phone)
+    if config.CAMERA:  # "close the camera" (or "close that" while its preview is up)
+        from jarvis import camera
+        if op := router.camera_command(text, camera.preview_open()):
+            timing.mark("instant", 0)
+            return _instant(mem, text, ("camera", op), spoken=spoken, phone=phone)
     hit = router.media_command(text) if config.SIRI else None
     if hit:  # "pause", "skip", "volume 40": done at once, no model round trip
         timing.mark("instant", 0)
@@ -394,7 +399,7 @@ def _instant(mem: Memory, text: str, cmd: tuple, spoken: bool = False, phone: bo
     kind = cmd[0]
     from jarvis import status
     status.show_action({"timer": "set_timer", "alarm": "set_alarm", "panel": "panel", "play": "play_music",
-                        "model": "switch_model"}.get(kind, ""))
+                        "model": "switch_model", "camera": "close_camera"}.get(kind, ""))
     try:
         if kind == "time":
             reply = f"It's {now:%-I:%M %p}, sir."
@@ -411,11 +416,14 @@ def _instant(mem: Memory, text: str, cmd: tuple, spoken: bool = False, phone: bo
             op = cmd[1]
             reply = (panel.show(mem, {"kind": "image", "path": "latest"}) if op == "screenshot"
                      else panel.PANEL_OPS[op](mem))
+        elif kind == "camera":
+            from jarvis import camera
+            reply = camera.CLOSED if camera.close_preview() else camera.NOT_OPEN
         else:
             reply = siri.music(mem, cmd[1], "any")
     except Exception as e:  # never leave him without an answer, and never claim it worked
         what = {"timer": "set the timer", "alarm": "set the alarm", "play": "play that",
-                "panel": "show that"}.get(kind, "do that")
+                "panel": "show that", "camera": "close the camera"}.get(kind, "do that")
         reply = f"Sorry, sir, I couldn't {what}: {str(e)[:150]}"
     status.end_action()
     mem.log("instant", f"{kind}: {reply[:150]}")

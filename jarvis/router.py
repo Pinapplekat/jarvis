@@ -208,6 +208,25 @@ _PANEL_OPS = [
 ]
 
 
+_CAMERA_OFF = re.compile(r"(?:close|hide|dismiss|shut|stop|end|turn\s+off|switch\s+off)\s+(?:the\s+|your\s+)?"
+                         r"(?:camera|webcam|preview)(?:\s+(?:preview|window|feed))?(?:\s+off)?"
+                         r"|(?:turn|switch|shut)\s+(?:the\s+)?(?:camera|webcam)\s+off|(?:camera|webcam|preview)\s+off", re.I)
+_CLOSE_IT = re.compile(r"(?:close|hide|dismiss)\s+(?:that|it|this|the\s+window)", re.I)
+
+
+def camera_command(text: str, open_: bool) -> str | None:
+    """'close' when the whole message asks to close the camera preview ("close the camera"); "close that"
+    only counts while the preview is up (the panel, when showing, gets it first)."""
+    t = re.sub(r"[.!?]+$", "", " ".join(str(text).replace("’", "'").split())).strip()
+    for _ in range(3):
+        t = _POLITE.sub("", t).strip(" ,")
+    if not t or len(t) > 80:
+        return None
+    if _CAMERA_OFF.fullmatch(t) or (open_ and _CLOSE_IT.fullmatch(t)):
+        return "close"
+    return None
+
+
 def panel_command(text: str, showing: bool) -> str | None:
     """'close' | 'bigger' | 'smaller' | 'back' (only while the panel shows something) | 'screenshot'."""
     t = re.sub(r"[.!?]+$", "", " ".join(str(text).replace("’", "'").split())).strip()

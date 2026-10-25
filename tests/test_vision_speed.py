@@ -67,6 +67,29 @@ def test_a_message_about_something_else_takes_no_screenshot(monkeypatch):
     assert not router.route("what's on my screen?", [], judge.fast_engine()).look  # looks are loop steps now
 
 
+def test_a_camera_look_says_when_the_preview_is_up_or_was_skipped(tmp_path, monkeypatch):
+    """The ~1 s preview, the photo and the preview staying up are the app's; the reply always says which
+    happened (never silence), and the still is deleted after the look."""
+    from jarvis import camera, chat, config
+    from tests.test_chat import NOW, scripted
+    monkeypatch.setattr(config, "CAMERA", True)
+    assert config.CAMERA_PREVIEW_SECONDS <= 1.5
+    look = {"reply": "", "actions": [{"type": "look_through_camera", "question": "him"}]}
+    for note in (camera.STILL_UP, "The camera preview didn't open (no screen for the preview), so I took "
+                                  "the picture without it."):
+        shot = tmp_path / "camera-x.jpg"
+
+        def capture(note=note, shot=shot):
+            shot.write_bytes(b"\xff\xd8CAM")
+            monkeypatch.setattr(camera, "last_note", note)
+            return shot
+        monkeypatch.setattr(camera, "capture_frame", capture)
+        reply = chat.respond(Memory(":memory:"), "look at me", NOW, "", runner=scripted(look),
+                             vision=lambda *a: "You're in a grey hoodie, sir.", channel="telegram")
+        assert reply.startswith("You're in a grey hoodie") and chat.CAMERA_USED in reply and note in reply
+        assert not shot.exists()
+
+
 class FakeSession:
     started = 0
 
