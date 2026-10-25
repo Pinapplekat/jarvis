@@ -317,6 +317,38 @@ def test_close_camera_is_an_action_and_an_instant_command(data_dir):
     assert router.camera_command("what camera should I buy", True) is None
 
 
+@pytest.mark.parametrize("sign_fails", [False, True])
+def test_the_app_is_signed_last_so_its_stamp_is_sealed(tmp_path, monkeypatch, sign_fails):
+    """codesign seals everything in the bundle, so the stamp must already be there when it runs;
+    a write after signing breaks the signature and the app won't launch."""
+    app = tmp_path / "JARVIS Camera.app"
+    monkeypatch.setattr(camera, "APP", app)
+    monkeypatch.setattr(camera, "EXECUTABLE", app / "Contents" / "MacOS" / "jarvis-camera")
+    stamp = app / "Contents" / "Resources" / "stamp"
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv[0])
+        if argv[0] == "swiftc":
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"bin")
+        if argv[0] == "codesign":
+            assert stamp.read_text() == camera._stamp()  # already in place when sealed
+            if sign_fails:
+                raise subprocess.CalledProcessError(1, argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(camera.subprocess, "run", run)
+    if sign_fails:
+        with pytest.raises(subprocess.CalledProcessError):
+            camera.build()
+        assert not stamp.exists() and not camera.built()  # an unsigned app gets rebuilt next time
+    else:
+        assert camera.build() is True and camera.built()
+        assert camera.build() is False
+        monkeypatch.setattr(camera, "BUILD_VERSION", "old")  # an app built by an older build()
+        assert not camera.built()
+    assert calls[-1] == "codesign"
+
+
 def test_only_chat_can_use_the_camera():
     """Background jobs (tick, heartbeat, watches, mail, tasks) never reach the capture: only the
     chat's validated action calls it, and the CLI only sweeps leftovers."""

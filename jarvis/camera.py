@@ -506,8 +506,13 @@ INFO = {
 }
 
 
+# Bumped when build() itself changes, so apps built the old way are rebuilt (2: signed after the stamp).
+BUILD_VERSION = "2"
+
+
 def _stamp() -> str:
-    return hashlib.sha256((SWIFT + repr(sorted(INFO.items())) + config.CAMERA_SIGN_IDENTITY).encode()).hexdigest()[:16]
+    return hashlib.sha256((BUILD_VERSION + SWIFT + repr(sorted(INFO.items()))
+                           + config.CAMERA_SIGN_IDENTITY).encode()).hexdigest()[:16]
 
 
 def built() -> bool:
@@ -529,7 +534,14 @@ def build() -> bool:
         r = subprocess.run(["swiftc", "-O", "-o", str(EXECUTABLE), str(src)], capture_output=True, text=True)
         if r.returncode != 0:
             raise RuntimeError(f"couldn't compile the camera app: {r.stderr[-500:]}")
-    subprocess.run(["codesign", "--force", "--sign", config.CAMERA_SIGN_IDENTITY or "-",
-                    "--identifier", INFO["CFBundleIdentifier"], str(APP)], check=True, capture_output=True)
-    (APP / "Contents" / "Resources" / "stamp").write_text(_stamp())
+    # The stamp lives inside the bundle, so it's written before signing: codesign seals it, and
+    # nothing touches the bundle afterwards (a later write breaks the signature and the app won't open).
+    stamp = APP / "Contents" / "Resources" / "stamp"
+    stamp.write_text(_stamp())
+    try:
+        subprocess.run(["codesign", "--force", "--sign", config.CAMERA_SIGN_IDENTITY or "-",
+                        "--identifier", INFO["CFBundleIdentifier"], str(APP)], check=True, capture_output=True)
+    except BaseException:
+        stamp.unlink(missing_ok=True)  # unsigned isn't built: try again next time
+        raise
     return True
