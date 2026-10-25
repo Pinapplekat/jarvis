@@ -330,15 +330,17 @@ def test_the_app_is_signed_last_so_its_stamp_is_sealed(tmp_path, monkeypatch, si
     def run(argv, **kw):
         calls.append(argv[0])
         if argv[0] == "swiftc":
+            # An explicit deployment target, so the binary's minos isn't newer than this Mac (-10825).
+            assert argv[argv.index("-target") + 1].endswith("-apple-macos13")
             Path(argv[argv.index("-o") + 1]).write_bytes(b"bin")
         if argv[0] == "codesign":
             assert stamp.read_text() == camera._stamp()  # already in place when sealed
             if sign_fails:
-                raise subprocess.CalledProcessError(1, argv)
+                return subprocess.CompletedProcess(argv, 1, "", "no identity")
         return subprocess.CompletedProcess(argv, 0, "", "")
     monkeypatch.setattr(camera.subprocess, "run", run)
     if sign_fails:
-        with pytest.raises(subprocess.CalledProcessError):
+        with pytest.raises(RuntimeError, match="couldn't sign the camera app: no identity"):
             camera.build()
         assert not stamp.exists() and not camera.built()  # an unsigned app gets rebuilt next time
     else:

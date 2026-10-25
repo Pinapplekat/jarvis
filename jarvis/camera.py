@@ -20,6 +20,7 @@ JARVIS), and `last_note` says so plainly for his reply. CAMERA=0 turns it off.
 import hashlib
 import json
 import os
+import platform
 import plistlib
 import re
 import shutil
@@ -506,8 +507,13 @@ INFO = {
 }
 
 
-# Bumped when build() itself changes, so apps built the old way are rebuilt (2: signed after the stamp).
-BUILD_VERSION = "2"
+# Bumped when build() itself changes, so apps built the old way are rebuilt (2: signed after the stamp,
+# 3: explicit deployment target).
+BUILD_VERSION = "3"
+
+# An explicit deployment target: left to the SDK default, the binary's minos can be newer than the
+# running macOS and LaunchServices refuses to open it (error -10825).
+TARGET = f"{'x86_64' if platform.machine() == 'x86_64' else 'arm64'}-apple-macos13"
 
 
 def _stamp() -> str:
@@ -531,7 +537,8 @@ def build() -> bool:
     with tempfile.TemporaryDirectory() as tmp:
         src = Path(tmp) / "main.swift"
         src.write_text(SWIFT)
-        r = subprocess.run(["swiftc", "-O", "-o", str(EXECUTABLE), str(src)], capture_output=True, text=True)
+        r = subprocess.run(["swiftc", "-O", "-target", TARGET, "-o", str(EXECUTABLE), str(src)],
+                           capture_output=True, text=True)
         if r.returncode != 0:
             raise RuntimeError(f"couldn't compile the camera app: {r.stderr[-500:]}")
     # The stamp lives inside the bundle, so it's written before signing: codesign seals it, and
@@ -539,8 +546,10 @@ def build() -> bool:
     stamp = APP / "Contents" / "Resources" / "stamp"
     stamp.write_text(_stamp())
     try:
-        subprocess.run(["codesign", "--force", "--sign", config.CAMERA_SIGN_IDENTITY or "-",
-                        "--identifier", INFO["CFBundleIdentifier"], str(APP)], check=True, capture_output=True)
+        r = subprocess.run(["codesign", "--force", "--sign", config.CAMERA_SIGN_IDENTITY or "-",
+                            "--identifier", INFO["CFBundleIdentifier"], str(APP)], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"couldn't sign the camera app: {r.stderr[-500:]}")
     except BaseException:
         stamp.unlink(missing_ok=True)  # unsigned isn't built: try again next time
         raise
