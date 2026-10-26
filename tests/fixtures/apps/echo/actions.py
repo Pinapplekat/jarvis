@@ -3,6 +3,13 @@ from jarvis.core.api import AppContext, Attachment, Result
 NOTES: list[str] = []
 SENT: list[tuple] = []
 WIPED: list[str] = []
+CONTEXT: str | Exception = ""
+
+
+def context(ctx: AppContext) -> str:
+    if isinstance(CONTEXT, Exception):
+        raise CONTEXT
+    return CONTEXT
 
 
 def shout(ctx: AppContext, text: str) -> Result:

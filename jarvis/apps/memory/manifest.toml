@@ -2,6 +2,7 @@
 name = "memory"
 description = "Long-term facts about Elijah: remember, forget and look them up by category and key."
 runs_on = "host"
+context = "context"
 
 [[actions]]
 name = "remember"

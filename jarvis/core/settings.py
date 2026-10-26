@@ -20,6 +20,9 @@ class Settings:
     data_dir: Path
     assistant_name: str = "Falak"
     log_level: str = "INFO"
+    model: str = "sonnet"  # the brain's model
+    max_turns: int = 12  # model/tool round trips allowed in one turn
+    turn_timeout_seconds: int = 120
     apps: dict[str, dict] = field(default_factory=dict)  # per-app sections; used from M2
 
 
@@ -41,6 +44,12 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         )
     if not isinstance(values.get("apps", {}), dict):
         raise SettingsError(f"{path}: 'apps' must be a table of [apps.<name>] sections")
+    for key in ("assistant_name", "log_level", "model"):
+        if key in values and not (isinstance(values[key], str) and values[key].strip()):
+            raise SettingsError(f"{path}: '{key}' must be text")
+    for key in ("max_turns", "turn_timeout_seconds"):
+        if key in values and not (isinstance(values[key], int) and not isinstance(values[key], bool) and values[key] > 0):
+            raise SettingsError(f"{path}: '{key}' must be a whole number above zero")
     return Settings(data_dir=data_dir, **values)
 
 

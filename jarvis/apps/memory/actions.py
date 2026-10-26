@@ -73,3 +73,17 @@ def recall(ctx: AppContext, query: str, category: str | None = None) -> Result:
         return Result(f"No facts match '{query}'.", data={"facts": []})
     lines = [f"{r['category']}/{r['key']}: {r['value']}" for r in rows]
     return Result("\n".join(lines), data={"facts": rows})
+
+
+CONTEXT_FACTS = 20
+
+
+def context(ctx: AppContext) -> str:
+    """A compact 'what I know about Elijah' block for every turn: the most recently updated facts."""
+    rows = ctx.db.execute(
+        f"SELECT category, key, value FROM memory_facts ORDER BY updated_at DESC, id DESC LIMIT {CONTEXT_FACTS}"
+    ).fetchall()
+    if not rows:
+        return ""
+    lines = [f"- {r['category']}/{r['key']}: {r['value']}" for r in rows]
+    return "What I know about Elijah (most recently updated first; recall searches the rest):\n" + "\n".join(lines)

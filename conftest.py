@@ -34,5 +34,6 @@ def echo(settings):
     mod = reg.apps["echo"].module
     for store in (mod.NOTES, mod.SENT, mod.WIPED):
         store.clear()
+    mod.CONTEXT = ""
     yield reg
     reg.close()

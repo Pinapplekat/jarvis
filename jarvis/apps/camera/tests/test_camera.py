@@ -29,6 +29,10 @@ def snap(monkeypatch):
     return state
 
 
+def test_photo_is_untrusted_output(real_apps):
+    assert real_apps.find("camera__take_photo")[1].untrusted_output is True
+
+
 def shoot(reg):
     return actions.run(reg, "camera__take_photo", {}, CLI)
 

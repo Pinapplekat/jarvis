@@ -1,6 +1,7 @@
 [app]
 name = "echo"
 description = "Test app covering every effect."
+context = "context"
 
 [[actions]]
 name = "shout"
@@ -60,6 +61,7 @@ type = "string"
 name = "photo"
 description = "Hand back a temp file."
 effect = "read"
+untrusted_output = true
 [actions.input]
 type = "object"
 additionalProperties = false

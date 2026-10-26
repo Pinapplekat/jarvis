@@ -37,6 +37,14 @@ def test_handlers_match_schema(app):
 
 
 @pytest.mark.parametrize("app", APPS, indirect=True)
+def test_untrusted_output_flag_and_context_handler(app):
+    assert all(type(a.untrusted_output) is bool for a in app.manifest.actions)
+    if app.manifest.context:
+        fn = getattr(app.module, app.manifest.context)
+        assert len(inspect.signature(fn).parameters) == 1  # (ctx)
+
+
+@pytest.mark.parametrize("app", APPS, indirect=True)
 def test_effects_confirm_and_undo(app):
     for a in app.manifest.actions:
         assert a.effect in ("read", "local", "outbound", "irreversible")

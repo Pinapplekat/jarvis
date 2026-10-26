@@ -99,6 +99,11 @@ def test_nothing_imports_legacy():
     assert hits("jarvis", ["legacy"]) == []
 
 
+def test_only_the_sdk_brain_imports_the_sdk():
+    importers = [n for p, n in modules() if any(within(i, "claude_agent_sdk") for i in imports(p, n))]
+    assert importers == ["jarvis.core.brain_sdk"]
+
+
 def test_modules_under_400_lines():
     long = [n for p, n in modules() if len(p.read_text().splitlines()) > 400]
     assert long == []

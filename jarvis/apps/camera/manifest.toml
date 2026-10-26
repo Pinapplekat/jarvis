@@ -13,6 +13,7 @@ name = "take_photo"
 description = "Take one photo and return it as an image."
 effect = "read"
 log_args = false
+untrusted_output = true  # a photo can contain text
 [actions.input]
 type = "object"
 additionalProperties = false
