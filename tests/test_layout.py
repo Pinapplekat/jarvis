@@ -60,12 +60,39 @@ def test_protocol_imports_nothing_else_from_jarvis():
     assert hits("jarvis.protocol", ["jarvis"], allowed=["jarvis.protocol"]) == []
 
 
-def test_apps_use_only_the_core_api_and_protocol():
+def app_violations(apps_dir, package="jarvis.apps"):
+    """Imports in each app's own code (not its tests/) that go beyond the core api, protocol and itself."""
     found = []
-    for app_dir in (p for p in (PKG / "apps").iterdir() if p.is_dir() and not p.name.startswith("__")):
-        own = f"jarvis.apps.{app_dir.name}"
-        found += hits(own, ["jarvis"], allowed=["jarvis.core.api", "jarvis.protocol", own])
-    assert found == []
+    for path in sorted(apps_dir.rglob("*.py")):
+        rel = path.relative_to(apps_dir)
+        if len(rel.parts) < 2 or "tests" in rel.parts:  # tests may drive the core
+            continue
+        name = ".".join([package, *rel.with_suffix("").parts])
+        own = f"{package}.{rel.parts[0]}"
+        found += [
+            f"{name} imports {i}"
+            for i in imports(path, name)
+            if within(i, "jarvis") and not any(within(i, a) for a in ("jarvis.core.api", "jarvis.protocol", own))
+        ]
+    return found
+
+
+def test_apps_use_only_the_core_api_and_protocol():
+    assert app_violations(PKG / "apps") == []
+
+
+def test_app_check_catches_violations_in_actions_but_not_tests(tmp_path):
+    app = tmp_path / "demo"
+    (app / "tests").mkdir(parents=True)
+    (app / "actions.py").write_text("from jarvis.core import db\nfrom jarvis.core.api import Result\n")
+    (app / "tests" / "test_x.py").write_text("from jarvis.core import db\n")
+    assert app_violations(tmp_path) == ["jarvis.apps.demo.actions imports jarvis.core"]
+
+
+def test_apps_cannot_import_each_other(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "actions.py").write_text("from jarvis.apps.b import actions\n")
+    assert app_violations(tmp_path) == ["jarvis.apps.a.actions imports jarvis.apps.b"]
 
 
 def test_nothing_imports_legacy():
