@@ -1,0 +1,73 @@
+[app]
+name = "echo"
+description = "Test app covering every effect."
+
+[[actions]]
+name = "shout"
+description = "Upper-case some text."
+effect = "read"
+[actions.input]
+type = "object"
+required = ["text"]
+additionalProperties = false
+[actions.input.properties.text]
+type = "string"
+
+[[actions]]
+name = "note"
+description = "Store a note."
+effect = "local"
+undo = "unnote"
+[actions.input]
+type = "object"
+required = ["text"]
+additionalProperties = false
+[actions.input.properties.text]
+type = "string"
+
+[[actions]]
+name = "send"
+description = "Send text to someone."
+effect = "outbound"
+confirm = "Send {text} to {to}?"
+log_args = false
+[actions.input]
+type = "object"
+required = ["text", "to"]
+additionalProperties = false
+[actions.input.properties.text]
+type = "string"
+[actions.input.properties.to]
+type = "string"
+[actions.input.properties.times]
+type = "integer"
+default = 1
+minimum = 1
+
+[[actions]]
+name = "wipe"
+description = "Wipe something for good."
+effect = "irreversible"
+confirm = "Wipe {what}?"
+[actions.input]
+type = "object"
+required = ["what"]
+additionalProperties = false
+[actions.input.properties.what]
+type = "string"
+
+[[actions]]
+name = "photo"
+description = "Hand back a temp file."
+effect = "read"
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[actions]]
+name = "boom"
+description = "Always crashes."
+effect = "read"
+[actions.input]
+type = "object"
+additionalProperties = false

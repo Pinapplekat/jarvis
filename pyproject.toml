@@ -19,4 +19,4 @@ build-backend = "hatchling.build"
 packages = ["jarvis"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "jarvis/apps"]
