@@ -34,22 +34,29 @@ def applied_versions(conn: sqlite3.Connection) -> list[int]:
     return [r[0] for r in conn.execute("SELECT version FROM schema_migrations ORDER BY version")]
 
 
-def migrate(conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_DIR) -> list[int]:
-    """Apply pending migrations in order, each in its own transaction. Returns the versions applied."""
+def migrate(conn: sqlite3.Connection, migrations_dir: Path = MIGRATIONS_DIR, app: str | None = None) -> list[int]:
+    """Apply pending migrations in order, each in its own transaction. Returns the versions applied.
+
+    With `app`, applies that app's migrations and records them in app_migrations instead.
+    """
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT)"
     )
-    done = set(applied_versions(conn))
+    if app is None:
+        done = set(applied_versions(conn))
+    else:
+        done = {r[0] for r in conn.execute("SELECT version FROM app_migrations WHERE app = ?", (app,))}
     ran: list[int] = []
     for path in sorted(migrations_dir.glob("*.sql")):
         version = int(path.name.split("_", 1)[0])
         if version in done:
             continue
         stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        script = (
-            f"BEGIN;\n{path.read_text()}\n"
-            f"INSERT INTO schema_migrations (version, applied_at) VALUES ({version}, '{stamp}');\nCOMMIT;"
-        )
+        if app is None:
+            record = f"INSERT INTO schema_migrations (version, applied_at) VALUES ({version}, '{stamp}');"
+        else:  # the app name is validated by the manifest loader, so it is safe to inline
+            record = f"INSERT INTO app_migrations (app, version, applied_at) VALUES ('{app}', {version}, '{stamp}');"
+        script = f"BEGIN;\n{path.read_text()}\n{record}\nCOMMIT;"
         try:
             conn.executescript(script)
         except sqlite3.Error:
