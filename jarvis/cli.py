@@ -9,7 +9,7 @@ from pathlib import Path
 
 from jarvis import __version__
 from jarvis.core import actions, db
-from jarvis.core.apps import Registry, load_apps
+from jarvis.core.apps import Registry, load_apps, settings_for_missing_apps
 from jarvis.core.manifest import ManifestError
 from jarvis.core.log import setup_logging
 from jarvis.core.settings import Settings, SettingsError, load_secrets, load_settings
@@ -27,6 +27,7 @@ def _info(settings: Settings) -> int:
     print(f"assistant:   {settings.assistant_name}")
     print(f"log:         {settings.data_dir / 'logs' / 'falak.log'}")
     print(f"secret keys: {sorted(load_secrets(settings.data_dir)) or 'none'}")
+    print(f"settings for missing apps: {settings_for_missing_apps(settings) or 'none'}")
     return 0
 
 

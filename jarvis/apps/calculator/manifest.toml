@@ -3,8 +3,12 @@ name = "calculator"
 description = "Exact arithmetic and common math functions (sqrt, trig, logs, rounding). Use it instead of doing math in your head."
 runs_on = "host"
 
-[settings]
-precision = 12   # significant digits shown for non-integer results (1-20)
+[settings.precision]
+type = "integer"
+default = 12
+minimum = 1
+maximum = 20
+description = "Significant digits shown for non-integer results."
 
 [[actions]]
 name = "evaluate"

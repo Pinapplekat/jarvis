@@ -100,6 +100,5 @@ def evaluate(ctx: AppContext, expression: str) -> Result:
         raise ActionError("That expression is nested too deeply.") from None
     if isinstance(value, complex):
         raise ActionError("That result isn't a real number.")
-    precision = max(1, min(20, int(ctx.settings["precision"])))
-    text = _show(value, precision)
+    text = _show(value, ctx.settings["precision"])
     return Result(text, data={"expression": expression, "result": text})

@@ -6,6 +6,10 @@ COLUMNS = "id, category, key, value, source, updated_at"
 LIMIT = 20
 
 
+def _subject(category: str, key: str) -> str:
+    return f"fact:{category}/{key}"
+
+
 def _row(ctx: AppContext, category: str, key: str) -> dict | None:
     r = ctx.db.execute(f"SELECT {COLUMNS} FROM memory_facts WHERE category=? AND key=?", (category, key)).fetchone()
     return dict(r) if r else None
@@ -22,7 +26,7 @@ def remember(ctx: AppContext, category: str, key: str, value: str) -> Result:
     )
     verb = "Updated" if previous else "Remembered"
     return Result(f"{verb} {category}/{key}: {value}",
-                  undo={"category": category, "key": key, "previous": previous})
+                  undo={"category": category, "key": key, "previous": previous}, subject=_subject(category, key))
 
 
 def undo_remember(ctx: AppContext, undo: dict) -> Result:
@@ -47,7 +51,7 @@ def forget(ctx: AppContext, category: str, key: str) -> Result:
     if row is None:
         raise ActionError(f"I don't have a fact called {category}/{key}.")
     ctx.db.execute("DELETE FROM memory_facts WHERE category=? AND key=?", (category, key))
-    return Result(f"Forgot {category}/{key}.", undo={"row": row})
+    return Result(f"Forgot {category}/{key}.", undo={"row": row}, subject=_subject(category, key))
 
 
 def undo_forget(ctx: AppContext, undo: dict) -> Result:

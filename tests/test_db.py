@@ -18,7 +18,7 @@ def tables(conn):
 def test_fresh_db_has_baseline(settings):
     conn = db.connect(settings)
     assert BASELINE_TABLES <= tables(conn)
-    assert db.applied_versions(conn) == [1, 2]
+    assert db.applied_versions(conn) == [1, 2, 3]
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
@@ -27,7 +27,7 @@ def test_migrations_idempotent(settings):
     conn = db.connect(settings)
     assert db.migrate(conn) == []
     conn.close()
-    assert db.applied_versions(db.connect(settings)) == [1, 2]
+    assert db.applied_versions(db.connect(settings)) == [1, 2, 3]
 
 
 def test_second_migration_applies_once(settings, tmp_path):
@@ -36,21 +36,21 @@ def test_second_migration_applies_once(settings, tmp_path):
     extra.mkdir()
     for f in db.MIGRATIONS_DIR.glob("*.sql"):
         (extra / f.name).write_text(f.read_text())
-    (extra / "0003_extra.sql").write_text("CREATE TABLE extra (id INTEGER PRIMARY KEY);")
-    assert db.migrate(conn, extra) == [3]
+    (extra / "0004_extra.sql").write_text("CREATE TABLE extra (id INTEGER PRIMARY KEY);")
+    assert db.migrate(conn, extra) == [4]
     assert db.migrate(conn, extra) == []
-    assert db.applied_versions(conn) == [1, 2, 3]
+    assert db.applied_versions(conn) == [1, 2, 3, 4]
 
 
 def test_failed_migration_rolls_back(settings, tmp_path):
     conn = db.connect(settings)
     bad = tmp_path / "migs"
     bad.mkdir()
-    (bad / "0003_bad.sql").write_text("CREATE TABLE half (id INTEGER); SELECT * FROM nope;")
+    (bad / "0004_bad.sql").write_text("CREATE TABLE half (id INTEGER); SELECT * FROM nope;")
     with pytest.raises(sqlite3.Error):
         db.migrate(conn, bad)
     assert "half" not in tables(conn)
-    assert db.applied_versions(conn) == [1, 2]
+    assert db.applied_versions(conn) == [1, 2, 3]
 
 
 @pytest.fixture
@@ -68,7 +68,7 @@ def test_import_legacy_db(settings, source_db):
     counts = db.import_legacy_db(settings, source_db)
     assert counts["kv"] == 2
     assert counts["facts"] == 0  # created by the baseline migration
-    assert db.applied_versions(db.connect(settings)) == [1, 2]
+    assert db.applied_versions(db.connect(settings)) == [1, 2, 3]
 
 
 def test_import_refuses_then_overwrites(settings, source_db):

@@ -63,3 +63,15 @@ def test_precision_setting(settings, tmp_path):
         assert calc(reg, "sqrt(2)").result.text == "1.414"
     finally:
         reg.close()
+
+
+def test_precision_bounds_come_from_the_manifest(settings):
+    import pytest
+
+    from jarvis.core.apps import load_apps
+    from jarvis.core.settings import SettingsError, load_settings
+
+    settings.data_dir.mkdir(parents=True)
+    (settings.data_dir / "settings.toml").write_text("[apps.calculator]\nprecision = 21\n")
+    with pytest.raises(SettingsError, match=r"calculator\] precision: must be ≤ 20"):
+        load_apps(load_settings())

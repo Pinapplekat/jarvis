@@ -62,10 +62,12 @@ def _stamp(now: datetime | None = None) -> str:
     return (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
-def _log(reg: Registry, tool: str, effect: str, status: str, args: str, text: str, undo: dict | None = None) -> int:
+def _log(reg: Registry, tool: str, effect: str, status: str, args: str, text: str, undo: dict | None = None,
+         subject: str | None = None) -> int:
     cur = reg.conn.execute(
-        "INSERT INTO action_log (time, tool, effect, status, args, result, undo_json) VALUES (?,?,?,?,?,?,?)",
-        (_stamp(), tool, effect, status, args, text[:LOG_TEXT_MAX], json.dumps(undo) if undo is not None else None),
+        "INSERT INTO action_log (time, tool, effect, status, args, result, undo_json, subject) VALUES (?,?,?,?,?,?,?,?)",
+        (_stamp(), tool, effect, status, args, text[:LOG_TEXT_MAX], json.dumps(undo) if undo is not None else None,
+         subject),
     )
     return cur.lastrowid
 
@@ -106,7 +108,7 @@ def _execute(reg: Registry, app: LoadedApp, action: ActionSpec, args: dict) -> R
         return _fail(reg, app, action, args, f"Something went wrong in {app.manifest.name}")
     undo = result.undo if action.undo else None
     log_id = _log(reg, f"{app.manifest.name}__{action.name}", action.effect, "ran",
-                  _args_text(action, args), result.text, undo)
+                  _args_text(action, args), result.text, undo, result.subject)
     return Ran(result, log_id)
 
 
@@ -192,6 +194,13 @@ def undo(reg: Registry, log_id: int | None = None) -> Ran | Failed:
     if found is None or found[1].undo is None:
         return Failed(f"{row['tool']} can't be undone any more.")
     app, action = found
+    if row["subject"]:
+        newer = reg.conn.execute(
+            "SELECT 1 FROM action_log WHERE id > ? AND subject = ? AND status = 'ran' AND undone_at IS NULL",
+            (row["id"], row["subject"]),
+        ).fetchone()
+        if newer:
+            return Failed("A newer change to the same thing came after it; undo that one first.")
     try:
         result = getattr(app.module, action.undo)(app.ctx, json.loads(row["undo_json"]))
     except ActionError as e:

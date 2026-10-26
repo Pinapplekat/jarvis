@@ -181,3 +181,9 @@ def test_attachment_outside_tmp_is_refused_not_deleted(echo, tmp_path):
     finally:
         mod.photo = original
     assert isinstance(out, actions.Failed) and precious.exists()
+
+
+def test_entries_without_a_subject_undo_in_any_order(echo):
+    first = run(echo, "note", {"text": "a"})
+    run(echo, "note", {"text": "b"})
+    assert isinstance(actions.undo(echo, first.log_id), actions.Ran)

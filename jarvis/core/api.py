@@ -24,6 +24,7 @@ class Result:
     data: dict | None = None  # structured result for the loop
     undo: dict | None = None  # what the app's undo handler needs, if the action has one
     attachments: tuple[Attachment, ...] = ()
+    subject: str | None = None  # what the action changed, e.g. 'fact:personal/color'; undo uses it to refuse out of order
 
 
 class ActionError(Exception):

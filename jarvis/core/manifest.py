@@ -8,13 +8,13 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from jarvis.core.schema import check_schema
+from jarvis.core.schema import check_schema, validate
 
 EFFECTS = ("read", "local", "outbound", "irreversible")
 _NAME = re.compile(r"^[a-z][a-z0-9]*(_[a-z0-9]+)*$")  # snake_case; no "__", which joins app and action
 _RUNS_ON = re.compile(r"^(host|node:[a-z][a-z0-9_]*)$")
-_APP_KEYS = {"name", "description", "runs_on", "secrets"}
-_ACTION_KEYS = {"name", "description", "effect", "handler", "undo", "confirm", "log_args", "input"}
+_APP_KEYS = {"name", "description", "runs_on", "secrets", "context"}
+_ACTION_KEYS = {"name", "description", "effect", "handler", "undo", "confirm", "log_args", "untrusted_output", "input"}
 _NOT_YET = {"sessions": "M5", "jobs": "M6"}
 
 
@@ -35,6 +35,7 @@ class ActionSpec:
     undo: str | None = None
     confirm: str | None = None
     log_args: bool = True
+    untrusted_output: bool = False  # the result can carry someone else's words (a photo, a page, an email)
 
 
 @dataclass(frozen=True)
@@ -43,9 +44,10 @@ class Manifest:
     description: str
     runs_on: str
     secrets: tuple[str, ...]
-    settings: dict
+    settings: dict  # setting name -> schema (type, default, bounds, description)
     actions: tuple[ActionSpec, ...]
     path: Path
+    context: str | None = None  # handler returning a short text block for every turn prompt
 
 
 def _unknown(path: Path, where: str, given: dict, allowed: set[str]) -> None:
@@ -99,7 +101,31 @@ def _action(path: Path, table: dict) -> ActionSpec:
         for _, field, _, _ in string.Formatter().parse(confirm):
             if field is not None and field not in schema.get("properties", {}):
                 raise ManifestError(path, f"{where}: confirm uses {{{field}}}, which is not an input property")
-    return ActionSpec(name, description, effect, schema, handler, undo, confirm, log_args)
+    untrusted = table.get("untrusted_output", False)
+    if not isinstance(untrusted, bool):
+        raise ManifestError(path, f"{where}: untrusted_output must be true or false")
+    return ActionSpec(name, description, effect, schema, handler, undo, confirm, log_args, untrusted)
+
+
+SETTING_TYPES = ("string", "integer", "number", "boolean")
+
+
+def _settings(path: Path, raw: object) -> dict:
+    if not isinstance(raw, dict):
+        raise ManifestError(path, "[settings] must be a table of [settings.<name>] declarations")
+    for key, schema in raw.items():
+        where = f"setting '{key}'"
+        problems = check_schema(schema, key) if isinstance(schema, dict) else [f"{key}: must be a table"]
+        if problems:
+            raise ManifestError(path, f"{where}: {problems[0]}")
+        if schema["type"] not in SETTING_TYPES:
+            raise ManifestError(path, f"{where}: type must be one of {', '.join(SETTING_TYPES)}")
+        if "default" not in schema:
+            raise ManifestError(path, f"{where}: needs a default")
+        problems = validate(schema, schema["default"], key)
+        if problems:
+            raise ManifestError(path, f"{where}: default is invalid ({problems[0]})")
+    return raw
 
 
 def load_manifest(path: Path, folder: str | None = None) -> Manifest:
@@ -127,9 +153,10 @@ def load_manifest(path: Path, folder: str | None = None) -> Manifest:
     secrets = app.get("secrets", [])
     if not isinstance(secrets, list) or not all(isinstance(s, str) for s in secrets):
         raise ManifestError(path, "secrets must be a list of .env key names")
-    settings = raw.get("settings", {})
-    if not isinstance(settings, dict) or not all(isinstance(v, (bool, int, float, str)) for v in settings.values()):
-        raise ManifestError(path, "[settings] must hold plain values (text, numbers, true/false)")
+    settings = _settings(path, raw.get("settings", {}))
+    context = app.get("context")
+    if context is not None and not (isinstance(context, str) and context.isidentifier()):
+        raise ManifestError(path, "context must be a function name")
     tables = raw.get("actions", [])
     if not isinstance(tables, list) or not tables:
         raise ManifestError(path, "an app needs at least one [[actions]] entry")
@@ -137,4 +164,4 @@ def load_manifest(path: Path, folder: str | None = None) -> Manifest:
     names = [a.name for a in actions]
     if len(set(names)) != len(names):
         raise ManifestError(path, f"duplicate action name '{next(n for n in names if names.count(n) > 1)}'")
-    return Manifest(name, description, runs_on, tuple(secrets), settings, actions, path)
+    return Manifest(name, description, runs_on, tuple(secrets), settings, actions, path, context)

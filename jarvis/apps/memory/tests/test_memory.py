@@ -67,3 +67,33 @@ def test_migration_copies_legacy_facts_and_leaves_them(settings):
         assert reg.conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == 1
     finally:
         reg.close()
+
+
+def subjects(reg):
+    return [r["subject"] for r in reg.conn.execute("SELECT subject FROM action_log ORDER BY id")]
+
+
+def test_remember_and_forget_log_the_fact_as_subject(real_apps):
+    do(real_apps, "remember", category="personal", key="test", value="x")
+    do(real_apps, "forget", category="personal", key="test")
+    assert subjects(real_apps) == ["fact:personal/test", "fact:personal/test"]
+
+
+def test_undo_refuses_while_a_newer_change_to_the_same_fact_stands(real_apps):
+    first = do(real_apps, "remember", category="personal", key="test", value="one")
+    second = do(real_apps, "remember", category="personal", key="test", value="two")
+    refused = actions.undo(real_apps, first.log_id)
+    assert isinstance(refused, actions.Failed) and "A newer change" in refused.message
+    assert rows(real_apps)[0][3] == "two"
+    assert isinstance(actions.undo(real_apps, second.log_id), actions.Ran)  # newest first,
+    assert isinstance(actions.undo(real_apps, first.log_id), actions.Ran)  # then the older one
+    assert rows(real_apps) == []
+
+
+def test_undo_ignores_newer_changes_to_other_facts_or_already_undone_ones(real_apps):
+    first = do(real_apps, "remember", category="personal", key="a", value="1")
+    do(real_apps, "remember", category="personal", key="b", value="2")
+    assert isinstance(actions.undo(real_apps, first.log_id), actions.Ran)
+    again = do(real_apps, "remember", category="personal", key="a", value="3")
+    actions.undo(real_apps)  # undoes the newest: a=3
+    assert actions.undo(real_apps, again.log_id).message.startswith("Entry")  # already undone, not "newer change"

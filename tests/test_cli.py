@@ -16,8 +16,16 @@ def test_dev_info(data_dir, capsys):
     (data_dir / ".env").write_text("SECRET_KEY=hunter2\n")
     assert cli.main(["dev", "info"]) == 0
     out = capsys.readouterr().out
-    assert str(data_dir) in out and "[1, 2]" in out and "Falak" in out
+    assert str(data_dir) in out and "[1, 2, 3]" in out and "Falak" in out
     assert "SECRET_KEY" in out and "hunter2" not in out
+    assert "settings for missing apps: none" in out
+
+
+def test_dev_info_lists_settings_for_missing_apps(data_dir, capsys):
+    data_dir.mkdir()
+    (data_dir / "settings.toml").write_text("[apps.calcualtor]\nprecision = 5\n")
+    assert cli.main(["dev", "info"]) == 0
+    assert "settings for missing apps: ['calcualtor']" in capsys.readouterr().out
 
 
 def test_import_db_refuses_existing(data_dir, tmp_path, capsys):

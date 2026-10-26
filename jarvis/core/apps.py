@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import logging
 import sqlite3
 import sys
 import time
@@ -14,11 +15,14 @@ from types import ModuleType
 from jarvis.core import db
 from jarvis.core.api import AppContext
 from jarvis.core.manifest import ActionSpec, Manifest, ManifestError, load_manifest
+from jarvis.core.schema import validate
 from jarvis.core.settings import Settings, SettingsError, load_secrets
 
 DEFAULT_APPS_DIR = Path(__file__).resolve().parent.parent / "apps"
 SEP = "__"  # tool names are <app>__<action>
 TMP_MAX_AGE = 600  # seconds
+
+log = logging.getLogger("jarvis.core.apps")
 
 
 @dataclass(frozen=True)
@@ -28,6 +32,7 @@ class ToolSpec:
     description: str
     effect: str
     input_schema: dict
+    untrusted_output: bool = False
 
     @property
     def name(self) -> str:
@@ -57,7 +62,7 @@ class Registry:
 
     def actions(self) -> list[ToolSpec]:
         return [
-            ToolSpec(name, a.name, a.description, a.effect, a.input)
+            ToolSpec(name, a.name, a.description, a.effect, a.input, a.untrusted_output)
             for name, app in self.apps.items()
             for a in app.manifest.actions
         ]
@@ -106,6 +111,8 @@ def _import_actions(apps_dir: Path, name: str) -> ModuleType:
 
 
 def _check_handlers(manifest: Manifest, module: ModuleType) -> None:
+    if manifest.context is not None and not callable(getattr(module, manifest.context, None)):
+        raise ManifestError(manifest.path, f"context handler '{manifest.context}' not found in actions.py")
     for action in manifest.actions:
         for label, fn in (("handler", action.handler), ("undo handler", action.undo)):
             if fn is not None and not callable(getattr(module, fn, None)):
@@ -116,19 +123,24 @@ def _app_settings(settings: Settings, manifest: Manifest) -> dict:
     section = settings.apps.get(manifest.name, {})
     if not isinstance(section, dict):
         raise SettingsError(f"[apps.{manifest.name}] must be a table")
-    merged = dict(manifest.settings)
+    merged = {key: schema["default"] for key, schema in manifest.settings.items()}
     for key, value in section.items():
         if key == "enabled":
             continue
         if key not in manifest.settings:
             known = ", ".join(["enabled", *manifest.settings])
             raise SettingsError(f"[apps.{manifest.name}]: unknown setting '{key}' (known: {known})")
-        default = manifest.settings[key]
-        same = type(value) is type(default) or (type(default) is float and type(value) is int)
-        if not same:
-            raise SettingsError(f"[apps.{manifest.name}] {key}: expected {type(default).__name__}")
+        problems = validate(manifest.settings[key], value, key)
+        if problems:
+            raise SettingsError(f"[apps.{manifest.name}] {problems[0]}")
         merged[key] = value
     return merged
+
+
+def settings_for_missing_apps(settings: Settings, apps_dir: Path = DEFAULT_APPS_DIR) -> list[str]:
+    """[apps.<name>] sections in settings.toml with no installed app (a typo, or a removed app)."""
+    installed = {p.parent.name for p in Path(apps_dir).glob("*/manifest.toml")}
+    return sorted(name for name in settings.apps if name not in installed)
 
 
 def load_apps(settings: Settings, apps_dir: Path = DEFAULT_APPS_DIR) -> Registry:
@@ -137,6 +149,8 @@ def load_apps(settings: Settings, apps_dir: Path = DEFAULT_APPS_DIR) -> Registry
     conn = db.connect(settings)
     try:
         sweep_tmp(settings)
+        for name in settings_for_missing_apps(settings, apps_dir):
+            log.warning("settings.toml has [apps.%s] but no app named %s", name, name)
         secrets = load_secrets(settings.data_dir)
         loaded: dict[str, LoadedApp] = {}
         for path in sorted(apps_dir.glob("*/manifest.toml")):

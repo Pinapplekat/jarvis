@@ -1,6 +1,6 @@
 import pytest
 
-from jarvis.core.apps import load_apps
+from jarvis.core.apps import load_apps, settings_for_missing_apps
 from jarvis.core.manifest import ManifestError
 from jarvis.core.settings import SettingsError, load_settings
 
@@ -11,8 +11,11 @@ description = "A demo."
 runs_on = "host"
 secrets = []
 
-[settings]
-size = 3
+[settings.size]
+type = "integer"
+default = 3
+minimum = 1
+maximum = 10
 
 [[actions]]
 name = "go"
@@ -100,7 +103,10 @@ def test_app_settings_override_defaults(tmp_path, data_dir):
 
 @pytest.mark.parametrize("section,fragment", [
     ("[apps.demo]\nsiez = 9\n", "unknown setting 'siez'"),
-    ('[apps.demo]\nsize = "big"\n', "expected int"),
+    ('[apps.demo]\nsize = "big"\n', "size: must be an integer"),
+    ("[apps.demo]\nsize = 0\n", "size: must be ≥ 1"),
+    ("[apps.demo]\nsize = 11\n", "size: must be ≤ 10"),
+    ("[apps.demo]\nsize = true\n", "size: must be an integer"),
 ])
 def test_bad_app_settings(tmp_path, data_dir, section, fragment):
     with pytest.raises(SettingsError, match="demo") as e:
@@ -122,3 +128,45 @@ def test_secrets_limited_to_manifest_keys(tmp_path, data_dir):
     reg = load_apps(load_settings(), apps)
     assert dict(reg.apps["demo"].ctx.secrets) == {"WANTED": "1"}
     reg.close()
+
+
+SETTING_BAD = [
+    ("scalar shorthand", "[settings]\nsize = 3\n", "setting 'size'"),
+    ("no default", '[settings.size]\ntype = "integer"\n', "needs a default"),
+    ("bad default", '[settings.size]\ntype = "integer"\ndefault = 99\nmaximum = 10\n', "default is invalid"),
+    ("object type", '[settings.size]\ntype = "object"\ndefault = 1\n', "type must be one of"),
+    ("unknown keyword", '[settings.size]\ntype = "integer"\ndefault = 1\nstep = 2\n', "unsupported keyword"),
+]
+
+
+@pytest.mark.parametrize("label,block,fragment", SETTING_BAD)
+def test_bad_setting_declarations(tmp_path, settings, label, block, fragment):
+    manifest = GOOD.replace('[settings.size]\ntype = "integer"\ndefault = 3\nminimum = 1\nmaximum = 10\n', block)
+    with pytest.raises(ManifestError, match=fragment):
+        load(tmp_path, settings, manifest=manifest)
+
+
+def test_unknown_app_sections_warn_and_are_listed(tmp_path, data_dir, caplog):
+    settings = with_settings(data_dir, "[apps.demo]\nsize = 2\n[apps.demoo]\nenabled = false\n")
+    with caplog.at_level("WARNING", logger="jarvis.core.apps"):
+        reg = load_apps(settings, make(tmp_path))
+    reg.close()
+    assert [r.getMessage() for r in caplog.records] == ["settings.toml has [apps.demoo] but no app named demoo"]
+    assert settings_for_missing_apps(settings, tmp_path / "apps") == ["demoo"]
+
+
+def test_disabled_app_section_is_not_missing(tmp_path, data_dir):
+    settings = with_settings(data_dir, "[apps.demo]\nenabled = false\n")
+    assert settings_for_missing_apps(settings, make(tmp_path)) == []
+
+
+def test_context_handler_must_exist(tmp_path, settings):
+    manifest = GOOD.replace('runs_on = "host"', 'runs_on = "host"\ncontext = "nope"')
+    with pytest.raises(ManifestError, match="context handler 'nope' not found"):
+        load(tmp_path, settings, manifest=manifest)
+
+
+def test_untrusted_output_must_be_a_bool(tmp_path, settings):
+    manifest = GOOD.replace('effect = "read"', 'effect = "read"\nuntrusted_output = "yes"')
+    with pytest.raises(ManifestError, match="untrusted_output must be true or false"):
+        load(tmp_path, settings, manifest=manifest)
