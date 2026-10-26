@@ -1,0 +1,16 @@
+[app]
+name = "camera"
+description = "Take a photo with the camera on the device it runs on."
+runs_on = "node:camera"
+
+[settings]
+device = ""   # camera name for imagesnap's -d; empty means the default camera
+
+[[actions]]
+name = "take_photo"
+description = "Take one photo and return it as an image."
+effect = "read"
+log_args = false
+[actions.input]
+type = "object"
+additionalProperties = false

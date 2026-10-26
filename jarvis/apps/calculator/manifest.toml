@@ -1,0 +1,21 @@
+[app]
+name = "calculator"
+description = "Exact arithmetic and common math functions (sqrt, trig, logs, rounding). Use it instead of doing math in your head."
+runs_on = "host"
+
+[settings]
+precision = 12   # significant digits shown for non-integer results (1-20)
+
+[[actions]]
+name = "evaluate"
+description = "Evaluate an arithmetic expression and return the result. Integers are exact; functions: sqrt sin cos tan asin acos atan log log10 exp abs round floor ceil; constants: pi, e."
+effect = "read"
+
+[actions.input]
+type = "object"
+required = ["expression"]
+additionalProperties = false
+[actions.input.properties.expression]
+type = "string"
+maxLength = 500
+description = "For example '2 * (3 + 4)' or 'sqrt(2)'."

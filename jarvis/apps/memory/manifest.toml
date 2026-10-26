@@ -1,0 +1,56 @@
+[app]
+name = "memory"
+description = "Long-term facts about Elijah: remember, forget and look them up by category and key."
+runs_on = "host"
+
+[[actions]]
+name = "remember"
+description = "Save a fact, replacing any existing fact with the same category and key."
+effect = "local"
+undo = "undo_remember"
+[actions.input]
+type = "object"
+required = ["category", "key", "value"]
+additionalProperties = false
+[actions.input.properties.category]
+type = "string"
+enum = ["school", "work", "money", "personal", "preference"]
+[actions.input.properties.key]
+type = "string"
+minLength = 1
+description = "A short label, e.g. 'major'."
+[actions.input.properties.value]
+type = "string"
+minLength = 1
+
+[[actions]]
+name = "forget"
+description = "Delete a saved fact."
+effect = "local"
+undo = "undo_forget"
+[actions.input]
+type = "object"
+required = ["category", "key"]
+additionalProperties = false
+[actions.input.properties.category]
+type = "string"
+enum = ["school", "work", "money", "personal", "preference"]
+[actions.input.properties.key]
+type = "string"
+minLength = 1
+
+[[actions]]
+name = "recall"
+description = "Search saved facts. Matches the text (case-insensitive) in any category, key or value; returns up to 20."
+effect = "read"
+[actions.input]
+type = "object"
+required = ["query"]
+additionalProperties = false
+[actions.input.properties.query]
+type = "string"
+minLength = 1
+[actions.input.properties.category]
+type = "string"
+enum = ["school", "work", "money", "personal", "preference"]
+description = "Only search this category."
