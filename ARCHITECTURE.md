@@ -32,10 +32,13 @@ docs/briefs/  # one brief per milestone
    one channel interface, one settings loader and one logger. Never add a second path or a "backup" copy
    of the same logic in another process.
 3. **The dependency direction is fixed.**
-   - `apps` may import `jarvis.core.api` (the small surface the core gives apps) and `jarvis.protocol`.
+   - `apps` may import `jarvis.core.api` (the small surface the core gives apps), `jarvis.protocol` and
+     their own folder. They never import another app, `jarvis.node` or the rest of `jarvis.core`.
    - `core` and `node` may import `protocol`.
+   - `protocol` imports nothing else from `jarvis`. Both sides depend on it, so it depends on neither.
    - Nothing imports `legacy`.
    - `core` and `node` never import each other.
+   - `tests/test_layout.py` enforces these rules, including relative imports.
 4. **Short prompt, generated tool docs.** The system prompt holds persona and principles only, about one
    screen. Tool descriptions come from manifests. A new behavior goes into an app or a principle, never
    into a list of prompt rules.
