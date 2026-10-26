@@ -24,6 +24,14 @@ def test_tool_results_carry_text_images_and_the_error_flag():
     assert asyncio.run(_sdk_tool(tool(ToolReply("bad", is_error=True))).handler({}))["is_error"] is True
 
 
+def test_a_no_argument_schema_reaches_the_model_as_json_schema():
+    no_args = Tool("camera__take_photo", "Take a photo.", {"type": "object", "additionalProperties": False}, None)
+    schema = _sdk_tool(no_args).input_schema
+    assert schema == {"type": "object", "additionalProperties": False, "properties": {}}
+    from claude_agent_sdk import _build_input_schema  # what the SDK actually sends the model
+    assert _build_input_schema(_sdk_tool(no_args)) == schema
+
+
 def test_options_isolate_the_brain_from_everything_but_falak_tools(tmp_path):
     brain = SdkBrain("sonnet", 7, tmp_path / "scratch")
     o = brain._options("be calm", [tool(ToolReply("x"))])

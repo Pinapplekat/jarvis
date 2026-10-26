@@ -25,7 +25,10 @@ def _sdk_tool(tool: Tool) -> SdkMcpTool:
         content += [{"type": "image", "data": i.data, "mimeType": i.mime} for i in reply.images]
         return {"content": content, "is_error": reply.is_error}
 
-    return SdkMcpTool(name=tool.name, description=tool.description, input_schema=tool.input_schema, handler=handler)
+    # The SDK only passes a schema through as JSON Schema when it has "properties"; otherwise it reads the
+    # dict as name -> type pairs, so a no-argument action would demand "type" and "additionalProperties".
+    schema = {"properties": {}, **tool.input_schema}
+    return SdkMcpTool(name=tool.name, description=tool.description, input_schema=schema, handler=handler)
 
 
 class SdkBrain:
