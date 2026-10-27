@@ -10,7 +10,9 @@ Falak is the public name. The code name is `jarvis`: the package, CLI, paths and
 
 ```
 jarvis/
-  core/       # the host: agent loop, memory, confirmations, scheduler, channels, settings
+  core/       # the brain side: agent loop, memory, confirmations, scheduler, channel interface, settings
+  channels/   # one adapter per way of talking to Falak (discord.py, terminal.py)
+  host.py     # composition root: loads apps and channels, routes each message to the agent loop
   node/       # the device runtime: runs device apps, talks to the host
   protocol/   # message types and the capability list, shared by core and node
   apps/       # every tool, one folder each
@@ -34,6 +36,9 @@ docs/briefs/  # one brief per milestone
 3. **The dependency direction is fixed.**
    - `apps` may import `jarvis.core.api` (the small surface the core gives apps), `jarvis.protocol` and
      their own folder. They never import another app, `jarvis.node` or the rest of `jarvis.core`.
+   - `channels` may import `jarvis.core.channel`, `jarvis.core.api` and `jarvis.protocol`, nothing else from
+     the core. Only `channels/discord.py` imports `discord`.
+   - `core` never imports `channels` or `host`. `host.py` is the one place that wires them together.
    - `core` and `node` may import `protocol`.
    - `protocol` imports nothing else from `jarvis`. Both sides depend on it, so it depends on neither.
    - Nothing imports `legacy`.

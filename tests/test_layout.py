@@ -48,8 +48,19 @@ def test_relative_imports_are_resolved(tmp_path):
     assert list(imports(f, "jarvis.core.db")) == ["jarvis.node", "jarvis.core.settings", "jarvis.protocol"]
 
 
-def test_core_independent_of_node_apps_legacy():
-    assert hits("jarvis.core", ["jarvis.node", "jarvis.apps", "legacy"]) == []
+def test_core_independent_of_node_apps_channels_host_legacy():
+    banned = ["jarvis.node", "jarvis.apps", "jarvis.channels", "jarvis.host", "legacy"]
+    assert hits("jarvis.core", banned) == []
+
+
+def test_channels_import_only_the_channel_interface_api_and_protocol():
+    allowed = ["jarvis.core.channel", "jarvis.core.api", "jarvis.protocol", "jarvis.channels"]
+    assert hits("jarvis.channels", ["jarvis"], allowed=allowed) == []
+
+
+def test_only_the_discord_adapter_imports_discord():
+    importers = [n for p, n in modules() if any(within(i, "discord") for i in imports(p, n))]
+    assert importers == ["jarvis.channels.discord"]
 
 
 def test_node_never_imports_core():
