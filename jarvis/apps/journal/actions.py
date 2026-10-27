@@ -23,6 +23,11 @@ def _day(text: str) -> str:
         raise ActionError(f"'{text}' isn't a date; it needs to look like 2026-10-25.") from None
 
 
+def _aware(text: str) -> datetime:
+    when = datetime.fromisoformat(text)
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
 def _row(ctx: AppContext, day: str) -> dict | None:
     r = ctx.db.execute("SELECT day, entry, open_loops, created_at FROM journal_entries WHERE day=?", (day,)).fetchone()
     return dict(r) if r else None
@@ -63,7 +68,7 @@ def write(ctx: AppContext, run: JobRun) -> JobResult:
     yesterday = run.now.date() - timedelta(days=1)
     start, end = material.day_bounds(yesterday, ctx.tz)
     existing = _row(ctx, yesterday.isoformat())
-    if existing and run.reason != "manual" and datetime.fromisoformat(existing["created_at"]) >= end:
+    if existing and run.reason != "manual" and _aware(existing["created_at"]) >= end:
         return JobResult(f"{yesterday} is already written")  # an earlier draft, from before the day was over, gets rewritten
     prompt = f"{INSTRUCTIONS}\n\n{material.build(ctx, start, end)}"
     return JobResult(f"writing {yesterday}", think=Think(prompt, deliver=False, untrusted=True))
