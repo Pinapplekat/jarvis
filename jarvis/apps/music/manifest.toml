@@ -1,0 +1,64 @@
+[app]
+name = "music"
+description = "Play music and control playback: Spotify first, the Music app as the backup."
+runs_on = "node:music"
+secrets = ["SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET"]
+
+[settings.market]
+type = "string"
+default = "US"
+description = "Spotify market (country code) for search results."
+
+[settings.redirect_uri]
+type = "string"
+default = "http://127.0.0.1:8888/callback"
+description = "The redirect address set in the Spotify app, used by jarvis node music-login."
+
+[[actions]]
+name = "play"
+description = "Play a song, artist or playlist. Spotify first; the Music app if Spotify isn't available or has no match."
+effect = "local"
+untrusted_output = true
+timeout_s = 90
+[actions.input]
+type = "object"
+required = ["query"]
+additionalProperties = false
+[actions.input.properties.query]
+type = "string"
+minLength = 1
+maxLength = 200
+[actions.input.properties.kind]
+type = "string"
+enum = ["any", "song", "artist", "playlist"]
+default = "any"
+
+[[actions]]
+name = "control"
+description = "Control playback. op: pause, play (resume), next, previous, seek (number = seconds), volume (number = 0-100), volume_up / volume_down (number = step, default 10), mute, unmute, shuffle (text = on/off), repeat (text = off/track/context), queue (text = a song), like (the current song)."
+effect = "local"
+untrusted_output = true
+timeout_s = 30
+[actions.input]
+type = "object"
+required = ["op"]
+additionalProperties = false
+[actions.input.properties.op]
+type = "string"
+enum = ["pause", "play", "next", "previous", "seek", "volume", "volume_up", "volume_down", "mute", "unmute", "shuffle", "repeat", "queue", "like"]
+[actions.input.properties.number]
+type = "integer"
+[actions.input.properties.text]
+type = "string"
+default = ""
+maxLength = 200
+
+[[actions]]
+name = "now_playing"
+description = "What's playing right now, and where."
+effect = "read"
+untrusted_output = true
+timeout_s = 30
+[actions.input]
+type = "object"
+additionalProperties = false

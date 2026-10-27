@@ -86,6 +86,45 @@ def _run() -> int:
     return 0
 
 
+def _music_login(read=input) -> int:
+    """Sign Falak's music app in to Spotify (PKCE) and keep its own refresh token in the Keychain ("Falak Spotify").
+    The old JARVIS's token is never touched, so its sign-in keeps working."""
+    import secrets as pysecrets
+
+    from jarvis.apps.music import spotify
+    from jarvis.contract.envfile import load_secrets
+    from jarvis.contract.loader import DEFAULT_APPS_DIR
+    from jarvis.contract.manifest import load_manifest
+    from jarvis.node.config import node_dir
+
+    folder = node_dir()
+    found = load_secrets(folder)
+    if not found.get("SPOTIFY_CLIENT_ID"):
+        print(f"Put SPOTIFY_CLIENT_ID in {folder / '.env'} first (from the Spotify developer dashboard).",
+              file=sys.stderr)
+        return 1
+    redirect = load_manifest(DEFAULT_APPS_DIR / "music" / "manifest.toml").settings["redirect_uri"]["default"]
+    acct = spotify.Account(found["SPOTIFY_CLIENT_ID"])
+    verifier, state = spotify.new_verifier(), pysecrets.token_urlsafe(16)
+    print("1. Open this address and approve Falak:\n")
+    print(acct.login_url(verifier, state, redirect))
+    print(f"\n2. Your browser then lands on {redirect}?code=... and shows an error page. That's expected.")
+    try:
+        landed = read("3. Paste that whole address here: ")
+    except EOFError:
+        return 1
+    spotify.forget()
+    try:
+        saved = acct.finish_login(landed, verifier, state, redirect)
+    except spotify.SpotifyError as e:
+        print(f"Spotify sign-in failed: {e}", file=sys.stderr)
+        return 1
+    print("Signed in. The token is in the Keychain as \"Falak Spotify\"." if saved else
+          "Signed in, but the Keychain wouldn't take the token; it only lasts until this command ends.")
+    print("Restart `jarvis node run` so the music app picks it up.")
+    return 0 if saved else 1
+
+
 def command(settings: Settings, args) -> int:
     if args.group == "nodes":
         return _list(settings, connected_only=True)
@@ -97,7 +136,9 @@ def command(settings: Settings, args) -> int:
         return _list(settings, connected_only=False)
     if args.node_command == "run":
         return _run()
-    print("usage: jarvis node pair|revoke|list|run", file=sys.stderr)
+    if args.node_command == "music-login":
+        return _music_login()
+    print("usage: jarvis node pair|revoke|list|run|music-login", file=sys.stderr)
     return 2
 
 

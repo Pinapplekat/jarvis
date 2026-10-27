@@ -136,6 +136,7 @@ def build_parser(name: str) -> argparse.ArgumentParser:
         node.add_parser(verb, help=text).add_argument("name")
     node.add_parser("list", help="every paired node")
     node.add_parser("run", help="run this machine's node and connect it to the host")
+    node.add_parser("music-login", help="sign the music app in to Spotify (once, on the node's Mac)")
     sub.add_parser("nodes", help="nodes connected to the running host, with their capabilities")
     sub.add_parser("apps", help="list apps and their actions")
     run = sub.add_parser("run", help="run an action as <app>.<action>")
