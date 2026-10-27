@@ -23,8 +23,14 @@ class Settings:
     model: str = "sonnet"  # the brain's model
     max_turns: int = 12  # model/tool round trips allowed in one turn
     turn_timeout_seconds: int = 120
+    node_listen: str = "127.0.0.1:8765"  # where devices connect; only this machine until Tailscale
     apps: dict[str, dict] = field(default_factory=dict)  # per-app sections; used from M2
     channels: dict[str, dict] = field(default_factory=dict)  # per-channel sections; each channel checks its own keys
+
+
+def _listen_ok(value: object) -> bool:
+    host, _, port = value.rpartition(":") if isinstance(value, str) else ("", "", "")
+    return bool(host) and port.isdigit() and 0 <= int(port) <= 65535
 
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
@@ -52,22 +58,6 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     for key in ("max_turns", "turn_timeout_seconds"):
         if key in values and not (isinstance(values[key], int) and not isinstance(values[key], bool) and values[key] > 0):
             raise SettingsError(f"{path}: '{key}' must be a whole number above zero")
+    if "node_listen" in values and not _listen_ok(values["node_listen"]):
+        raise SettingsError(f"{path}: 'node_listen' must look like host:port")
     return Settings(data_dir=data_dir, **values)
-
-
-def load_secrets(data_dir: Path) -> dict[str, str]:
-    """Parse `<data_dir>/.env` (KEY=value, # comments, optional quotes). Never log the values."""
-    path = Path(data_dir) / ".env"
-    secrets: dict[str, str] = {}
-    if not path.exists():
-        return secrets
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        secrets[key.strip()] = value
-    return secrets

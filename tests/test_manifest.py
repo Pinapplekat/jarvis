@@ -52,7 +52,6 @@ BAD = [
     ("unknown app key", GOOD.replace('runs_on = "host"', 'runs_on = "host"\ncolor = 1'), "unknown key(s) in [app]: color"),
     ("unknown action key", GOOD.replace('effect = "read"', 'effect = "read"\nspeed = 1'), "unknown key(s) in an action"),
     ("unknown top key", GOOD + "\n[extra]\nx = 1\n", "unknown key(s) in the manifest: extra"),
-    ("sessions", GOOD + "\n[sessions]\n", "'sessions' is not valid yet"),
     ("jobs", GOOD + "\n[[jobs]]\n", "'jobs' is not valid yet"),
     ("name mismatch", GOOD.replace('name = "demo"', 'name = "other"'), "must equal the folder name"),
     ("runs_on", GOOD.replace('"host"', '"cloud"'), "runs_on must be"),
@@ -68,7 +67,7 @@ BAD = [
     ("schema keyword", GOOD.replace('additionalProperties = false', 'additionalProperties = false\npattern = "x"'),
      "unsupported keyword 'pattern'"),
     ("duplicate action", GOOD + GOOD[GOOD.index("[[actions]]"):GOOD.index("[actions.input]")] +
-     '[actions.input]\ntype = "object"\n', "duplicate action name 'go'"),
+     '[actions.input]\ntype = "object"\n', "duplicate tool name 'go'"),
     ("bad action name", GOOD.replace('name = "go"', 'name = "Go__x"'), "snake_case"),
     ("no actions", GOOD[:GOOD.index("[[actions]]")], "at least one [[actions]]"),
     ("invalid toml", "[app", "Expected"),
@@ -170,3 +169,63 @@ def test_untrusted_output_must_be_a_bool(tmp_path, settings):
     manifest = GOOD.replace('effect = "read"', 'effect = "read"\nuntrusted_output = "yes"')
     with pytest.raises(ManifestError, match="untrusted_output must be true or false"):
         load(tmp_path, settings, manifest=manifest)
+
+
+SESSION = '''
+[[sessions]]
+name = "live_view"
+description = "A live view."
+effect = "read"
+start = "go"
+sample = "go"
+stop = "go"
+idle_minutes = 5
+'''
+
+
+def test_session_generates_three_tools(tmp_path, settings):
+    reg = load_apps(settings, make(tmp_path, manifest=GOOD + SESSION, actions="def go(ctx, *a, **k):\n    pass\n"))
+    reg.close()
+    tools = {t.name: t for t in reg.actions()}
+    assert {"demo__live_view_start", "demo__live_view_look", "demo__live_view_stop"} <= set(tools)
+    manifest = reg.apps["demo"].manifest
+    assert manifest.sessions[0].idle_minutes == 5
+    assert [(t.phase, t.session) for t in manifest.tools[1:]] == [("start", "live_view"), ("look", "live_view"), ("stop", "live_view")]
+
+
+@pytest.mark.parametrize("change,message", [
+    ('effect = "read"', 'effect = "outbound"'),
+    ("idle_minutes = 5", "idle_minutes = 0"),
+    ("idle_minutes = 5", "idle_minutes = 121"),
+    ("idle_minutes = 5", 'idle_minutes = "soon"'),
+    ('stop = "go"', ""),
+    ('start = "go"', 'start = "not valid!"'),
+])
+def test_bad_sessions_are_refused(tmp_path, settings, change, message):
+    bad = GOOD + SESSION.replace(*([change, message] if isinstance(change, str) else change))
+    with pytest.raises(ManifestError, match="session 'live_view'"):
+        load(tmp_path, settings, manifest=bad)
+
+
+def test_session_handlers_must_exist(tmp_path, settings):
+    with pytest.raises(ManifestError, match="session 'live_view': start handler 'begin' not found"):
+        load(tmp_path, settings, manifest=GOOD + SESSION.replace('start = "go"', 'start = "begin"'),
+             actions="def go(ctx):\n    pass\n")
+
+
+def test_session_tool_names_cannot_collide_with_actions(tmp_path, settings):
+    clash = GOOD + SESSION + GOOD[GOOD.index("[[actions]]"):].replace('name = "go"', 'name = "live_view_look"')
+    with pytest.raises(ManifestError, match="duplicate tool name 'live_view_look'"):
+        load(tmp_path, settings, manifest=clash)
+
+
+def test_an_app_may_be_only_sessions(tmp_path, settings):
+    only = GOOD[:GOOD.index("[[actions]]")] + SESSION
+    reg = load_apps(settings, make(tmp_path, manifest=only, actions="def go(ctx, *a, **k):\n    pass\n"))
+    reg.close()
+    assert len(reg.actions()) == 3
+
+
+def test_timeout_is_bounded(tmp_path, settings):
+    with pytest.raises(ManifestError, match="timeout_s must be a whole number from 1 to 300"):
+        load(tmp_path, settings, manifest=GOOD.replace('effect = "read"', 'effect = "read"\ntimeout_s = 0'))

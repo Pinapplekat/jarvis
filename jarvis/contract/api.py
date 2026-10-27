@@ -27,6 +27,14 @@ class Result:
     subject: str | None = None  # what the action changed, e.g. 'fact:personal/color'; undo uses it to refuse out of order
 
 
+@dataclass(frozen=True)
+class SessionStarted:
+    """What a session's start handler returns: a line for the model, and the state sample/stop get back."""
+
+    text: str
+    state: dict  # JSON-serializable; the host stores it, the node keeps the live resources it points at
+
+
 class ActionError(Exception):
     """A failure to tell Elijah about in plain words ('The camera is in use by another app')."""
 
@@ -39,15 +47,21 @@ class AppContext:
         name: str,
         settings: Mapping[str, object],
         secrets: Mapping[str, str],
-        db: sqlite3.Connection,
+        db: sqlite3.Connection | None,
         tmp_dir: Path,
     ) -> None:
         self.name = name
         self.settings = settings  # manifest defaults overridden by settings.toml [apps.<name>]
         self.secrets = secrets  # only the keys the manifest lists
         self.log = logging.getLogger(f"jarvis.apps.{name}")
-        self.db = db  # an app may use only tables named <app>_*
+        self._db = db  # an app may use only tables named <app>_*
         self._tmp_dir = tmp_dir
+
+    @property
+    def db(self) -> sqlite3.Connection:
+        if self._db is None:
+            raise RuntimeError(f"{self.name} runs on a device node, which has no database")
+        return self._db
 
     def temp_path(self, suffix: str) -> Path:
         """A private temp file (0600 in a 0700 folder). Return it in an Attachment to hand it to the core."""

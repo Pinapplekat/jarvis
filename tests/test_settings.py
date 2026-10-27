@@ -1,6 +1,7 @@
 import pytest
 
-from jarvis.core.settings import SettingsError, load_secrets, load_settings
+from jarvis.contract.envfile import load_secrets
+from jarvis.core.settings import SettingsError, load_settings
 
 
 def test_defaults(data_dir):
