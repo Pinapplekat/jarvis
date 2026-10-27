@@ -259,6 +259,8 @@ Each milestone becomes one brief for Sonnet, with goal, files, interfaces, tests
 3. Mac mini: move the host, add local models. The MacBook becomes a node.
 4. UI overhaul: HUD, panel, live-view display ("homework view"), app views, phone and watch screens.
 5. Glasses: another node.
+6. Canvas through Falak's own signed-in browser, since personal tokens are off and the feed misses ECON and
+   ENGL work: [docs/ideas/canvas-browser.md](docs/ideas/canvas-browser.md).
 
 ## Handoff
 
