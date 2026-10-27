@@ -5,6 +5,7 @@ description = "Falak: personal assistant (code name jarvis)"
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "claude-agent-sdk>=0.2.174,<0.3",
+    "discord-py>=2.7,<3",
 ]
 
 [project.optional-dependencies]
