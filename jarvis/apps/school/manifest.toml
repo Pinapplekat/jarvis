@@ -56,6 +56,39 @@ type = "string"
 minLength = 1
 
 [[actions]]
+name = "import_deadlines"
+description = "Add or update deadlines that aren't on the Canvas calendar: ones Elijah tells you about, or a list from his weekly plan. `due` is ISO 8601 (a date alone means 11:59 PM). Give `key` as canvas:<assignment id> to correct a Canvas item's date."
+effect = "local"
+undo = "undo_import_deadlines"
+log_args = false
+[actions.input]
+type = "object"
+required = ["items"]
+additionalProperties = false
+[actions.input.properties.items]
+type = "array"
+[actions.input.properties.items.items]
+type = "object"
+required = ["course", "title", "due"]
+additionalProperties = false
+[actions.input.properties.items.items.properties.course]
+type = "string"
+minLength = 1
+[actions.input.properties.items.items.properties.title]
+type = "string"
+minLength = 1
+[actions.input.properties.items.items.properties.due]
+type = "string"
+minLength = 1
+[actions.input.properties.items.items.properties.key]
+type = "string"
+minLength = 1
+[actions.input.properties.items.items.properties.url]
+type = "string"
+[actions.input.properties.items.items.properties.done]
+type = "boolean"
+
+[[actions]]
 name = "sync_now"
 description = "Fetch the latest deadlines from Canvas right now."
 effect = "local"

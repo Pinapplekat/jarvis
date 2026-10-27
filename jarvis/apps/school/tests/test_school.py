@@ -135,7 +135,7 @@ def test_without_any_secret_the_job_is_quiet_and_the_action_explains(real_apps, 
     app.ctx.secrets = {}
     assert job(app, "sync").summary.startswith("not set up")
     out = actions.run(real_apps, "school__sync_now", {}, CLI)
-    assert isinstance(out, actions.Failed) and "CANVAS_TOKEN" in out.message
+    assert isinstance(out, actions.Failed) and "CANVAS_ICS_URL (the Calendar Feed link)" in out.message
 
 
 @pytest.mark.parametrize("error,fragment", [
@@ -252,3 +252,59 @@ def test_the_migration_copies_the_old_deadlines_and_their_done_flags(settings):
         assert reg.conn.execute("SELECT COUNT(*) FROM deadlines").fetchone()[0] == 1
     finally:
         reg.close()
+
+
+WEEKLY = [
+    {"course": "ECON 100", "title": "Module 5: Smartwork", "due": "2026-11-01 23:59"},
+    {"course": "CMST& 101", "title": "Weekly Homework 4 (real date)", "due": "2026-10-19", "key": "canvas:901",
+     "url": "https://canvas.test/a/901"},
+    {"course": "English", "title": "Freewrite journal", "due": "2026-10-28T23:59:00-07:00", "done": True},
+]
+
+
+def test_import_saves_weekly_rows_and_undo_puts_everything_back(real_apps):
+    seed(real_apps, "canvas:901", "Weekly Homework Assignments", NOW + timedelta(days=50), trackable=0)
+    before = [tuple(r) for r in real_apps.conn.execute("SELECT * FROM school_deadlines ORDER BY key")]
+    out = actions.run(real_apps, "school__import_deadlines", {"items": WEEKLY}, CLI)
+    assert isinstance(out, actions.Ran) and out.result.text == "Saved 3 deadlines."
+    rows = {r["key"]: r for r in real_apps.conn.execute("SELECT * FROM school_deadlines")}
+    assert rows["canvas:901"]["due"] == "2026-10-19T23:59:00-07:00" and rows["canvas:901"]["source"] == "weekly"
+    assert rows["manual:econ-100-module-5-smartwork:20261101"]["due"] == "2026-11-01T23:59:00-08:00"  # after DST ends
+    assert rows["manual:english-freewrite-journal:20261028"]["hand_done"] == 1
+    assert isinstance(actions.undo(real_apps), actions.Ran)
+    assert [tuple(r) for r in real_apps.conn.execute("SELECT * FROM school_deadlines ORDER BY key")] == before
+
+
+def test_a_sync_keeps_the_weekly_date_and_rows(real_apps, monkeypatch):
+    from test_canvas import FEED
+
+    actions.run(real_apps, "school__import_deadlines", {"items": WEEKLY}, CLI)
+    app, _ = school(real_apps, monkeypatch, [("feed.ics", FEED)])
+    app.ctx.secrets = {"CANVAS_ICS_URL": "https://canvas.test/feed.ics"}
+    job(app, "sync")
+    rows = {r["key"]: r for r in real_apps.conn.execute("SELECT * FROM school_deadlines")}
+    assert rows["canvas:901"]["due"] == "2026-10-19T23:59:00-07:00"  # the feed's placeholder date didn't win
+    assert rows["canvas:901"]["title"] == "Weekly Homework 4 (real date)"
+    assert "manual:econ-100-module-5-smartwork:20261101" in rows  # the sync only drops Canvas's own rows
+    assert sum(k == "canvas:901" for k in rows) == 1
+
+
+def test_a_reimport_without_done_keeps_what_was_marked_done(real_apps):
+    actions.run(real_apps, "school__import_deadlines", {"items": WEEKLY[2:]}, CLI)
+    again = [{k: v for k, v in WEEKLY[2].items() if k != "done"}]
+    actions.run(real_apps, "school__import_deadlines", {"items": again}, CLI)
+    assert real_apps.conn.execute("SELECT hand_done FROM school_deadlines").fetchone()[0] == 1
+
+
+def test_bad_due_dates_are_refused_in_plain_words(real_apps):
+    out = actions.run(real_apps, "school__import_deadlines",
+                      {"items": [{"course": "X", "title": "Y", "due": "next Tuesday"}]}, CLI)
+    assert isinstance(out, actions.Failed) and "couldn't read 'next Tuesday'" in out.message
+
+
+def test_feed_deadlines_never_get_the_unsubmitted_nudge(real_apps):
+    seed(real_apps, "canvas:5", "Essay", NOW + timedelta(hours=2), trackable=0)
+    app = real_apps.apps["school"]
+    first = job(app, "nudge")
+    assert first.messages == ("ENGL&101: Essay due today at 2:00 PM (check it's done).",)
+    assert job(app, "nudge", NOW + timedelta(minutes=30)).messages == ()

@@ -91,6 +91,8 @@ def _apps_command(settings: Settings, args: argparse.Namespace) -> int:
                 print(f"--args is not valid JSON: {e}", file=sys.stderr)
                 return 2
             return _print_outcome(actions.run(reg, f"{app_name}__{action_name}", payload, origin))
+        if args.group == "deadline":
+            return _import_deadlines(reg, args.file, origin)
         if args.group in ("yes", "no"):
             return _print_outcome(actions.answer_ask(reg, args.id, args.group == "yes"))
         if args.group == "asks":
@@ -104,6 +106,20 @@ def _apps_command(settings: Settings, args: argparse.Namespace) -> int:
         return 0
     finally:
         reg.close()
+
+
+def _import_deadlines(reg: Registry, file: str, origin: actions.Origin) -> int:
+    """`jarvis deadline import <file.json>`: the list /weekly writes, [{course, title, due, key?, url?, done?}]."""
+    try:
+        items = json.loads(Path(file).read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"couldn't read {file}: {e}", file=sys.stderr)
+        return 2
+    if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+        print(f"{file} must hold a JSON list of deadlines", file=sys.stderr)
+        return 2
+    items = [{k: v for k, v in i.items() if v is not None} for i in items]  # /weekly writes null for "unknown"
+    return _print_outcome(actions.run(reg, "school__import_deadlines", {"items": items}, origin))
 
 
 def build_parser(name: str) -> argparse.ArgumentParser:
@@ -125,6 +141,8 @@ def build_parser(name: str) -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="run an action as <app>.<action>")
     run.add_argument("target")
     run.add_argument("--args", default="{}", help="the arguments as JSON")
+    deadline = sub.add_parser("deadline", help="school deadlines").add_subparsers(dest="deadline_command", required=True)
+    deadline.add_parser("import", help="add deadlines from a JSON list (what /weekly writes)").add_argument("file")
     sub.add_parser("asks", help="list pending asks")
     for name in ("yes", "no"):
         sub.add_parser(name, help=f"answer a pending ask: {name}").add_argument("id", type=int)
@@ -164,8 +182,8 @@ def main(argv: list[str] | None = None) -> int:
         from jarvis import node_cli
 
         return node_cli.command(settings, args)
-    if args.group in ("apps", "run", "asks", "yes", "no", "undo", "log", "chat", "ask", "turns", "serve", "jobs",
-                      "outbox"):
+    if args.group in ("apps", "run", "deadline", "asks", "yes", "no", "undo", "log", "chat", "ask", "turns", "serve",
+                      "jobs", "outbox"):
         try:
             if args.group == "outbox" or (args.group == "jobs" and not args.jobs_command):
                 from jarvis import jobs_cli

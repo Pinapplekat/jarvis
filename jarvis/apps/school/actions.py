@@ -1,5 +1,6 @@
+import re
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from jarvis.apps.school import canvas
 from jarvis.apps.school.canvas import Deadline
@@ -43,12 +44,15 @@ def store(ctx: AppContext, found: list[Deadline]) -> tuple[int, int]:
     """Make Canvas's rows match what was just fetched, keeping what Elijah marked done. Returns (count, new)."""
     now = _utc(ctx.now())
     known = {r["key"] for r in ctx.db.execute("SELECT key FROM school_deadlines")}
-    for d in found:
+    for d in found:  # a row from /weekly keeps its own course, title and date; Canvas still updates its status
         ctx.db.execute(
             "INSERT INTO school_deadlines (key, course, title, due, url, status, trackable, kind, source, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,'canvas',?) ON CONFLICT(key) DO UPDATE SET course=excluded.course, "
-            "title=excluded.title, due=excluded.due, url=excluded.url, status=excluded.status, "
-            "trackable=excluded.trackable, kind=excluded.kind, source='canvas', updated_at=excluded.updated_at",
+            "VALUES (?,?,?,?,?,?,?,?,'canvas',?) ON CONFLICT(key) DO UPDATE SET "
+            "course=CASE WHEN school_deadlines.source='weekly' THEN school_deadlines.course ELSE excluded.course END, "
+            "title=CASE WHEN school_deadlines.source='weekly' THEN school_deadlines.title ELSE excluded.title END, "
+            "due=CASE WHEN school_deadlines.source='weekly' THEN school_deadlines.due ELSE excluded.due END, "
+            "url=COALESCE(excluded.url, school_deadlines.url), status=excluded.status, "
+            "trackable=excluded.trackable, kind=excluded.kind, updated_at=excluded.updated_at",
             (d.key, d.course, d.title, _utc(d.due), d.url, d.status, int(d.trackable), d.kind, now))
     keep = [d.key for d in found]
     ctx.db.execute(f"DELETE FROM school_deadlines WHERE source='canvas' AND key NOT IN ({','.join('?' * len(keep))})",
@@ -59,7 +63,8 @@ def store(ctx: AppContext, found: list[Deadline]) -> tuple[int, int]:
 def run_sync(ctx: AppContext) -> str:
     found = fetch(ctx)
     if found is None:
-        raise ActionError("Canvas isn't set up: add CANVAS_TOKEN (or CANVAS_ICS_URL) to the .env file.")
+        raise ActionError("Canvas isn't set up: add CANVAS_ICS_URL (the Calendar Feed link) or CANVAS_TOKEN to the "
+                          ".env file.")
     count, new = store(ctx, found)
     ctx.wake("nudge")
     return f"{count} deadlines, {new} new"
@@ -67,8 +72,64 @@ def run_sync(ctx: AppContext) -> str:
 
 def sync(ctx: AppContext, run: JobRun) -> JobResult:
     if not (ctx.secrets.get("CANVAS_TOKEN") or ctx.secrets.get("CANVAS_ICS_URL")):
-        return JobResult("not set up (no CANVAS_TOKEN)")  # nothing to fail at yet; not worth a message
+        return JobResult("not set up (no CANVAS_ICS_URL or CANVAS_TOKEN)")  # nothing to fail at yet; not worth a message
     return JobResult(run_sync(ctx))
+
+
+IMPORT_MAX = 200
+_COLUMNS = ("key", "course", "title", "due", "url", "status", "trackable", "kind", "hand_done", "source", "updated_at")
+
+
+def parse_due(text: str, tz) -> datetime:
+    """'2026-10-18 23:59', '2026-10-18T23:59-07:00' or '2026-10-18' (= 11:59 PM), local when no offset."""
+    text = text.strip()
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            return datetime.combine(date.fromisoformat(text), time(23, 59), tz)
+        when = datetime.fromisoformat(text.replace(" ", "T", 1))
+    except ValueError:
+        raise ActionError(f"I couldn't read '{text}' as a due date. It needs to look like 2026-10-18 23:59.") from None
+    return when if when.tzinfo else when.replace(tzinfo=tz)
+
+
+def deadline_key(course: str, title: str, due: datetime) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", f"{course} {title}".lower()).strip("-")
+    return f"manual:{slug}:{due:%Y%m%d}"
+
+
+def import_deadlines(ctx: AppContext, items: list) -> Result:
+    """Ported from the old `jarvis deadline import`. Rows are source 'weekly'; a sync won't move their dates."""
+    if len(items) > IMPORT_MAX:
+        raise ActionError(f"That's {len(items)} deadlines; I take at most {IMPORT_MAX} at a time.")
+    now = _utc(ctx.now())
+    rows = [(parse_due(i["due"], ctx.tz), i) for i in items]
+    before: dict[str, dict | None] = {}
+    for due, i in rows:
+        key = i.get("key") or deadline_key(i["course"], i["title"], due)
+        if key not in before:
+            old = ctx.db.execute("SELECT * FROM school_deadlines WHERE key=?", (key,)).fetchone()
+            before[key] = dict(old) if old else None
+        done = i.get("done")
+        ctx.db.execute(
+            "INSERT INTO school_deadlines (key, course, title, due, url, status, trackable, kind, hand_done, source, "
+            "updated_at) VALUES (?,?,?,?,?,'unknown',0,'due',?,'weekly',?) ON CONFLICT(key) DO UPDATE SET "
+            "course=excluded.course, title=excluded.title, due=excluded.due, "
+            "url=COALESCE(excluded.url, school_deadlines.url), source='weekly', updated_at=excluded.updated_at, "
+            "hand_done=CASE WHEN ? IS NULL THEN school_deadlines.hand_done ELSE excluded.hand_done END",
+            (key, i["course"].strip(), i["title"].strip(), due.isoformat(), i.get("url") or None, int(bool(done)), now,
+             done))
+    ctx.wake("nudge")
+    return Result(f"Saved {len(rows)} deadline{'s' if len(rows) != 1 else ''}.", data={"keys": list(before)},
+                  undo={"before": before})
+
+
+def undo_import_deadlines(ctx: AppContext, undo: dict) -> Result:
+    for key, row in undo["before"].items():
+        ctx.db.execute("DELETE FROM school_deadlines WHERE key=?", (key,))
+        if row is not None:
+            ctx.db.execute(f"INSERT INTO school_deadlines ({', '.join(_COLUMNS)}) VALUES "
+                           f"({', '.join(':' + c for c in _COLUMNS)})", row)
+    return Result(f"Put back {len(undo['before'])} deadline(s) as they were.")
 
 
 def sync_now(ctx: AppContext) -> Result:

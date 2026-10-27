@@ -160,3 +160,14 @@ def test_with_node_pairs_a_node_once_and_starts_it_as_a_child(data_dir, tmp_path
     assert conn.execute("SELECT key_hash FROM nodes").fetchone()[0] == nodes.hash_key(cfg.key)
     node_cli.start_child(settings)  # the second run reuses the key instead of pairing again
     assert nc.load_config().key == cfg.key and conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == 1
+
+
+def test_deadline_import_reads_the_weekly_file(data_dir, tmp_path, capsys):
+    import json
+
+    f = tmp_path / "deadlines.json"
+    f.write_text(json.dumps([{"course": "ECON 100", "title": "Quiz", "due": "2026-11-05", "url": None}]))
+    assert cli.main(["deadline", "import", str(f)]) == 0
+    assert "Saved 1 deadline." in capsys.readouterr().out
+    f.write_text("{}")
+    assert cli.main(["deadline", "import", str(f)]) == 2
