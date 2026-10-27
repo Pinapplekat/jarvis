@@ -53,13 +53,26 @@ def _checkin(ctx: AppContext, run: JobRun, kind: str) -> JobResult:
         if kind == "morning" and run.now.time().replace(tzinfo=None) > _clock(ctx.settings["morning_latest"],
                                                                                 time(10)):
             return JobResult("too late for this morning")
-        taken = ctx.db.execute("INSERT OR IGNORE INTO checkins_sent (day, kind, sent_at) VALUES (?,?,?)",
-                               (day, kind, datetime.now(timezone.utc).isoformat(timespec="seconds"))).rowcount
-        if not taken:
+        if ctx.db.execute("SELECT 1 FROM checkins_sent WHERE day=? AND kind=?", (day, kind)).fetchone():
             return JobResult("already sent today")
-        ctx.db.execute("DELETE FROM checkins_sent WHERE day < ?", ((run.now - timedelta(days=30)).date().isoformat(),))
     prompt, untrusted = _prompt(ctx, run.now, kind)
-    return JobResult(f"{kind} check-in", think=Think(prompt, deliver=True, untrusted=untrusted))
+    # Counted as sent only once the turn worked; a failed turn is retried on the job's backoff.
+    on_done = None if run.reason == "manual" else f"{kind}_done"
+    return JobResult(f"{kind} check-in", think=Think(prompt, deliver=True, untrusted=untrusted, on_done=on_done))
+
+
+def _done(ctx: AppContext, run: JobRun, kind: str) -> None:
+    ctx.db.execute("INSERT OR IGNORE INTO checkins_sent (day, kind, sent_at) VALUES (?,?,?)",
+                   (run.now.date().isoformat(), kind, datetime.now(timezone.utc).isoformat(timespec="seconds")))
+    ctx.db.execute("DELETE FROM checkins_sent WHERE day < ?", ((run.now - timedelta(days=30)).date().isoformat(),))
+
+
+def morning_done(ctx: AppContext, run: JobRun, outcome: str) -> None:
+    _done(ctx, run, "morning")
+
+
+def evening_done(ctx: AppContext, run: JobRun, outcome: str) -> None:
+    _done(ctx, run, "evening")
 
 
 def morning(ctx: AppContext, run: JobRun) -> JobResult:

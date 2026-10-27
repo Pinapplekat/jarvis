@@ -50,6 +50,7 @@ class Think:
     prompt: str  # what the thinking turn is about, with the data it needs
     deliver: bool = True  # send the reply to Elijah; False for jobs that only use tools
     untrusted: bool = False  # the prompt quotes someone else's words (assignment titles, mail)
+    on_done: str | None = None  # handler(ctx, run, outcome) called after a turn that didn't fail or get skipped
 
 
 @dataclass(frozen=True)

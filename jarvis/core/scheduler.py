@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from jarvis.contract.api import ActionError, JobResult, JobRun, Think
+from jarvis.contract.api import ActionError, AppContext, JobResult, JobRun, Think
 from jarvis.contract.timespec import parse_clock
 from jarvis.core import db, jobstate
 from jarvis.core.apps import Registry
@@ -310,9 +310,12 @@ class Scheduler:
             if result.think is not None:
                 job.thinking = True
                 try:
-                    summary = f"{summary}; {await self.think(*job.key, result.think, not_before)}".strip("; ")
+                    said = await self.think(*job.key, result.think, not_before)
                 finally:
                     job.thinking = False
+                summary = f"{summary}; {said}".strip("; ")
+                if result.think.on_done:
+                    summary += await self._on_done(job, run, result.think.on_done, said)
         except Skip as e:
             return finish("skipped", str(e))
         except Exception as e:
@@ -325,6 +328,16 @@ class Scheduler:
             wake = result.wake_at if result.wake_at > self.clock() else self.clock() + MIN_WAKE
             job.wake_at = min(job.wake_at, wake) if job.wake_at else wake
         return finish("ok", summary)
+
+    async def _on_done(self, job: Job, run: JobRun, handler: str, outcome: str) -> str:
+        """Tell the app how its thinking turn went. The reply is already queued, so a failure here is logged and
+        never fails the job (failing would retry, and Elijah would hear it twice)."""
+        try:
+            await self._in_thread(job, lambda ctx: getattr(job.app.module, handler)(ctx, run, outcome))
+        except Exception:
+            log.exception("%s.%s: %s failed after the turn", *job.key, handler)
+            return f" ({handler} failed)"
+        return ""
 
     async def _failed(self, job: Job, run: JobRun, error: Exception, finish, not_before, source: str) -> RunOutcome:
         if isinstance(error, asyncio.TimeoutError):
@@ -345,7 +358,14 @@ class Scheduler:
         return finish("failed", error=text)
 
     async def _call(self, job: Job, run: JobRun) -> JobResult:
-        """The handler, in a worker thread with its own database connection, held to the job's timeout."""
+        """The job's handler, in a worker thread with its own database connection, held to the job's timeout."""
+        out = await self._in_thread(job, lambda ctx: getattr(job.app.module, job.spec.handler)(ctx, run))
+        if not isinstance(out, JobResult):
+            raise TypeError(f"{job.spec.handler} returned {type(out).__name__}, not JobResult")
+        return out
+
+    async def _in_thread(self, job: Job, fn: Callable[[AppContext], object]) -> object:
+        """Run fn(ctx) for the job's app in a worker thread with its own connection, held to the job's timeout."""
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
         settings, app = self.reg.settings, job.app
@@ -353,10 +373,7 @@ class Scheduler:
         def work() -> None:
             conn = db.connect_extra(settings)
             try:
-                out = getattr(app.module, job.spec.handler)(app.ctx.with_db(conn), run)
-                if not isinstance(out, JobResult):
-                    raise TypeError(f"{job.spec.handler} returned {type(out).__name__}, not JobResult")
-                outcome: tuple = (out, None)
+                outcome: tuple = (fn(app.ctx.with_db(conn)), None)
             except BaseException as e:
                 outcome = (None, e)
             finally:

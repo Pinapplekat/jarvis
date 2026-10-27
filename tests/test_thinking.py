@@ -173,3 +173,27 @@ def test_the_budget_counts_the_local_day(echo):
                           ((now + timedelta(hours=hours)).isoformat(timespec="seconds"), channel, 1, "m"))
     # LA midnight is 07:00 UTC: -14h (6 AM UTC) is yesterday; -5h and -1h and +3h are today; one is a chat turn.
     assert loop.thinking_runs_today(echo, now) == 3
+
+
+def test_a_check_in_whose_turn_fails_is_retried_and_counted_once(real_apps):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    class FailsOnce(ScriptedBrain):
+        async def run(self, system, prompt, tools):
+            self.raises = None if self.prompts else RuntimeError("model down")
+            return await super().run(system, prompt, tools)
+
+    host = Host(real_apps, FailsOnce(text="Morning, sir."), [FakeChannel()])
+    sched = host.scheduler
+    sched.online = lambda: True
+    job = sched.jobs[("checkins", "morning")]
+    at = datetime(2026, 10, 26, 8, 0, tzinfo=ZoneInfo("America/Los_Angeles"))
+    first = asyncio.run(sched._run(job, "at", at))
+    assert first.status == "failed" and unsent(real_apps) == []
+    assert real_apps.conn.execute("SELECT COUNT(*) FROM checkins_sent").fetchone()[0] == 0
+    retry = asyncio.run(sched._run(job, "every", at.replace(minute=2)))
+    assert retry.status == "ok" and unsent(real_apps) == ["Morning, sir."]
+    assert [tuple(r) for r in real_apps.conn.execute("SELECT day, kind FROM checkins_sent")] == [("2026-10-26", "morning")]
+    third = asyncio.run(sched._run(job, "every", at.replace(minute=30)))
+    assert third.summary == "already sent today" and unsent(real_apps) == ["Morning, sir."]

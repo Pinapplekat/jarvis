@@ -8,10 +8,15 @@ MORNING = datetime(2026, 10, 26, 7, 0, tzinfo=LA)
 EVENING = datetime(2026, 10, 26, 21, 0, tzinfo=LA)
 
 
-def run_job(reg, name, now, reason="at", **settings):
+def run_job(reg, name, now, reason="at", turn_ok=True, **settings):
+    """Run the job's handler, then (like the scheduler after a turn that worked) its on_done."""
     app = reg.apps["checkins"]
     app.ctx.settings.update(settings)
-    return getattr(app.module, name)(app.ctx, JobRun(now, None, reason, False))
+    run = JobRun(now, None, reason, False)
+    result = getattr(app.module, name)(app.ctx, run)
+    if turn_ok and result.think is not None and result.think.on_done:
+        getattr(app.module, result.think.on_done)(app.ctx, run, "replied")
+    return result
 
 
 def sent(reg):
@@ -105,3 +110,10 @@ def test_the_job_times_come_from_settings(real_apps):
     due = {k[1]: j.trigger_at.astimezone(LA).strftime("%H:%M") for k, j in sched.jobs.items() if k[0] == "checkins"}
     assert due == {"morning": "06:15", "evening": "20:45"}
     assert [j.spec.quiet for k, j in sched.jobs.items() if k[0] == "checkins"] == ["skip", "skip"]
+
+
+def test_a_turn_that_failed_doesnt_count_so_the_retry_goes_out(real_apps):
+    assert run_job(real_apps, "morning", MORNING, turn_ok=False).think is not None
+    assert sent(real_apps) == []
+    retry = run_job(real_apps, "morning", MORNING + timedelta(minutes=2), reason="every")
+    assert retry.think is not None and sent(real_apps) == [("2026-10-26", "morning")]
