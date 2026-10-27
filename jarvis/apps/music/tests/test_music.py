@@ -47,6 +47,7 @@ def sp(monkeypatch):
     spotify.forget()
     chain = FakeKeychain("rt1")
     monkeypatch.setattr(spotify, "keychain", chain)
+    monkeypatch.setattr(spotify, "sleep", lambda s: None)
 
     def install(routes):
         fake = FakeSpotify(routes)
@@ -85,12 +86,19 @@ def test_the_keychain_item_is_falaks_own():
     assert spotify.KEYCHAIN_SERVICE == "Falak Spotify"
 
 
+REDBONE = "spotify:track:" + "a" * 22
+IDLE = (200, {})
+ON_REDBONE = (200, {"device": {"name": "MacBook"}, "is_playing": True,
+                    "item": {"name": "Redbone", "artists": [{"name": "Childish Gambino"}], "uri": REDBONE}})
+
+
 def test_play_picks_the_exact_song_and_starts_it_on_the_active_device(make_ctx, sp, apps):
     install, _ = sp
-    fake = install({**TOKEN, **DEVICES, **SEARCH, ("PUT", spotify.PLAY_URL): (204, {})})
+    fake = install({**TOKEN, **DEVICES, **SEARCH, ("PUT", spotify.PLAY_URL): (204, {}),
+                    ("GET", spotify.PLAYER_URL): [IDLE, IDLE, ON_REDBONE]})
     out = music.play(ctx(make_ctx), "redbone")
     assert out.text == "Playing Redbone by Childish Gambino on Spotify."
-    put = next(c for c in fake.calls if c[0] == "PUT")
+    put = next(c for c in fake.calls if c[0] == "PUT" and c[1] == spotify.PLAY_URL)
     assert put[2] == {"device_id": "d1"} and put[4] == {"uris": ["spotify:track:" + "a" * 22]}
     assert fake.calls[1][5]["Authorization"] == "Bearer at1"
 
@@ -200,3 +208,38 @@ def test_login_checks_state_and_keeps_the_new_token(sp):
         acct.finish_login("http://127.0.0.1:8888/callback?code=c&state=other", "v" * 50, "s1", "x")
     assert acct.finish_login("http://127.0.0.1:8888/callback?code=c&state=s1", "v" * 50, "s1", "x")
     assert chain.items["refresh_token"] == "fresh"
+
+
+def test_unplayable_versions_are_skipped():
+    results = {"tracks": {"items": [
+        {"uri": "spotify:track:" + "x" * 22, "name": "Redbone", "is_playable": False, "artists": [{"name": "Cover"}]},
+        {"uri": REDBONE, "name": "Redbone", "is_playable": True, "artists": [{"name": "Childish Gambino"}]}]}}
+    assert spotify.best(results, "Redbone", "song") == (REDBONE, "Redbone by Childish Gambino")
+
+
+def test_a_song_that_never_starts_is_not_reported_and_music_takes_over(make_ctx, sp, apps):
+    install, _ = sp
+    fake = install({**TOKEN, **DEVICES, **SEARCH, ("PUT", spotify.PLAY_URL): (204, {}),
+                    ("PUT", spotify.PLAYER_URL + "/pause"): (204, {}), ("GET", spotify.PLAYER_URL): IDLE})
+    apps["answers"]["user playlist"] = "track\x1f\x1fRedbone\x1fChildish Gambino"
+    out = music.play(ctx(make_ctx), "redbone")
+    assert out.text == ("Playing Redbone by Childish Gambino in Music (Spotify: Spotify took the command for "
+                        "Redbone by Childish Gambino but nothing started playing).")
+    assert any(c[1].endswith("/pause") for c in fake.calls)  # a late start can't play over Music
+
+
+def test_a_regional_copy_of_the_song_counts_by_name(make_ctx, sp, apps):
+    install, _ = sp
+    swapped = (200, {"device": {"name": "MacBook"}, "is_playing": True,
+                     "item": {"name": "Redbone", "artists": [{"name": "Childish Gambino"}], "uri": "spotify:track:" + "c" * 22}})
+    install({**TOKEN, **DEVICES, **SEARCH, ("PUT", spotify.PLAY_URL): (204, {}),
+             ("GET", spotify.PLAYER_URL): [IDLE, swapped]})
+    assert music.play(ctx(make_ctx), "redbone").text == "Playing Redbone by Childish Gambino on Spotify."
+
+
+def test_an_artist_counts_once_something_new_plays(make_ctx, sp, apps):
+    install, _ = sp
+    install({**TOKEN, **DEVICES, **SEARCH, ("PUT", spotify.PLAY_URL): (204, {}),
+             ("GET", spotify.PLAYER_URL): [IDLE, ON_REDBONE]})
+    out = music.play(ctx(make_ctx), "Redbones")
+    assert out.text == "Playing the artist Redbones, starting with Redbone by Childish Gambino on Spotify."

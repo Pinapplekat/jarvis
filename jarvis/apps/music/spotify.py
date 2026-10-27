@@ -32,6 +32,7 @@ TOKEN_CHARS = re.compile(r"[A-Za-z0-9._~+/=-]{1,2000}")
 TYPES = {"song": "track", "artist": "artist", "playlist": "playlist", "any": "track,artist,playlist"}
 URI = re.compile(r"spotify:(track|artist|album|playlist):[A-Za-z0-9]{10,40}")
 TIMEOUT = 10
+PLAY_WAIT, PLAY_STEP = 4.0, 0.5  # seconds to see playback really start after Spotify accepts the command
 
 
 class SpotifyError(Exception):
@@ -71,6 +72,7 @@ class Keychain:
 
 
 keychain = Keychain()  # tests swap in a fake so they never touch the real Keychain
+sleep = time.sleep  # tests make waiting instant
 _token: tuple[str, float] = ("", 0.0)  # access token, expiry (memory only)
 _refresh = ""  # the refresh token in use
 
@@ -188,7 +190,9 @@ class Account:
         return [d for d in body.get("devices") or [] if isinstance(d, dict) and d.get("id") and not d.get("is_restricted")]
 
     def play(self, query: str, kind: str = "any") -> str:
-        """Starts the best match on his active device (or the first open one). Returns what it is."""
+        """Starts the best match on his active device (or the first open one). Returns what is really playing.
+        Spotify answers 204 even when nothing starts (a track it can't play here), so it's only reported once
+        the player says so; otherwise it's paused and SpotifyError says what happened."""
         uri, what = best(self.search(query, kind), query, kind)
         if not URI.fullmatch(uri):
             raise SpotifyError(f"Spotify returned an odd link ({uri[:60]!r})")
@@ -196,9 +200,34 @@ class Account:
         if not devices:
             raise SpotifyError(NO_DEVICE)
         device = next((d for d in devices if d.get("is_active")), devices[0])
+        before = self.now_playing()
         body = {"uris": [uri]} if uri.startswith("spotify:track:") else {"context_uri": uri}
         self.call("PUT", PLAY_URL, params={"device_id": device["id"]}, body=body)
-        return what
+        playing = self._started(uri, what, before)
+        if playing:
+            return playing
+        try:
+            self.player("PUT", "/pause")  # so a late start can't play over the Music backup
+        except SpotifyError:
+            pass
+        raise SpotifyError(f"Spotify took the command for {what} but nothing started playing")
+
+    def _started(self, uri: str, what: str, before: dict | None) -> str:
+        """'Song by Artist' once the player is really playing what was asked: that song (by link, or by name when
+        Spotify swapped in its regional copy), or for an artist or playlist, something new. '' if not in time."""
+        waited = 0.0
+        while True:
+            now = self.now_playing()
+            if now and now["playing"] and now["track"]:
+                if uri.startswith("spotify:track:"):
+                    if now["uri"] == uri or now["track"].casefold() == what.casefold():
+                        return now["track"]
+                elif not (before and before["playing"] and before["uri"] == now["uri"]):
+                    return f"{what}, starting with {now['track']}"
+            if waited >= PLAY_WAIT:
+                return ""
+            sleep(PLAY_STEP)
+            waited += PLAY_STEP
 
     def now_playing(self) -> dict | None:
         """track ('Song by Artist'), uri, playing, volume (0-100 or None), device, shuffle, repeat, progress (s)."""
@@ -278,7 +307,8 @@ def new_verifier() -> str:
 def best(results: dict, query: str, kind: str = "any") -> tuple[str, str]:
     """(uri, what it is) for the best hit. With kind any: an exact artist, song or playlist name wins, otherwise
     the top song, then the top playlist."""
-    found = {t: [i for i in (results.get(t + "s") or {}).get("items") or [] if i and i.get("uri")]
+    found = {t: [i for i in (results.get(t + "s") or {}).get("items") or []
+                 if i and i.get("uri") and i.get("is_playable") is not False]  # unplayable in his market
              for t in ("track", "artist", "playlist")}
 
     def label(t, item):

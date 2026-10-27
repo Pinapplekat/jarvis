@@ -196,7 +196,7 @@ def play(ctx: AppContext, query: str, kind: str = "any") -> Result:
     acct, why = _account(ctx), ""
     if acct.configured():
         try:
-            return Result(f"Playing {acct.play(query, kind)} on Spotify.")
+            return Result(f"Playing {acct.play(query, kind)} on Spotify.")  # what the player says is on
         except spotify.NoMatch:
             why = "Spotify found nothing"
         except spotify.SpotifyError as e:
