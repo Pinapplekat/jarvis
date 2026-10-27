@@ -30,6 +30,9 @@ def import_actions(apps_dir: Path, name: str) -> ModuleType:
 def check_handlers(manifest: Manifest, module: ModuleType) -> None:
     if manifest.context is not None and not callable(getattr(module, manifest.context, None)):
         raise ManifestError(manifest.path, f"context handler '{manifest.context}' not found in actions.py")
+    for key in ("start", "stop"):
+        if getattr(manifest, key) is not None and not callable(getattr(module, getattr(manifest, key), None)):
+            raise ManifestError(manifest.path, f"{key} handler '{getattr(manifest, key)}' not found in actions.py")
     for action in manifest.actions:
         for label, fn in (("handler", action.handler), ("undo handler", action.undo)):
             if fn is not None and not callable(getattr(module, fn, None)):

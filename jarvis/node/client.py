@@ -29,6 +29,9 @@ class NodeClient:
         self._stop: asyncio.Event | None = None
         self._ws: ClientConnection | None = None
         self._state = ""
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._kick: asyncio.Event | None = None
+        runtime.on_event = self._poke
         self.connected = threading.Event()  # set while welcomed; tests and --with-node wait on it
 
     def _note(self, state: str, message: str, *args: object) -> None:
@@ -37,8 +40,14 @@ class NodeClient:
             self._state = state
             log.info(message, *args)
 
+    def _poke(self) -> None:
+        """An app queued an event (any thread): wake the sender of the current connection, if there is one."""
+        if self._loop is not None and self._kick is not None:
+            self._loop.call_soon_threadsafe(self._kick.set)
+
     async def run(self) -> None:
         self._stop = asyncio.Event()
+        self._loop, self._kick = asyncio.get_running_loop(), asyncio.Event()
         attempt = 0
         while not self._stop.is_set():
             try:
@@ -84,10 +93,13 @@ class NodeClient:
             self._note("up", "connected to the host as %s (apps: %s)", self._config.name, ", ".join(sorted(reply.settings)))
             self.connected.set()
             tasks: set[asyncio.Task] = set()
+            pump = asyncio.create_task(self._pump(ws))
             try:
                 async for frame in ws:
                     msg = m.parse(frame)
-                    if isinstance(msg, m.Call):
+                    if isinstance(msg, m.EventAck):
+                        self._runtime.ack(msg.id)
+                    elif isinstance(msg, m.Call):
                         task = asyncio.create_task(self._answer(ws, msg))
                         tasks.add(task)
                         task.add_done_callback(tasks.discard)
@@ -98,6 +110,7 @@ class NodeClient:
             except ConnectionClosed:
                 pass
             finally:
+                pump.cancel()
                 for task in tasks:
                     task.cancel()
                 self._ws = None
@@ -105,6 +118,21 @@ class NodeClient:
                 if closed:
                     log.info("closed %d live view(s) because the host link dropped", closed)
             return True
+
+    async def _pump(self, ws: ClientConnection) -> None:
+        """Send every unacked event, oldest first: all of them when the link comes up, then new ones as apps queue
+        them. An event sent but not yet acked is not sent again on this connection."""
+        sent: set[str] = set()
+        try:
+            while True:
+                self._kick.clear()
+                for event in await asyncio.get_running_loop().run_in_executor(None, self._runtime.unacked):
+                    if event.id not in sent:
+                        sent.add(event.id)
+                        await ws.send(event.to_json())
+                await self._kick.wait()
+        except ConnectionClosed:
+            return
 
     async def _answer(self, ws: ClientConnection, call: m.Call) -> None:
         loop = asyncio.get_running_loop()

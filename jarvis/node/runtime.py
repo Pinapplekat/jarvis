@@ -5,7 +5,11 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import threading
+import time
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -30,7 +34,11 @@ class _App:
 class NodeRuntime:
     def __init__(self, node_dir: Path, tmp_dir: Path, apps_dir: Path = DEFAULT_APPS_DIR,
                  extra_dirs: tuple[Path, ...] = ()) -> None:
-        self._tmp, self._secrets = tmp_dir, load_secrets(node_dir)
+        self._tmp, self._secrets, self._node_dir = tmp_dir, load_secrets(node_dir), node_dir
+        self._outbox = node_dir / "outbox"  # events not yet acked by the host, one json file each
+        self._outbox_lock = threading.Lock()
+        self.on_event: Callable[[], None] = lambda: None  # set by the client: "there is something to send"
+        self._started: set[str] = set()
         self._clear_tmp()
         self._apps: dict[str, _App] = {}
         self._live: list[tuple[str, str, dict]] = []  # (app, stop handler, state) of sessions started here
@@ -69,13 +77,61 @@ class NodeRuntime:
         return sorted({a.manifest.runs_on.split(":", 1)[1] for a in self._apps.values()})
 
     def configure(self, settings: dict[str, dict]) -> None:
-        """Take the host's merged settings (only for the apps it enabled); other apps refuse calls."""
+        """Take the host's merged settings (only for the apps it enabled); other apps refuse calls. An app's `start`
+        handler runs once, the first time it is enabled."""
         for name, app in self._apps.items():
             if name in settings:
                 secrets = {k: self._secrets[k] for k in app.manifest.secrets if k in self._secrets}
-                app.ctx = AppContext(name, settings[name], secrets, None, self._tmp)
+                app.ctx = AppContext(name, settings[name], secrets, None, self._tmp,
+                                     data_dir=self._node_dir / name)
+                app.ctx.notify_hook = self.notify
+                if app.manifest.start and name not in self._started:
+                    self._started.add(name)
+                    getattr(app.module, app.manifest.start)(app.ctx)
             else:
                 app.ctx = None
+
+    def close(self) -> None:
+        """The node is shutting down: let each started app stop its background threads."""
+        for name in sorted(self._started):
+            app = self._apps[name]
+            if app.manifest.stop and app.ctx is not None:
+                try:
+                    getattr(app.module, app.manifest.stop)(app.ctx)
+                except Exception:
+                    log.exception("stopping %s failed", name)
+        self._started.clear()
+
+    # ---- events: what apps say first ------------------------------------------------------------------
+
+    def notify(self, app: str, text: str) -> None:
+        """ctx.notify on a node: the message is on disk before anything is sent, and stays there until the host
+        acks it, so a dropped link or a restart loses nothing."""
+        event = m.Event(uuid.uuid4().hex, app, text[: m.MAX_EVENT_TEXT])
+        with self._outbox_lock:
+            self._outbox.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path = self._outbox / f"{event.id}.json"
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"at": time.time_ns(), "app": event.app, "text": event.text}))
+            os.replace(tmp, path)
+        self.on_event()
+
+    def unacked(self) -> list[m.Event]:
+        """Every event the host hasn't acked, oldest first."""
+        found = []
+        with self._outbox_lock:
+            for path in self._outbox.glob("*.json") if self._outbox.is_dir() else ():
+                try:
+                    body = json.loads(path.read_text())
+                    found.append((body["at"], m.Event(path.stem, str(body["app"]), str(body["text"]))))
+                except (OSError, ValueError, KeyError):
+                    log.warning("skipping unreadable event file %s", path.name)
+        return [e for _, e in sorted(found, key=lambda x: (x[0], x[1].id))]
+
+    def ack(self, event_id: str) -> None:
+        if event_id.isalnum():  # an id is a hex uuid; never a path
+            with self._outbox_lock:
+                (self._outbox / f"{event_id}.json").unlink(missing_ok=True)
 
     # ---- one call --------------------------------------------------------------------------------------
 

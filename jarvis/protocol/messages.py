@@ -121,7 +121,31 @@ class Pong(Message):
     t: float
 
 
-_BY_TYPE: dict[str, type[Message]] = {c.type: c for c in (Hello, Welcome, Reject, Call, CallResult, Ping, Pong)}
+MAX_EVENT_TEXT = 4000
+
+
+@dataclass(frozen=True)
+class Event(Message):
+    """Node to host: an app on the node says something to Elijah on its own (a job finished, a task is done)."""
+
+    type: ClassVar[str] = "event"
+    _types: ClassVar[dict] = {"id": (str,), "app": (str,), "text": (str,)}
+    id: str  # a uuid the node keeps until the host acks it; the host dedupes on it
+    app: str
+    text: str
+
+
+@dataclass(frozen=True)
+class EventAck(Message):
+    """Host to node: the event is in the host's outbox, so the node may forget it."""
+
+    type: ClassVar[str] = "event_ack"
+    _types: ClassVar[dict] = {"id": (str,)}
+    id: str
+
+
+_BY_TYPE: dict[str, type[Message]] = {
+    c.type: c for c in (Hello, Welcome, Reject, Call, CallResult, Ping, Pong, Event, EventAck)}
 
 
 def from_json(text: str | bytes) -> Message:

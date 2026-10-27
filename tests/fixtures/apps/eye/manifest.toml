@@ -84,3 +84,14 @@ additionalProperties = false
 type = "string"
 default = "front"
 description = "Which pretend camera."
+
+[[actions]]
+name = "speak"
+description = "Tell Elijah something on the eye's own."
+effect = "read"
+[actions.input]
+type = "object"
+required = ["text"]
+additionalProperties = false
+[actions.input.properties.text]
+type = "string"

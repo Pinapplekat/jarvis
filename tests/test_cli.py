@@ -16,7 +16,7 @@ def test_dev_info(data_dir, capsys):
     (data_dir / ".env").write_text("SECRET_KEY=hunter2\n")
     assert cli.main(["dev", "info"]) == 0
     out = capsys.readouterr().out
-    assert str(data_dir) in out and "[1, 2, 3, 4, 5]" in out and "Falak" in out
+    assert str(data_dir) in out and "[1, 2, 3, 4, 5, 6]" in out and "Falak" in out
     assert "SECRET_KEY" in out and "hunter2" not in out
     assert "settings for missing apps: none" in out
 

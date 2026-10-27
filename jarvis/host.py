@@ -96,6 +96,21 @@ class Host:
         self.sender = outbox.Sender(reg.conn, self._notify_channel, lambda: datetime.now(timezone.utc),
                                     reg.settings.tz())
         self._scheduler: Scheduler | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None  # set by run(); app threads notify through it
+        for app in reg.apps.values():
+            app.ctx.notify_hook = self._app_notify
+
+    def _app_notify(self, app: str, text: str) -> None:
+        """ctx.notify of a host app. Its handler may run in a worker thread, but the outbox connection is the
+        loop's, so a call from elsewhere is handed over."""
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:  # not on the loop's thread
+                loop.call_soon_threadsafe(self.notify, text, f"app:{app}")
+                return
+        self.notify(text, f"app:{app}")
 
     def add_channel(self, channel: Channel) -> None:
         self.channels[channel.name] = channel
@@ -216,6 +231,7 @@ class Host:
 
     async def run(self, handle_signals: bool = False) -> None:
         """Run until stopped (Ctrl-C) or until every channel has finished. Closes the registry."""
+        self._loop = asyncio.get_running_loop()
         if handle_signals:
             for sig in (signal.SIGINT, signal.SIGTERM):
                 asyncio.get_running_loop().add_signal_handler(sig, self.request_stop)

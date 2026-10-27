@@ -80,7 +80,10 @@ def _run() -> int:
     async def main() -> None:
         for sig in (signal.SIGINT, signal.SIGTERM):
             asyncio.get_running_loop().add_signal_handler(sig, client.stop)
-        await client.run()
+        try:
+            await client.run()
+        finally:
+            runtime.close()
 
     asyncio.run(main())
     return 0

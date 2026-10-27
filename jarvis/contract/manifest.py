@@ -14,7 +14,7 @@ from jarvis.contract.timespec import MIN_EVERY_S, parse_clock, parse_interval
 EFFECTS = ("read", "local", "outbound", "irreversible")
 _NAME = re.compile(r"^[a-z][a-z0-9]*(_[a-z0-9]+)*$")  # snake_case; no "__", which joins app and action
 _RUNS_ON = re.compile(r"^(host|node:[a-z][a-z0-9_]*)$")
-_APP_KEYS = {"name", "description", "runs_on", "secrets", "context", "uses"}
+_APP_KEYS = {"name", "description", "runs_on", "secrets", "context", "uses", "start", "stop"}
 _ACTION_KEYS = {"name", "description", "effect", "handler", "undo", "confirm", "log_args", "untrusted_output", "input",
                 "timeout_s", "share", "tool", "sends_data"}
 _SESSION_KEYS = {"name", "description", "effect", "untrusted_output", "idle_minutes", "start", "sample", "stop", "input",
@@ -112,6 +112,8 @@ class Manifest:
     sessions: tuple[SessionSpec, ...] = ()
     jobs: tuple[JobSpec, ...] = ()
     uses: tuple[str, ...] = ()  # apps whose shared actions this one may call with ctx.call
+    start: str | None = None  # node apps: start(ctx) when the app loads (background threads)
+    stop: str | None = None  # node apps: stop(ctx) when the node shuts down
 
     @property
     def tools(self) -> tuple[ActionSpec, ...]:
@@ -327,6 +329,14 @@ def load_manifest(path: Path, folder: str | None = None) -> Manifest:
         raise ManifestError(path, "uses must be a list of app names")
     if name in uses:
         raise ManifestError(path, "an app doesn't list itself in uses")
+    lifecycle = {}
+    for key in ("start", "stop"):
+        fn = app.get(key)
+        if fn is not None and not (isinstance(fn, str) and fn.isidentifier()):
+            raise ManifestError(path, f"{key} must be a function name")
+        if fn is not None and runs_on == "host":
+            raise ManifestError(path, f"{key} is only for node apps (a host app uses [[jobs]])")
+        lifecycle[key] = fn
     tables, session_tables, job_tables = raw.get("actions", []), raw.get("sessions", []), raw.get("jobs", [])
     if not all(isinstance(t, list) for t in (tables, session_tables, job_tables)):
         raise ManifestError(path, "[[actions]], [[sessions]] and [[jobs]] must be lists of tables")
@@ -344,4 +354,4 @@ def load_manifest(path: Path, folder: str | None = None) -> Manifest:
     if len(set(names)) != len(names):
         raise ManifestError(path, f"duplicate tool name '{next(n for n in names if names.count(n) > 1)}'")
     return Manifest(name, description, runs_on, tuple(secrets), settings, actions, path, context, sessions, jobs,
-                    tuple(uses))
+                    tuple(uses), lifecycle["start"], lifecycle["stop"])

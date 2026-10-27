@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
-from jarvis.core import db
+from jarvis.core import db, outbox
 from jarvis.core.dispatch import NodeError, NodeInfo, NodeReply, Target
 from jarvis.core.nodes import hash_key
 from jarvis.core.settings import Settings
@@ -221,12 +221,24 @@ class NodeHub:
                         waiting.set_result(msg)
                     else:
                         log.warning("node %s answered call %s, which nobody is waiting for", conn.name, msg.id)
+                elif isinstance(msg, m.Event):
+                    await self._event(conn, msg)
                 elif isinstance(msg, m.Ping):
                     await conn.ws.send(m.Pong(msg.t).to_json())
                 elif msg is not None and not isinstance(msg, m.Pong):
                     log.warning("node %s sent an unexpected %s; dropped", conn.name, msg.type)
         except ConnectionClosed:
             pass
+
+    async def _event(self, conn: _Conn, msg: m.Event) -> None:
+        """An app on the node speaks first: one outbox row (deduped on the event id), then the ack. An event from an
+        app the node didn't announce is dropped, and acked so the node doesn't keep resending it."""
+        if msg.app not in conn.apps:
+            log.warning("node %s sent an event for %s, which it didn't announce; dropped", conn.name, msg.app)
+        else:
+            text = msg.text if len(msg.text) <= m.MAX_EVENT_TEXT else msg.text[: m.MAX_EVENT_TEXT - 1] + "…"
+            outbox.add(self._db, text, f"app:{msg.app}", dedupe_key=f"event:{msg.id}")  # the sender polls the table
+        await conn.ws.send(m.EventAck(msg.id).to_json())
 
     async def _ping(self, conn: _Conn) -> None:
         try:

@@ -19,11 +19,14 @@ POLL_S = 2.0  # other processes (jarvis jobs run) add rows without waking us
 
 
 def add(conn: sqlite3.Connection, text: str, source: str, now: datetime | None = None,
-        not_before: datetime | None = None) -> int:
-    return conn.execute(
-        "INSERT INTO outbox (text, source, created_at, not_before) VALUES (?,?,?,?)",
-        (text, source, stamp(now), stamp(not_before) if not_before else None),
-    ).lastrowid
+        not_before: datetime | None = None, dedupe_key: str | None = None) -> int | None:
+    """Queue a message. With a `dedupe_key` that is already there (a node resent an event), nothing is added and
+    the result is None, so the same event is never sent to Elijah twice."""
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO outbox (text, source, created_at, not_before, dedupe_key) VALUES (?,?,?,?,?)",
+        (text, source, stamp(now), stamp(not_before) if not_before else None, dedupe_key),
+    )
+    return cur.lastrowid if cur.rowcount else None
 
 
 def unsent(conn: sqlite3.Connection) -> list[sqlite3.Row]:

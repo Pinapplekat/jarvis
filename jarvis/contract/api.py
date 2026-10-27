@@ -84,6 +84,7 @@ class AppContext:
         db: sqlite3.Connection | None,
         tmp_dir: Path,
         tz: tzinfo | None = None,
+        data_dir: Path | None = None,
     ) -> None:
         self.name = name
         self.settings = settings  # manifest defaults overridden by settings.toml [apps.<name>]
@@ -94,6 +95,8 @@ class AppContext:
         self.tz: tzinfo = tz or timezone.utc  # Elijah's timezone (the core setting)
         self.wake_hook: Callable[[str, str], None] | None = None  # set by the scheduler inside `jarvis serve`
         self.call_hook: CallHook | None = None  # set by the core when the apps are loaded on the host
+        self.notify_hook: Callable[[str, str], None] | None = None  # (app, text); set by the host or the node runtime
+        self._data_dir = data_dir  # a private folder for the app's own files (only on a node for now)
 
     def now(self) -> datetime:
         return datetime.now(self.tz)
@@ -105,9 +108,24 @@ class AppContext:
 
     def with_db(self, db: sqlite3.Connection) -> "AppContext":
         """The same context on another connection. Each job run gets its own (SQLite connections are per thread)."""
-        other = AppContext(self.name, self.settings, self.secrets, db, self._tmp_dir, self.tz)
-        other.wake_hook, other.call_hook = self.wake_hook, self.call_hook
+        other = AppContext(self.name, self.settings, self.secrets, db, self._tmp_dir, self.tz, self._data_dir)
+        other.wake_hook, other.call_hook, other.notify_hook = self.wake_hook, self.call_hook, self.notify_hook
         return other
+
+    def notify(self, text: str) -> None:
+        """Tell Elijah something on the app's own initiative (a job finished, a task is done). It goes through the
+        host's outbox, so it isn't lost when a link drops. Not for the result of an action: that is the reply."""
+        if self.notify_hook is None:
+            raise RuntimeError(f"{self.name} can't notify from here")
+        self.notify_hook(self.name, text)
+
+    @property
+    def data_dir(self) -> Path:
+        """The app's own folder for files that must outlive a restart (created on first use)."""
+        if self._data_dir is None:
+            raise RuntimeError(f"{self.name} has no data folder here")
+        self._data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return self._data_dir
 
     def call(self, app: str, action: str, **args) -> Result:
         """Run another app's shared read action (listed in this app's `uses`). Raises AppUnavailable when that app

@@ -68,3 +68,8 @@ def sample_live(ctx: AppContext, state: dict) -> Result:
 def stop_live(ctx: AppContext, state: dict) -> Result:
     LIVE.pop(state["id"], None)
     return Result("closed")
+
+
+def speak(ctx: AppContext, text: str) -> Result:
+    ctx.notify(text)
+    return Result("said it")
