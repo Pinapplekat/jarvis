@@ -17,7 +17,7 @@ TABLE_DDL = re.compile(
 
 
 def test_apps_exist():
-    assert {"calculator", "memory", "camera", "screen"} <= set(APPS)
+    assert {"calculator", "memory", "camera", "screen", "reminders", "school", "checkins", "journal"} <= set(APPS)
 
 
 @pytest.fixture
@@ -61,6 +61,30 @@ def test_sessions_have_handlers_and_sane_settings(app):
         assert {p for p in inspect.signature(start).parameters if p != "ctx"} == props
         assert len(inspect.signature(sample).parameters) == 2  # (ctx, state)
         assert len(inspect.signature(stop).parameters) == 2
+
+
+@pytest.mark.parametrize("app", APPS, indirect=True)
+def test_jobs_have_handlers_taking_ctx_and_run(app):
+    names = [j.name for j in app.manifest.jobs]
+    assert len(set(names)) == len(names)
+    for job in app.manifest.jobs:
+        assert len(inspect.signature(getattr(app.module, job.handler)).parameters) == 2  # (ctx, run)
+        assert job.every is not None or job.at
+        assert not (job.kind == "think" and job.quiet == "ignore")
+        for t in job.at:
+            if t.startswith("$"):
+                assert app.manifest.settings[t[1:]]["type"] == "string"
+
+
+def test_the_jobs_the_brief_asks_for_exist():
+    jobs = {(m.name, j.name): j for m in (load_manifest(DEFAULT_APPS_DIR / a / "manifest.toml") for a in APPS)
+            for j in m.jobs}
+    assert set(jobs) == {("reminders", "deliver"), ("school", "sync"), ("school", "nudge"),
+                         ("checkins", "morning"), ("checkins", "evening"), ("journal", "write")}
+    assert jobs[("reminders", "deliver")].quiet == "ignore" and jobs[("school", "nudge")].quiet == "hold"
+    assert jobs[("school", "sync")].needs == ("network",) and jobs[("school", "sync")].every == 7200
+    assert jobs[("checkins", "morning")].quiet == "skip" and jobs[("journal", "write")].at == ("02:00",)
+    assert all(j.kind == "think" for k, j in jobs.items() if k[0] in ("checkins", "journal"))
 
 
 @pytest.mark.parametrize("app", APPS, indirect=True)

@@ -1,0 +1,48 @@
+[app]
+name = "journal"
+description = "The nightly journal: Falak writes up each day so weeks later it still knows what happened."
+runs_on = "host"
+
+[[actions]]
+name = "save_entry"
+description = "Save the journal entry for a day (replacing any earlier one), with the loose ends worth following up."
+effect = "local"
+undo = "undo_save_entry"
+[actions.input]
+type = "object"
+required = ["day", "entry"]
+additionalProperties = false
+[actions.input.properties.day]
+type = "string"
+description = "The local date, YYYY-MM-DD."
+[actions.input.properties.entry]
+type = "string"
+minLength = 1
+description = "Plain text, 6-15 short lines, third person."
+[actions.input.properties.open_loops]
+type = "array"
+default = []
+description = "Unfinished things worth following up (at most 10)."
+[actions.input.properties.open_loops.items]
+type = "string"
+
+[[actions]]
+name = "read_journal"
+description = "Read the journal entry for a day, e.g. to answer 'what did I do last Tuesday?'."
+effect = "read"
+[actions.input]
+type = "object"
+required = ["day"]
+additionalProperties = false
+[actions.input.properties.day]
+type = "string"
+description = "The local date, YYYY-MM-DD."
+
+[[jobs]]
+name = "write"
+title = "the journal"
+description = "Write up yesterday from the conversation, the action log, deadlines and reminders."
+kind = "think"
+at = "02:00"
+quiet = "hold"
+timeout_s = 60

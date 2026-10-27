@@ -1,0 +1,47 @@
+[app]
+name = "checkins"
+description = "The morning brief and the evening check-in, which Falak starts on its own."
+runs_on = "host"
+
+[settings.morning]
+type = "string"
+default = "07:00"
+description = "When the morning brief goes out (HH:MM, local)."
+
+[settings.morning_latest]
+type = "string"
+default = "10:00"
+description = "How late a catch-up after the Mac slept may still send the morning brief (HH:MM)."
+
+[settings.evening]
+type = "string"
+default = "21:00"
+description = "When the evening check-in goes out (HH:MM, local)."
+
+[settings.morning_on]
+type = "boolean"
+default = true
+description = "Send the morning brief."
+
+[settings.evening_on]
+type = "boolean"
+default = true
+description = "Send the evening check-in."
+
+[[jobs]]
+name = "morning"
+title = "the morning brief"
+description = "Brief Elijah on the day: deadlines, reminders and loose ends from yesterday."
+kind = "think"
+at = "$morning"
+quiet = "skip"
+timeout_s = 30
+
+[[jobs]]
+name = "evening"
+title = "the evening check-in"
+description = "Ask how the day went and look ahead to tomorrow."
+kind = "think"
+at = "$evening"
+quiet = "skip"
+timeout_s = 30

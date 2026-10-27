@@ -1,0 +1,65 @@
+[app]
+name = "school"
+description = "Canvas deadlines: syncs your courses, answers what's due, and nudges before things are due."
+runs_on = "host"
+secrets = ["CANVAS_TOKEN", "CANVAS_ICS_URL"]
+context = "context"
+
+[settings.canvas_url]
+type = "string"
+default = "https://canvas.seattlecolleges.edu"
+description = "Your school's Canvas address."
+
+[[actions]]
+name = "upcoming"
+description = "What's due in the next few days, by day, with what Canvas says is done. Each line ends with its key."
+effect = "read"
+untrusted_output = true
+[actions.input]
+type = "object"
+additionalProperties = false
+[actions.input.properties.days]
+type = "integer"
+minimum = 1
+maximum = 60
+default = 7
+
+[[actions]]
+name = "mark_done"
+description = "Mark a deadline done by hand, for work Canvas can't track (use the key shown by upcoming)."
+effect = "local"
+undo = "undo_mark_done"
+[actions.input]
+type = "object"
+required = ["key"]
+additionalProperties = false
+[actions.input.properties.key]
+type = "string"
+minLength = 1
+
+[[actions]]
+name = "sync_now"
+description = "Fetch the latest deadlines from Canvas right now."
+effect = "local"
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[jobs]]
+name = "sync"
+title = "Canvas sync"
+description = "Fetch deadlines from Canvas."
+kind = "sync"
+every = "2h"
+needs = ["network"]
+quiet = "ignore"
+timeout_s = 120
+
+[[jobs]]
+name = "nudge"
+title = "deadline reminders"
+description = "Message Elijah 24 hours before work that isn't done, and 3 hours before unsubmitted work Canvas can see."
+kind = "deliver"
+every = "15m"
+quiet = "hold"
+timeout_s = 30
