@@ -1,0 +1,39 @@
+[app]
+name = "screen"
+description = "Look at what is on the screen of the device it runs on."
+runs_on = "node:screen"
+
+[settings.exclude_apps]
+type = "string"
+default = ""
+description = "Extra app names (comma-separated) that are never looked at, on top of banking, password and messaging apps."
+
+[settings.exclude_titles]
+type = "string"
+default = ""
+description = "Extra window-title words (comma-separated) that stop a look, on top of the built-in banking and password words."
+
+[[actions]]
+name = "look"
+description = "Take one screenshot of the whole screen and return it as an image. Skips banking and password apps."
+effect = "read"
+log_args = false
+untrusted_output = true  # a screen is full of other people's words
+timeout_s = 20
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[sessions]]
+name = "live_view"
+description = "Open a live view of the screen so you can look at it as often as you need, until it's closed."
+effect = "read"
+untrusted_output = true
+idle_minutes = 15
+start = "start_live"
+sample = "sample_live"
+stop = "stop_live"
+timeout_s = 20
+[sessions.input]
+type = "object"
+additionalProperties = false

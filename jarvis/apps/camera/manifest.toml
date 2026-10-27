@@ -6,7 +6,7 @@ runs_on = "node:camera"
 [settings.device]
 type = "string"
 default = ""
-description = "Camera name for imagesnap's -d; empty means the default camera."
+description = "Camera name for photos (imagesnap -d) and the default for live views; empty means the default camera."
 
 [[actions]]
 name = "take_photo"
@@ -14,6 +14,29 @@ description = "Take one photo and return it as an image."
 effect = "read"
 log_args = false
 untrusted_output = true  # a photo can contain text
+timeout_s = 15
 [actions.input]
 type = "object"
 additionalProperties = false
+
+[settings.preview]
+type = "boolean"
+default = true
+description = "Show a small 'Falak: live view' window with the camera while a live view is open."
+
+[[sessions]]
+name = "live_view"
+description = "Open a live camera view so you can look at what Elijah is showing you, as often as you need, until it's closed."
+effect = "read"
+untrusted_output = true  # frames can contain text
+idle_minutes = 15
+start = "start_live"
+sample = "sample_live"
+stop = "stop_live"
+timeout_s = 20
+[sessions.input]
+type = "object"
+additionalProperties = false
+[sessions.input.properties.device]
+type = "string"
+description = "Camera name, e.g. 'Desk View' for the iPhone's top-down view. Leave out for the default camera."
