@@ -265,6 +265,10 @@ Seattle Colleges and the old JARVIS reads Mail.app.
 5. Glasses: another node.
 6. Canvas through Falak's own signed-in browser, since personal tokens are off and the feed misses ECON and
    ENGL work: [docs/ideas/canvas-browser.md](docs/ideas/canvas-browser.md).
+7. Self-edit and prod mode come back together. Prod mode (the old nightly log review that built tested fixes
+   on branches for Elijah to deploy, plus weekly feature proposals) stopped with the old JARVIS on 2026-10-27.
+   It waits until there are several nodes, since logs, code and builds may then live on different machines
+   (decided 2026-10-27).
 
 ## Handoff
 
