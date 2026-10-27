@@ -247,9 +247,13 @@ Each milestone becomes one brief for Sonnet, with goal, files, interfaces, tests
 | M4 | **Channels:** interface, Discord text, desk text input, Telegram location intake | Talk to Falak in Discord DMs; location still arrives |
 | M5 | **Mac node:** separate process, protocol over localhost, capability routing; screen, camera live view, recorder apps with sessions | "Pull up homework view" opens a live feed Falak can describe as it changes |
 | M6 | **Scheduler:** job registry; port reminders, mail watch, Canvas, check-ins, journal into their apps | Reminders fire on time; the launchd tick isn't needed |
-| M7 | **Port the remaining apps:** terminal (sandboxed), mail, music, web, school, projects, tasks | Parity checklist for everyday use passes |
-| M8 | **Voice:** "Hey Falak" wake word, Whisper, Kokoro at the desk; Discord voice calls | Talk at the desk and on a Discord call |
-| M9 | **Cutover:** data migration check, old UI (HUD, Panel, Inbox) reading from the new host, launchd jobs switched, old code retired | You use only Falak for a week without falling back |
+| M7 | **Apps that share, everyday Mac apps:** `ctx.call` between apps, check-in retry, school `deadline import`, web, music, messages, timers | Check-ins read through `ctx.call`; search, music, texts and timers work on Discord |
+| M8 | **Work apps:** terminal (sandboxed), background jobs, tasks (Claude Code sessions), projects and repos | Parity checklist for everyday use passes |
+| M9 | **Voice:** "Hey Falak" wake word, Whisper, Kokoro at the desk; Discord voice calls | Talk at the desk and on a Discord call |
+| M10 | **Cutover:** data migration check, location and Telegram, old UI (HUD, Panel, Inbox) reading from the new host, launchd jobs switched, old code retired | You use only Falak for a week without falling back |
+
+Mail (read, draft, send, mail watch) isn't scheduled yet. It needs the Mac node, since Graph is closed for
+Seattle Colleges and the old JARVIS reads Mail.app.
 
 ## After the rehaul
 
