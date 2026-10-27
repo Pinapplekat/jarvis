@@ -100,6 +100,9 @@ docs/briefs/  # one brief per milestone
 - The host never imports a node app's code, and the node never opens the host database or imports `core`.
 - Nodes pair with `jarvis node pair <name>`; the host stores only the SHA-256 of the key. The node keeps its own
   folder, `FALAK_NODE_DIR` (default `~/Library/Application Support/Falak-node/`).
+- Pictures a tool returns reach the model and are then deleted. One goes to Elijah only when the model calls
+  `falak__send_image` in a chat turn; it is held in memory and attached to the reply, never written to disk. The
+  brain runs Claude Code with `--no-session-persistence`, so it keeps no copies either.
 - A manifest `[[sessions]]` entry (a live view) gives the model `_start`, `_look` and `_stop` tools. The host owns
   the `sessions` table; the node owns the running capture and closes it when the host link drops.
 

@@ -41,3 +41,4 @@ def test_options_isolate_the_brain_from_everything_but_falak_tools(tmp_path):
     assert Path(o.cwd) == tmp_path / "scratch" and Path(o.cwd).is_dir()
     assert "ANTHROPIC_API_KEY" not in o.env
     assert o.extra_args == {"no-session-persistence": None}  # no transcripts or photo copies on disk
+    assert o.max_buffer_size == 32 * 1024 * 1024  # a screenshot is bigger than the default 1 MB

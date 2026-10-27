@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib
 import logging
 import signal
@@ -15,7 +16,7 @@ from jarvis.core import actions, loop, outbox, sessions
 from jarvis.core.actions import Origin
 from jarvis.core.apps import Registry, tmp_dir
 from jarvis.core.brain import Brain
-from jarvis.core.channel import AskResult, Channel, ChannelUnavailable, Incoming
+from jarvis.core.channel import AskResult, Channel, ChannelUnavailable, Incoming, Picture
 from jarvis.core.scheduler import Scheduler, Skip
 from jarvis.contract.schema import validate
 from jarvis.contract.envfile import load_secrets
@@ -174,7 +175,8 @@ class Host:
         log.info("turn channel=%s ms=%d tools=%s error=%s", incoming.channel, reply.ms,
                  ",".join(reply.tools) or "-", reply.error or "-")
         ask_id = reply.new_asks[-1] if reply.new_asks else None  # buttons go on the latest ask only
-        await channel.send(reply.text, reply_to=incoming.reply_to, ask_id=ask_id)
+        pictures = tuple(Picture(img.mime, base64.b64decode(img.data)) for img in reply.images)
+        await channel.send(reply.text, reply_to=incoming.reply_to, ask_id=ask_id, images=pictures)
         if self.on_reply:
             self.on_reply(incoming, reply)
         return reply

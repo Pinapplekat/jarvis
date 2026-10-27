@@ -13,9 +13,9 @@ from jarvis.core import context, conversation, sessions
 from jarvis.core.actions import Origin
 from jarvis.contract.api import Attachment
 from jarvis.core.apps import Registry
-from jarvis.core.brain import Brain, BrainResult
+from jarvis.core.brain import Brain, BrainResult, Image
 from jarvis.core.timeutil import stamp
-from jarvis.core.tools import TurnState, build_tools, latest_ask_id, new_pending_asks
+from jarvis.core.tools import TurnState, build_tools, latest_ask_id, new_pending_asks, shared_images
 
 log = logging.getLogger("jarvis.core.loop")
 
@@ -28,6 +28,7 @@ class Reply:
     turn_id: int
     ms: int = 0
     new_asks: tuple[int, ...] = ()  # asks this turn created that are still pending
+    images: tuple[Image, ...] = ()  # pictures the model chose to send with the reply (falak__send_image)
 
 
 def _fallback(error: str, tools: list[str]) -> str:
@@ -87,7 +88,8 @@ async def handle_message(reg: Registry, brain: Brain, text: str, origin: Origin,
         conversation.add(reg.conn, "assistant", reply, now)
         ms = int((time.monotonic() - started) * 1000)
         turn_id = _record_turn(reg, origin.channel, ms, result, turn.tools_used, error)
-        return Reply(reply, tuple(turn.tools_used), error, turn_id, ms, new_pending_asks(reg, turn))
+        return Reply(reply, tuple(turn.tools_used), error, turn_id, ms, new_pending_asks(reg, turn),
+                     shared_images(turn))
     finally:
         for att in attachments:
             att.path.unlink(missing_ok=True)

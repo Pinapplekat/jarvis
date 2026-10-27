@@ -19,6 +19,14 @@ class Incoming:
 
 
 @dataclass(frozen=True)
+class Picture:
+    """An image going out with a reply. Held in memory only; never written to disk."""
+
+    mime: str
+    data: bytes
+
+
+@dataclass(frozen=True)
 class AskResult:
     ok: bool  # false when the ask couldn't be answered (already answered, expired, ...)
     message: str  # a short line to show Elijah
@@ -41,6 +49,7 @@ class Channel(Protocol):
 
     async def stop(self) -> None: ...
 
-    async def send(self, text: str, *, reply_to: object = None, ask_id: int | None = None) -> None: ...
+    async def send(self, text: str, *, reply_to: object = None, ask_id: int | None = None,
+                   images: tuple[Picture, ...] = ()) -> None: ...  # images go with the last piece of text
 
     def typing(self, reply_to: object) -> AbstractAsyncContextManager[None]: ...  # shown while a turn runs

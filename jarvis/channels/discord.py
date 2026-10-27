@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 import mimetypes
 import os
@@ -13,7 +14,7 @@ from pathlib import Path
 import discord
 
 from jarvis.contract.api import Attachment
-from jarvis.core.channel import AnswerAsk, ChannelUnavailable, Deliver, Incoming
+from jarvis.core.channel import AnswerAsk, ChannelUnavailable, Deliver, Incoming, Picture
 
 log = logging.getLogger("jarvis.channels.discord")
 
@@ -41,6 +42,11 @@ def _cut(window: str, limit: int) -> int:
             return max(ends)
     space = window.rfind(" ")
     return space + 1 if space > limit // 2 else limit
+
+
+def image_files(images: tuple[Picture, ...]) -> list[tuple[str, bytes]]:
+    """(filename, bytes) for each picture going out with a reply: falak-1.jpg, falak-2.png, ..."""
+    return [(f"falak-{i}{mimetypes.guess_extension(img.mime) or '.bin'}", img.data) for i, img in enumerate(images, 1)]
 
 
 def split_message(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
@@ -209,15 +215,18 @@ class DiscordChannel:
         user = await self._client.fetch_user(self.owner_id)  # no message to answer: start a DM with Elijah
         return user.dm_channel or await user.create_dm()
 
-    async def send(self, text: str, *, reply_to: object = None, ask_id: int | None = None) -> None:
+    async def send(self, text: str, *, reply_to: object = None, ask_id: int | None = None,
+                   images: tuple[Picture, ...] = ()) -> None:
         target = await self._target(reply_to)
-        pieces = split_message(text)
+        pieces = split_message(text) or ([""] if images else [])
         for i, piece in enumerate(pieces):
-            if ask_id is not None and i == len(pieces) - 1:
-                view = AskView(ask_id, piece, self.owner_id, self._answer)
-                await target.send(piece, view=view)
-            else:
-                await target.send(piece)
+            extra: dict = {}
+            if i == len(pieces) - 1:
+                if ask_id is not None:
+                    extra["view"] = AskView(ask_id, piece, self.owner_id, self._answer)
+                if images:
+                    extra["files"] = [discord.File(io.BytesIO(data), filename=name) for name, data in image_files(images)]
+            await target.send(piece, **extra)
 
     @asynccontextmanager
     async def typing(self, reply_to: object):

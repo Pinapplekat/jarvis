@@ -16,6 +16,7 @@ logging.getLogger("claude_agent_sdk").setLevel(logging.WARNING)  # its INFO line
 
 SERVER = "falak"
 PREFIX = f"mcp__{SERVER}__"
+MAX_MESSAGE_BYTES = 32 * 1024 * 1024  # 10 MB of pictures is ~13.4 MB as base64, with room for the JSON around it
 
 
 def _sdk_tool(tool: Tool) -> SdkMcpTool:
@@ -50,6 +51,9 @@ class SdkBrain:
             # Claude Code otherwise keeps every turn, and every photo and screenshot a tool returned, under
             # ~/.claude/projects. Nothing Falak sees is stored unless Elijah asks.
             extra_args={"no-session-persistence": None},
+            # A tool result carrying a photo or screenshot is one JSON line; the SDK's default 1 MB cap
+            # rejected a full screenshot. The node already caps a call's pictures at 10 MB.
+            max_buffer_size=MAX_MESSAGE_BYTES,
             stderr=lambda line: log.debug("claude: %s", line.rstrip()),
         )
 

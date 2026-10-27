@@ -294,3 +294,39 @@ def test_bad_view_attachment_numbers_are_errors(echo):
     brain = ScriptedBrain([("falak__view_attachment", {"n": 2})])
     asyncio.run(Host(echo, brain, [FakeChannel()]).turn(Incoming("discord", "x", (Attachment("image", path, "image/png"),))))
     assert brain.replies[0].is_error
+
+
+def test_a_photo_goes_out_with_the_reply_only_when_the_model_sends_it(echo):
+    brain = ScriptedBrain([("echo__photo", {}), ("falak__send_image", {"n": 1})], text="Here you go, sir.")
+    _, ch = run_host(echo, brain, [Incoming("discord", "send me a photo", reply_to="dm-1")])
+    assert brain.replies[0].text == "Took it (image 1 of this turn)"
+    (picture,) = ch.images[0]
+    assert (picture.mime, picture.data) == ("image/jpeg", b"jpeg")
+    assert list((echo.settings.data_dir / "tmp").iterdir()) == []  # the photo is in memory, not on disk
+
+
+
+def test_a_photo_the_model_only_looked_at_isnt_sent(echo):
+    ch = FakeChannel()
+    asyncio.run(Host(echo, ScriptedBrain([("echo__photo", {})], text="A desk."), [ch]).turn(Incoming("discord", "look")))
+    assert ch.images == [()]
+
+
+def test_send_image_needs_an_image_from_this_turn(echo):
+    brain = ScriptedBrain([("falak__send_image", {"n": 1}), ("echo__photo", {}), ("falak__send_image", {"n": 2})])
+    run_host(echo, brain, [Incoming("discord", "send it")])
+    assert brain.replies[0].is_error and "No tool has returned an image" in brain.replies[0].text
+    assert brain.replies[2].is_error and "from 1 to 1" in brain.replies[2].text
+
+
+def test_job_turns_have_no_send_image_tool(echo):
+    names = []
+
+    class Peek(ScriptedBrain):
+        async def run(self, system, prompt, tools):
+            names.append([t.name for t in tools])
+            return await super().run(system, prompt, tools)
+
+    asyncio.run(loop.handle_job(echo, Peek(), "morning", Origin("job:checkins.morning")))
+    asyncio.run(Host(echo, Peek(), [FakeChannel()]).turn(Incoming("discord", "hi")))
+    assert "falak__send_image" not in names[0] and "falak__send_image" in names[1]

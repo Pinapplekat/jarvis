@@ -22,13 +22,15 @@ class TurnState:
     own_channels: frozenset[str] = frozenset({"cli"})  # channels only Elijah can write into; the host decides
     attachments: tuple[Attachment, ...] = ()  # files Elijah sent with this message
     tools_used: list[str] = field(default_factory=list)
+    images: list[Image] = field(default_factory=list)  # every image a tool returned this turn, in order (memory only)
+    shared: list[int] = field(default_factory=list)  # indexes into images that go out with the reply
 
 
 def latest_ask_id(reg: Registry) -> int:
     return reg.conn.execute("SELECT COALESCE(MAX(id), 0) FROM asks").fetchone()[0]
 
 
-def _reply(outcome: actions.Ran | actions.Asked | actions.Failed | actions.Declined) -> ToolReply:
+def _reply(outcome: actions.Ran | actions.Asked | actions.Failed | actions.Declined, turn: TurnState) -> ToolReply:
     if isinstance(outcome, actions.Ran):
         try:
             images = tuple(
@@ -38,7 +40,12 @@ def _reply(outcome: actions.Ran | actions.Asked | actions.Failed | actions.Decli
             )
         finally:
             actions.release(outcome)
-        return ToolReply(outcome.result.text, images)
+        if not images:
+            return ToolReply(outcome.result.text)
+        first = len(turn.images) + 1
+        turn.images.extend(images)
+        numbers = f"image {first}" if len(images) == 1 else f"images {first}-{len(turn.images)}"
+        return ToolReply(f"{outcome.result.text} ({numbers} of this turn)", images)
     if isinstance(outcome, actions.Asked):
         return ToolReply(f"Waiting on Elijah's answer (ask #{outcome.ask_id}): {outcome.question}")
     if isinstance(outcome, actions.Declined):
@@ -58,7 +65,7 @@ def _app_tool(reg: Registry, turn: TurnState, spec) -> Tool:
         turn.tools_used.append(spec.name)
         outcome = await asyncio.to_thread(actions.run, reg, spec.name, args, turn.origin)  # a device may take a while
         _noted(reg, turn, spec.name, outcome)
-        return _reply(outcome)
+        return _reply(outcome, turn)
 
     return Tool(spec.name, spec.description, spec.input_schema, call)
 
@@ -87,7 +94,7 @@ def _answer_ask_tool(reg: Registry, turn: TurnState) -> Tool:
         outcome = await asyncio.to_thread(actions.answer_ask, reg, ask_id, yes)
         if row:
             _noted(reg, turn, row["tool"], outcome)
-        return _reply(outcome)
+        return _reply(outcome, turn)
 
     schema = {
         "type": "object",
@@ -109,7 +116,7 @@ def _undo_tool(reg: Registry, turn: TurnState) -> Tool:
         log_id = args.get("log_id")
         if log_id is not None and (not isinstance(log_id, int) or isinstance(log_id, bool)):
             return ToolReply("log_id must be an integer.", is_error=True)
-        return _reply(await asyncio.to_thread(actions.undo, reg, log_id))
+        return _reply(await asyncio.to_thread(actions.undo, reg, log_id), turn)
 
     schema = {
         "type": "object",
@@ -144,9 +151,45 @@ def _view_attachment_tool(turn: TurnState) -> Tool:
     return Tool(f"{CORE}{SEP}view_attachment", desc, schema, call)
 
 
+MAX_SHARED = 4
+
+
+def _send_image_tool(turn: TurnState) -> Tool:
+    async def call(args: dict) -> ToolReply:
+        turn.tools_used.append(f"{CORE}{SEP}send_image")
+        n = args.get("n")
+        if not turn.images:
+            return ToolReply("No tool has returned an image in this turn yet. Take the photo or screenshot first.",
+                             is_error=True)
+        if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= len(turn.images):
+            return ToolReply(f"n must be a whole number from 1 to {len(turn.images)}.", is_error=True)
+        if n - 1 not in turn.shared:
+            if len(turn.shared) >= MAX_SHARED:
+                return ToolReply(f"At most {MAX_SHARED} images go with one reply.", is_error=True)
+            turn.shared.append(n - 1)
+        return ToolReply(f"Image {n} will be attached to your reply.")
+
+    schema = {
+        "type": "object",
+        "required": ["n"],
+        "additionalProperties": False,
+        "properties": {"n": {"type": "integer", "description": "Which image of this turn, counting from 1."}},
+    }
+    desc = ("Attach an image a tool returned in this turn (a photo, screenshot or live-view frame) to your reply, "
+            "so Elijah sees it. Use it when he asks to see or be sent the picture. Images are numbered in the "
+            "order the tools returned them.")
+    return Tool(f"{CORE}{SEP}send_image", desc, schema, call)
+
+
+def shared_images(turn: TurnState) -> tuple[Image, ...]:
+    return tuple(turn.images[i] for i in turn.shared)
+
+
 def build_tools(reg: Registry, turn: TurnState) -> list[Tool]:
     tools = [_app_tool(reg, turn, spec) for spec in reg.actions()]
     tools += [_answer_ask_tool(reg, turn), _undo_tool(reg, turn)]
+    if turn.origin.channel in turn.own_channels:  # a chat reply to Elijah; job turns deliver text only
+        tools.append(_send_image_tool(turn))
     if any(a.kind == "image" for a in turn.attachments):
         tools.append(_view_attachment_tool(turn))
     return tools

@@ -34,7 +34,7 @@ def test_look_takes_one_scaled_jpeg(make_ctx, mac):
     (att,) = result.attachments
     assert att.mime == "image/jpeg" and att.path.read_bytes() == b"jpeg"
     assert captured(mac)[0][:4] == [screen.SCREENCAPTURE, "-x", "-t", "jpg"]
-    assert [screen.SIPS, "-Z", "1600"] == mac["calls"][1][:3]
+    assert [screen.SIPS, "-Z", "1600", "-s", "formatOptions", "70"] == mac["calls"][1][:6]
 
 
 @pytest.mark.parametrize("app,title", [

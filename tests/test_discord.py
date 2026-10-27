@@ -190,3 +190,17 @@ def test_create_requires_token_and_owner_id(tmp_path):
         dc.create({"owner_id": 1}, {}, tmp_path, AsyncMock())
     with pytest.raises(ChannelUnavailable, match="owner_id"):
         dc.create({}, {"DISCORD_BOT_TOKEN": "t"}, tmp_path, AsyncMock())
+
+
+def test_send_attaches_pictures_to_the_last_piece(tmp_path):
+    from jarvis.core.channel import Picture
+
+    ch, _ = channel(tmp_path)
+    target = MagicMock(spec=discord.DMChannel)
+    target.send = AsyncMock()
+    pics = (Picture("image/jpeg", b"one"), Picture("image/png", b"two"))
+    asyncio.run(ch.send("a" * 1500 + "\n\n" + "b" * 1500, reply_to=target, images=pics))
+    first, last = target.send.await_args_list
+    assert "files" not in first.kwargs
+    assert [f.filename for f in last.kwargs["files"]] == ["falak-1.jpg", "falak-2.png"]
+    assert dc.image_files(pics) == [("falak-1.jpg", b"one"), ("falak-2.png", b"two")]

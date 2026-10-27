@@ -53,8 +53,11 @@ class TerminalChannel:
     async def stop(self) -> None:
         self._stopped = True
 
-    async def send(self, text: str, *, reply_to: object = None, ask_id: int | None = None) -> None:
+    async def send(self, text: str, *, reply_to: object = None, ask_id: int | None = None,
+                   images: tuple = ()) -> None:
         print(text)  # yes/no is typed in the terminal, so ask_id needs nothing extra
+        if images:
+            print(f"({len(images)} image{'s' if len(images) > 1 else ''} not shown in the terminal)")
         self._replied.set()
 
     @asynccontextmanager

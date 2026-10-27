@@ -6,6 +6,7 @@ from jarvis.contract.api import ActionError, AppContext, Attachment, Result, Ses
 SCREENCAPTURE = "/usr/sbin/screencapture"
 SIPS = "/usr/bin/sips"
 MAX_WIDTH = 1600
+JPEG_QUALITY = 70  # a busy 1600 px screen stays well under a megabyte
 TIMEOUT = 15
 SYSTEM_OWNERS = {"Window Server", "Dock", "Control Center", "SystemUIServer", "Notification Center",
                  "Spotlight", "loginwindow", "WindowManager"}
@@ -86,7 +87,8 @@ def _capture(ctx: AppContext) -> Result:
         r = subprocess.run([SCREENCAPTURE, "-x", "-t", "jpg", str(path)], capture_output=True, text=True, timeout=TIMEOUT)
         if r.returncode != 0 or path.stat().st_size == 0:
             raise ActionError(BLOCKED)
-        subprocess.run([SIPS, "-Z", str(MAX_WIDTH), str(path)], capture_output=True, timeout=TIMEOUT)
+        subprocess.run([SIPS, "-Z", str(MAX_WIDTH), "-s", "formatOptions", str(JPEG_QUALITY), str(path)],
+                       capture_output=True, timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
         path.unlink(missing_ok=True)
         raise ActionError("The screen capture didn't finish in time.") from None
