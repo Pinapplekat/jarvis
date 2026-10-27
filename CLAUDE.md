@@ -19,7 +19,10 @@ Falak is a personal assistant: a host with an agent loop, tool apps, channels an
   `~/Library/LaunchAgents/com.jarvis.*`.
 - Never work in the iCloud repo folder (the old JARVIS self-edits `main` there) and never commit to `main`.
   Work in this worktree on `rehaul`.
-- Falak's own data lives in `~/Library/Application Support/Falak-dev/` (`FALAK_DATA_DIR`).
+- Falak's own data lives in `~/Library/Application Support/Falak-dev/` (`FALAK_DATA_DIR`). That folder is
+  Elijah's test system: never write to it. Run every `jarvis` command with `FALAK_DATA_DIR` set to a scratch
+  folder, read Falak-dev only with `sqlite3 -readonly`, and report any run that touched it (see "Data" in
+  `ARCHITECTURE.md`).
 - No new dependencies without a reason in the brief or the commit.
 
 Don't import from `legacy/`; read it to port behavior on purpose.

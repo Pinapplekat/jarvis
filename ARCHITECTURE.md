@@ -86,6 +86,11 @@ docs/briefs/  # one brief per milestone
 - Its database starts as a **copy** of the live JARVIS database, made by `jarvis dev import-db`.
 - Schema changes are numbered migration files in `jarvis/core/migrations/`, never edits to a live database
   by hand.
+- `Falak-dev` is Elijah's: he runs `jarvis serve` on it and tests against it. Builders never write to it. Any
+  `jarvis` command opens the database, migrates it and can queue messages, so run them with `FALAK_DATA_DIR` set to
+  a scratch folder (copy the data in first with `sqlite3 <Falak-dev>/falak.db ".backup '<scratch>/falak.db'"` if
+  you need real data). Look at Falak-dev only read-only (`sqlite3 -readonly`). If a run against Falak-dev
+  happens anyway, say so in the report back with what it changed; never clean up after it by hand.
 
 ## Devices
 
