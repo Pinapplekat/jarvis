@@ -69,6 +69,16 @@ def test_the_material_is_yesterdays_day_only(real_apps):
     assert "- stretch" in prompt
 
 
+def test_deadlines_copied_from_the_old_table_with_a_local_offset_land_on_their_own_day(real_apps):
+    # The old deadlines table kept local offsets; compared as text, Monday 00:30 -07:00 sorts before Monday 07:00 UTC.
+    real_apps.conn.execute(
+        "INSERT INTO school_deadlines (key, course, title, due, status, trackable, kind, hand_done, source, updated_at) "
+        "VALUES ('old:1','HIST 120','Sunday Night Reading','2026-10-25T23:00:00-07:00','unknown',0,'due',1,'manual','x'),"
+        "('old:2','HIST 120','Monday Morning Quiz','2026-10-26T00:30:00-07:00','unknown',0,'due',1,'manual','x')")
+    prompt = write(real_apps).think.prompt
+    assert "Sunday Night Reading" in prompt and "Monday Morning Quiz" not in prompt
+
+
 def test_an_empty_day_still_gets_a_prompt(real_apps):
     prompt = write(real_apps).think.prompt
     assert prompt.count("(none)") >= 3

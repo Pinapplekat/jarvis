@@ -35,7 +35,8 @@ def build(ctx: AppContext, start: datetime, end: datetime) -> str:
     acted = [f"{hm(at)} {tool} {status}: {result[:200]}" for at, tool, status, result in ctx.actions_between(start, end)]
     low, high = _utc(start), _utc(end)
     due = _rows(ctx, "SELECT course, title, due, hand_done, status FROM school_deadlines WHERE kind='due' AND "
-                     "due >= ? AND due < ? ORDER BY due", (low, high))
+                     "julianday(due) >= julianday(?) AND julianday(due) < julianday(?) ORDER BY julianday(due)",
+                 (low, high))  # rows copied from the old table keep local offsets, so compare as times, not text
     reminders = _rows(ctx, "SELECT text, sent_at FROM reminders_items WHERE status='sent' AND sent_at >= ? AND "
                            "sent_at < ? ORDER BY sent_at", (low, high))
     return "\n\n".join([
