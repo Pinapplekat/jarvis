@@ -114,9 +114,9 @@ def test_nothing_imports_legacy():
     assert hits("jarvis", ["legacy"]) == []
 
 
-def test_only_the_sdk_brain_imports_the_sdk():
+def test_only_the_sdk_brain_and_the_terminal_tasks_import_the_sdk():
     importers = [n for p, n in modules() if any(within(i, "claude_agent_sdk") for i in imports(p, n))]
-    assert importers == ["jarvis.core.brain_sdk"]
+    assert sorted(importers) == ["jarvis.apps.terminal.agent", "jarvis.core.brain_sdk"]  # tasks: the files are on the node
 
 
 def test_modules_under_400_lines():

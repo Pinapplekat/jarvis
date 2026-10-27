@@ -1,0 +1,211 @@
+[app]
+name = "terminal"
+description = "Run commands on Elijah's Mac graded by risk (safe ones in a sandbox, without asking), background jobs, Claude Code tasks in a project folder, and a look at his git repos."
+runs_on = "node:terminal"
+start = "start"
+stop = "stop"
+
+[settings.work_roots]
+type = "string"
+default = "~/Developer, ~/local_dev, ~/Projects, ~/Documents/code, ~/Desktop"
+description = "Comma-separated folders where projects live. A command's project is the git repo containing its folder if that repo is under one of these. Outside them nothing is writable without asking."
+
+[settings.read_only]
+type = "string"
+default = "~/Developer/falak, ~/Developer/falak-*, ~/Library/Mobile Documents/com~apple~CloudDocs/Code/JARVIS, ~/Library/Application Support/JARVIS, ~/Library/Application Support/Falak-dev, ~/Library/Application Support/Falak-node"
+description = "Comma-separated folders (a * matches, for worktrees) that are never written without asking: Falak's own code and data. Tasks run read-only inside them."
+
+[settings.model]
+type = "string"
+default = "sonnet"
+description = "The model tasks run on."
+
+[settings.max_turns]
+type = "integer"
+default = 60
+minimum = 1
+description = "Model turns in one run of a task."
+
+[settings.max_minutes]
+type = "integer"
+default = 60
+minimum = 1
+description = "Minutes of working time a task may use in all."
+
+[settings.max_runs]
+type = "integer"
+default = 6
+minimum = 1
+description = "Runs of one task (each restart or unfinished run starts another)."
+
+[settings.job_stall_minutes]
+type = "integer"
+default = 20
+minimum = 1
+description = "A background job that prints nothing for this long is reported once."
+
+[[actions]]
+name = "run"
+description = "Run one plain command on Elijah's Mac (no pipes, redirects, && or $()). It is graded by risk: reading and ordinary project work (git status/log/diff/add/commit, tests, ls, grep, open) just run in a sandbox, with no question. Deleting a file inside a project moves it to the Trash (undoable). Anything riskier (git push, installs elsewhere, sudo, anything that reaches other people) isn't run: the result says so, and you then use run_with_ok. Give cwd as a folder path or a project folder name (like m8-sandbox). With background = true it starts as a job and Elijah is told when it ends."
+effect = "local"
+undo = "undo_run"
+untrusted_output = true
+timeout_s = 130
+[actions.input]
+type = "object"
+required = ["command"]
+additionalProperties = false
+[actions.input.properties.command]
+type = "string"
+minLength = 1
+maxLength = 1000
+[actions.input.properties.cwd]
+type = "string"
+default = ""
+description = "The folder to run in. Empty means his home folder."
+[actions.input.properties.background]
+type = "boolean"
+default = false
+
+[[actions]]
+name = "run_with_ok"
+description = "Run a command that run said needs Elijah's OK. He is asked first, with the exact command and your reason. It then runs as him: no sandbox, still no shell, secrets still refused, 120 seconds unless background."
+effect = "irreversible"
+confirm = "Run `{command}` in {cwd}? It's to {why}."
+untrusted_output = true
+timeout_s = 130
+[actions.input]
+type = "object"
+required = ["command", "cwd", "why"]
+additionalProperties = false
+[actions.input.properties.command]
+type = "string"
+minLength = 1
+maxLength = 1000
+[actions.input.properties.cwd]
+type = "string"
+minLength = 1
+[actions.input.properties.why]
+type = "string"
+minLength = 1
+maxLength = 300
+description = "A short reason in Elijah's terms: 'push the README fix'."
+[actions.input.properties.background]
+type = "boolean"
+default = false
+
+[[actions]]
+name = "jobs"
+description = "The running and recent background jobs, one line each."
+effect = "read"
+timeout_s = 10
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[actions]]
+name = "job_log"
+description = "The last lines of a background job's output."
+effect = "read"
+untrusted_output = true
+timeout_s = 10
+[actions.input]
+type = "object"
+required = ["id"]
+additionalProperties = false
+[actions.input.properties.id]
+type = "integer"
+minimum = 1
+[actions.input.properties.lines]
+type = "integer"
+default = 40
+minimum = 1
+maximum = 300
+
+[[actions]]
+name = "stop_job"
+description = "Stop a running background job. Elijah is told when it has stopped."
+effect = "local"
+timeout_s = 10
+[actions.input]
+type = "object"
+required = ["id"]
+additionalProperties = false
+[actions.input.properties.id]
+type = "integer"
+minimum = 1
+
+[[actions]]
+name = "start_task"
+description = "Start a Claude Code task in a project folder: it reads, edits, runs tests and commits on its own and Elijah gets one message when it ends. Use it for multi-step work (add a feature, fix a bug, write tests), not for one command. Write the plan in Elijah's words: what will change and how it will be checked. He is asked once with the plan. Tasks can't push, install elsewhere or delete; those come back as commands for him to approve."
+effect = "plan"
+confirm = "Start a task in {folder}: {plan}. Go?"
+timeout_s = 10
+[actions.input]
+type = "object"
+required = ["goal", "folder", "plan"]
+additionalProperties = false
+[actions.input.properties.goal]
+type = "string"
+minLength = 1
+maxLength = 1000
+[actions.input.properties.folder]
+type = "string"
+minLength = 1
+description = "The project folder: a path or a project folder name (like m8-sandbox)."
+[actions.input.properties.plan]
+type = "string"
+minLength = 1
+maxLength = 2000
+
+[[actions]]
+name = "task_status"
+description = "How a task is going: its state, runs, minutes and the last 10 steps. id 0 means the newest."
+effect = "read"
+untrusted_output = true
+timeout_s = 10
+[actions.input]
+type = "object"
+additionalProperties = false
+[actions.input.properties.id]
+type = "integer"
+default = 0
+minimum = 0
+
+[[actions]]
+name = "stop_task"
+description = "Stop a task. id 0 means the newest one that is queued or running."
+effect = "local"
+timeout_s = 10
+[actions.input]
+type = "object"
+additionalProperties = false
+[actions.input.properties.id]
+type = "integer"
+default = 0
+minimum = 0
+
+[[actions]]
+name = "find_repos"
+description = "Find the git repos under Elijah's work folders. Only other apps call this."
+effect = "read"
+share = true
+tool = false
+timeout_s = 30
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[actions]]
+name = "repo_state"
+description = "A git repo's branch, last commit, uncommitted file count and how far ahead or behind its upstream it is."
+effect = "read"
+share = true
+timeout_s = 20
+[actions.input]
+type = "object"
+required = ["path"]
+additionalProperties = false
+[actions.input.properties.path]
+type = "string"
+minLength = 1

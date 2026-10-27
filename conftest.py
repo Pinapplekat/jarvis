@@ -51,7 +51,10 @@ def make_ctx(tmp_path):
         settings = {k: v["default"] for k, v in manifest.settings.items()} | overrides
         tmp = tmp_path / "node-tmp"
         tmp.mkdir(mode=0o700, exist_ok=True)
-        return AppContext(app, settings, {}, None, tmp)
+        ctx = AppContext(app, settings, {}, None, tmp, data_dir=tmp_path / "node-data" / app)
+        ctx.notify_hook = lambda name, text: ctx.said.append(text)
+        ctx.said = []  # what the app told Elijah on its own
+        return ctx
 
     return make
 
