@@ -117,6 +117,8 @@ def build_parser(name: str) -> argparse.ArgumentParser:
     )
     sub.add_parser("log", help="recent actions").add_argument("-n", type=int, default=20)
     sub.add_parser("chat", help="talk to it in the terminal")
+    serve = sub.add_parser("serve", help="run Falak and its channels (Discord) until Ctrl-C")
+    serve.add_argument("--with-fixtures", action="store_true", help="also load the test fixture apps (dev only)")
     sub.add_parser("ask", help="send one message and print the reply").add_argument("message")
     sub.add_parser("turns", help="recent turns: timing and tools used").add_argument("-n", type=int, default=20)
     return parser
@@ -135,11 +137,13 @@ def main(argv: list[str] | None = None) -> int:
         return _info(settings)
     if args.group == "dev" and args.command == "import-db":
         return _import_db(settings, args.source, args.overwrite)
-    if args.group in ("apps", "run", "asks", "yes", "no", "undo", "log", "chat", "ask", "turns"):
+    if args.group in ("apps", "run", "asks", "yes", "no", "undo", "log", "chat", "ask", "turns", "serve"):
         try:
-            if args.group in ("chat", "ask", "turns"):
+            if args.group in ("chat", "ask", "turns", "serve"):
                 from jarvis import chat_cli  # loads the SDK, which the other commands don't need
 
+                if args.group == "serve":
+                    return chat_cli.serve(settings, args.with_fixtures)
                 if args.group == "chat":
                     return chat_cli.chat(settings)
                 if args.group == "ask":

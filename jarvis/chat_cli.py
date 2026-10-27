@@ -1,19 +1,23 @@
-"""The conversation commands: chat, ask, turns. Kept apart from cli.py so that one stays thin."""
+"""The conversation commands: chat, ask, turns, serve. Kept apart from cli.py so that one stays thin."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import sys
+from pathlib import Path
 
+from jarvis.channels.terminal import TerminalChannel
 from jarvis.core import loop
-from jarvis.core.actions import Origin
 from jarvis.core.apps import load_apps
 from jarvis.core.brain import Brain
 from jarvis.core.brain_sdk import SdkBrain
+from jarvis.core.channel import Incoming
 from jarvis.core.settings import Settings
+from jarvis.host import Host, build_channels
 
-CLI = Origin(channel="cli")
+
+FIXTURE_APPS = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "apps"
 
 
 def _brain(settings: Settings) -> Brain:
@@ -24,39 +28,26 @@ def _dim(text: str) -> str:
     return f"\033[2m{text}\033[0m" if sys.stdout.isatty() else text
 
 
-def _say(reply: loop.Reply, show_tools: bool) -> None:
-    print(reply.text)
-    if show_tools and reply.tools:
+def _show_tools(incoming: Incoming, reply: loop.Reply) -> None:
+    if reply.tools:
         print(_dim("  used: " + ", ".join(reply.tools)))
 
 
 def ask(settings: Settings, message: str, brain: Brain | None = None) -> int:
-    reg = load_apps(settings)
+    host = Host(load_apps(settings), brain or _brain(settings), [TerminalChannel()])
     try:
-        reply = asyncio.run(loop.handle_message(reg, brain or _brain(settings), message, CLI))
+        reply = asyncio.run(host.turn(Incoming("cli", message)))
     finally:
-        reg.close()
-    _say(reply, show_tools=True)
+        host.close()
+    _show_tools(Incoming("cli", message), reply)
     return 1 if reply.error else 0
 
 
 def chat(settings: Settings, brain: Brain | None = None) -> int:
-    reg = load_apps(settings)
-    brain = brain or _brain(settings)
+    host = Host(load_apps(settings), brain or _brain(settings), [TerminalChannel()], on_reply=_show_tools)
     print(_dim(f"{settings.assistant_name} is listening. Ctrl-D or 'bye' to leave."))
-    try:
-        while True:
-            try:
-                message = input("> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                return 0
-            if message.lower() in ("bye", "exit", "quit"):
-                return 0
-            if message:
-                _say(asyncio.run(loop.handle_message(reg, brain, message, CLI)), show_tools=True)
-    finally:
-        reg.close()
+    asyncio.run(host.run(handle_signals=True))
+    return 0
 
 
 def turns(settings: Settings, n: int) -> int:
@@ -71,4 +62,22 @@ def turns(settings: Settings, n: int) -> int:
         err = f"  ERROR: {r['error']}" if r["error"] else ""
         print(f"#{r['id']} {r['at']} {r['channel']} {r['ms'] / 1000:.1f}s {r['model']} "
               f"({r['num_turns']} steps{cost}) {used}{err}")
+    return 0
+
+
+def serve(settings: Settings, with_fixtures: bool = False, brain: Brain | None = None) -> int:
+    """Run Falak as a long-lived process hosting every enabled channel (Discord) until Ctrl-C."""
+    extra = (FIXTURE_APPS,) if with_fixtures else ()
+    if with_fixtures and not FIXTURE_APPS.is_dir():
+        print(f"--with-fixtures needs {FIXTURE_APPS}, which is only in a source checkout", file=sys.stderr)
+        return 2
+    host = Host(load_apps(settings, extra_dirs=extra), brain or _brain(settings))
+    for channel in build_channels(settings, host):
+        host.add_channel(channel)
+    if not host.channels:
+        host.close()
+        print("No channel is enabled, so there is nothing to serve. See docs/briefs/M4.md for the Discord setup.",
+              file=sys.stderr)
+        return 1
+    asyncio.run(host.run(handle_signals=True))
     return 0
