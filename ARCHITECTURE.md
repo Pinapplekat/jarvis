@@ -107,6 +107,12 @@ docs/briefs/  # one brief per milestone
 - Pictures a tool returns reach the model and are then deleted. One goes to Elijah only when the model calls
   `falak__send_image` in a chat turn; it is held in memory and attached to the reply, never written to disk. The
   brain runs Claude Code with `--no-session-persistence`, so it keeps no copies either.
+- Tasks are the one place the node runs Claude: the terminal app starts `claude_agent_sdk.query` on the node, because
+  the project files are on the node and the host never sees them. It is the only app that imports the SDK. Every
+  tool call of a task is graded in-process by a PreToolUse hook, and the whole `claude` process is sandboxed.
+- A node app may declare `start` and `stop` handlers in `[app]`. The node runtime calls `start(ctx)` once, the first
+  time the app is enabled, and `stop(ctx)` when the node shuts down; that is where an app starts a background thread
+  (the terminal app's job watcher and task worker). `ctx.data_dir` is the app's own folder under `FALAK_NODE_DIR`.
 - A manifest `[[sessions]]` entry (a live view) gives the model `_start`, `_look` and `_stop` tools. The host owns
   the `sessions` table; the node owns the running capture and closes it when the host link drops.
 
@@ -131,6 +137,12 @@ docs/briefs/  # one brief per milestone
   `answer_ask` refuses there. Thinking turns wait behind chat and count against `thinking_runs_per_day`.
   `Think.on_done` names a handler the scheduler calls after a turn that didn't fail or get skipped, so a job
   can record "done for today" only once its message really went out.
+- `ctx.notify(text)` is how an app says something first (a job finished, a task is done). On the host it is
+  `Host.notify(text, source="app:<name>")`. On a node the runtime first writes the message to
+  `FALAK_NODE_DIR/outbox/<uuid>.json`, then sends an `Event`; the host puts it in its outbox (deduped on the event id,
+  `outbox.dedupe_key`) and answers `EventAck`, and only then does the node delete the file. After every reconnect the
+  node resends what is unacked, oldest first, so a dropped link or a restart loses nothing. Only for things Falak
+  says first, never for the result of an action.
 - Everything Falak says first is a row in the `outbox` table (`Host.notify`). One sender task delivers it through
   `notify_channel`, keeps failures and retries, and adds each sent message to the conversation. Nothing is dropped.
 - The scheduler's state lives in the `jobs` and `job_runs` tables, so a restart neither repeats nor forgets a run.
