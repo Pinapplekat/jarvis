@@ -6,7 +6,7 @@ context = "context"
 
 [[actions]]
 name = "remind_me"
-description = "Remind Elijah of something at a time. `at` is the local time as ISO 8601 with its UTC offset, e.g. 2026-10-26T15:00:00-07:00 (the offset is in the current time line of the context). It is sent as a message then."
+description = "Remind Elijah of something at a time. `at` is the local time as ISO 8601 with its UTC offset, e.g. 2026-10-26T15:00:00-07:00 (the offset is in the current time line of the context). It is sent as a message then. Use it for alarms too ('wake me at 7'); for 'in 10 minutes' use set_timer."
 effect = "local"
 undo = "undo_remind_me"
 [actions.input]
@@ -20,6 +20,24 @@ description = "What to remind him of, e.g. 'call the bank'."
 [actions.input.properties.at]
 type = "string"
 description = "When, ISO 8601 with offset."
+
+[[actions]]
+name = "set_timer"
+description = "Start a timer: 'set a timer for 10 minutes'. Elijah gets a message when it's done."
+effect = "local"
+undo = "undo_remind_me"
+[actions.input]
+type = "object"
+required = ["minutes"]
+additionalProperties = false
+[actions.input.properties.minutes]
+type = "integer"
+minimum = 1
+maximum = 1440
+[actions.input.properties.label]
+type = "string"
+default = ""
+description = "What it's for, e.g. 'tea'. Optional."
 
 [[actions]]
 name = "list_reminders"

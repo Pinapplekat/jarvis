@@ -140,3 +140,24 @@ def test_the_migration_copies_old_reminders_and_does_not_fire_old_ones(settings)
         assert reg.conn.execute("SELECT COUNT(*) FROM reminders").fetchone()[0] == 4  # the old table is left alone
     finally:
         reg.close()
+
+
+def test_a_timer_is_a_reminder_that_arrives_on_time_and_can_be_undone(real_apps):
+    woke = []
+    real_apps.apps["reminders"].ctx.wake_hook = lambda app, job: woke.append(job)
+    start = datetime.now(timezone.utc)
+    out = do(real_apps, "set_timer", minutes=10, label="tea")
+    assert isinstance(out, actions.Ran) and out.result.text.startswith("Timer set for 10 min, until ")
+    assert woke == ["deliver"]
+    (due,) = [datetime.fromisoformat(r[0]) for r in real_apps.conn.execute("SELECT due_at FROM reminders_items")]
+    assert timedelta(minutes=9, seconds=58) <= due - start <= timedelta(minutes=10, seconds=2)
+    assert deliver(real_apps, start + timedelta(minutes=9)).messages == ()
+    assert deliver(real_apps, start + timedelta(minutes=10, seconds=3)).messages == ("⏰ Timer done: tea (10 min)",)
+    do(real_apps, "set_timer", minutes=5)
+    assert isinstance(actions.undo(real_apps), actions.Ran)
+    assert statuses(real_apps) == [(1, "sent")]
+
+
+def test_timer_limits(real_apps):
+    assert isinstance(do(real_apps, "set_timer", minutes=0), actions.Failed)
+    assert isinstance(do(real_apps, "set_timer", minutes=1441), actions.Failed)

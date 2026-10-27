@@ -48,6 +48,14 @@ def undo_remind_me(ctx: AppContext, undo: dict) -> Result:
     return Result(f"Removed reminder #{undo['id']} again.")
 
 
+def set_timer(ctx: AppContext, minutes: int, label: str = "") -> Result:
+    """A timer is a reminder at now + minutes, so it gets the same exact delivery and survives a restart."""
+    due = (ctx.now() + timedelta(minutes=minutes)).replace(microsecond=0)
+    text = f"Timer done: {label.strip()} ({minutes} min)" if label.strip() else f"Timer done ({minutes} min)"
+    out = remind_me(ctx, text, due.isoformat())
+    return Result(f"Timer set for {minutes} min, until {due:%-I:%M %p}.", undo=out.undo, subject=out.subject)
+
+
 def list_reminders(ctx: AppContext, days: int = 7) -> Result:
     now = ctx.now()
     rows = ctx.db.execute(
