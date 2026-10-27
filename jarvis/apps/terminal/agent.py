@@ -22,7 +22,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import claude_agent_sdk
-from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, HookMatcher, ResultMessage, TextBlock, ToolUseBlock
+from claude_agent_sdk import (
+    AssistantMessage, ClaudeAgentOptions, HookMatcher, ResultMessage, TextBlock, ToolResultBlock, ToolUseBlock,
+    UserMessage,
+)
 from claude_agent_sdk import query as sdk_query
 
 from jarvis.apps.terminal import sandbox
@@ -103,7 +106,7 @@ def decide(tool: str, tool_input: dict, folder: Path, folders: Folders, edits: b
     return "deny", f"{tool} isn't available here", None
 
 
-def hook(folder: Path, folders: Folders, edits: bool, scratch: Path, needs_yes: list[str]):
+def hook(folder: Path, folders: Folders, edits: bool, scratch: Path, needs_yes: list[str], denied: set[str]):
     """The PreToolUse callback. Any error in the decision denies."""
 
     async def pre_tool_use(data, tool_use_id, context) -> dict:
@@ -114,6 +117,8 @@ def hook(folder: Path, folders: Folders, edits: bool, scratch: Path, needs_yes: 
             decision, reason, wanted = "deny", f"Falak's safety check failed ({str(e)[:100]}); not running it", None
         if wanted and wanted not in needs_yes:
             needs_yes.append(wanted)
+        if decision == "deny" and tool_use_id:
+            denied.add(tool_use_id)
         return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": decision,
                                        "permissionDecisionReason": reason}}
 
@@ -190,6 +195,7 @@ class Outcome:
     stopped: bool = False  # stopped from outside (Elijah said stop)
     hung: bool = False  # no output for too long; killed
     needs_yes: list[str] = field(default_factory=list)  # refused by the hook, or listed by the session
+    denied: set[str] = field(default_factory=set)  # tool_use ids the hook refused
 
     @property
     def status(self) -> str:
@@ -215,8 +221,9 @@ def _is_needs_yes(line: str) -> bool:
     return line.strip().upper().startswith("NEEDS YES:") or line.strip()[:2] in ("- ", "* ")
 
 
-async def _session(prompt: str, options: ClaudeAgentOptions, out: Outcome, on_tool: Callable[[str], None],
-                   on_tell: Callable[[str], None], should_stop: Callable[[], bool], hang_seconds: float) -> None:
+async def _session(prompt: str, options: ClaudeAgentOptions, out: Outcome, on_tool: Callable[[str, str], None],
+                   on_tell: Callable[[str], None], on_result: Callable[[str, bool], None], should_stop: Callable[[], bool],
+                   hang_seconds: float) -> None:
     stream = query(prompt=prompt, options=options).__aiter__()
     last = time.monotonic()
     pending = asyncio.ensure_future(stream.__anext__())
@@ -240,10 +247,14 @@ async def _session(prompt: str, options: ClaudeAgentOptions, out: Outcome, on_to
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, ToolUseBlock):
-                        on_tool(describe_tool(block.name, block.input or {}))
+                        on_tool(describe_tool(block.name, block.input or {}), block.id)
                     elif isinstance(block, TextBlock):
                         for said in tell_lines(block.text):
                             on_tell(said)
+            elif isinstance(message, UserMessage) and isinstance(message.content, list):
+                for block in message.content:
+                    if isinstance(block, ToolResultBlock):
+                        on_result(block.tool_use_id, not block.is_error and block.tool_use_id not in out.denied)
             elif isinstance(message, ResultMessage):
                 out.session_id = message.session_id or out.session_id
                 out.text = message.result or ""
@@ -257,11 +268,12 @@ async def _session(prompt: str, options: ClaudeAgentOptions, out: Outcome, on_to
 
 
 def run_session(prompt: str, folder: Path, state: Path, folders: Folders, model: str, max_turns: int,
-                resume: str | None = None, edits: bool = True, on_tool: Callable[[str], None] = lambda s: None,
-                on_tell: Callable[[str], None] = lambda s: None, should_stop: Callable[[], bool] = lambda: False,
+                resume: str | None = None, edits: bool = True, on_tool: Callable[[str, str], None] = lambda s, i: None,
+                on_tell: Callable[[str], None] = lambda s: None,
+                on_result: Callable[[str, bool], None] = lambda i, ok: None, should_stop: Callable[[], bool] = lambda: False,
                 hang_seconds: float = 300, claude: str | None = None) -> Outcome:
     """Run (or resume) one session to the end of its turn, reporting each tool call and TELL ELIJAH line as they
-    stream. Stops it if `should_stop()` turns true or it says nothing for `hang_seconds`."""
+    stream, and whether each tool call worked (`on_result(id, ok)`; a call the hook refused is not ok). Stops it if `should_stop()` turns true or it says nothing for `hang_seconds`."""
     folder, state = Path(folder).resolve(), Path(state)
     scratch = state / "scratch"
     scratch.mkdir(parents=True, exist_ok=True)
@@ -272,11 +284,11 @@ def run_session(prompt: str, folder: Path, state: Path, folders: Folders, model:
         system_prompt={"type": "preset", "preset": "claude_code",
                        "append": AGENT_RULES.format(folder=folder, scratch=scratch, tells=MAX_TELL)},
         hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[hook(folder, folders.for_task(folder), edits, scratch,
-                                                                    out.needs_yes)], timeout=30)]},
+                                                                    out.needs_yes, out.denied)], timeout=30)]},
         env={k: os.environ[k] for k in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX")
              if os.environ.get(k)},
         stderr=lambda line: log.debug("claude: %s", line.rstrip()),
     )
-    asyncio.run(_session(prompt, options, out, on_tool, on_tell, should_stop, hang_seconds))
+    asyncio.run(_session(prompt, options, out, on_tool, on_tell, on_result, should_stop, hang_seconds))
     out.needs_yes += [c for c in needs_yes_lines(out.text) if c not in out.needs_yes]
     return out

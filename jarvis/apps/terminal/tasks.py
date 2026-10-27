@@ -213,11 +213,16 @@ class TaskRunner:
             prompt = t["resume_note"] or (first_prompt(t, folder) if not t["session_id"] else "Carry on with the goal.")
             steps = list(t["steps"])
 
-            def on_tool(update: str, steps: list = steps) -> None:
-                if steps and steps[-1].get("ok") is None:
-                    steps[-1]["ok"] = True  # it moved on, so the last one ran
-                steps.append({"n": len(steps) + 1, "update": update[:140], "ok": None})
+            def on_tool(update: str, tool_id: str = "", steps: list = steps) -> None:
+                steps.append({"n": len(steps) + 1, "update": update[:140], "ok": None, "id": tool_id})
                 self.tasks.update(task_id, steps=steps)
+
+            def on_result(tool_id: str, ok: bool, steps: list = steps) -> None:
+                for step in reversed(steps):
+                    if step.get("id") == tool_id:
+                        step["ok"] = ok
+                        self.tasks.update(task_id, steps=steps)
+                        return
 
             def on_tell(text: str) -> None:
                 told = self.tasks.get(task_id)["told"]
@@ -230,10 +235,12 @@ class TaskRunner:
             out = self.runner(
                 prompt, folder, self.tasks.state_dir(task_id), folders, s["model"], s["max_turns"],
                 resume=t["session_id"], edits=not folders.is_read_only(folder), on_tool=on_tool, on_tell=on_tell,
+                on_result=on_result,
                 should_stop=lambda: self._stop.is_set() or (self.tasks.get(task_id) or {}).get("status") != "running",
                 hang_seconds=self.hang_seconds)
-            if steps and steps[-1].get("ok") is None:
-                steps[-1]["ok"] = not out.is_error
+            for step in steps:  # a refused call is never shown as done, even if its result never streamed back
+                if step.get("id") in out.denied:
+                    step["ok"] = False
             now_t = self.tasks.get(task_id)
             yes = list(now_t["needs_yes"]) + [c for c in out.needs_yes if c not in now_t["needs_yes"]]
             self.tasks.update(task_id, steps=steps, session_id=out.session_id or t["session_id"], runs=t["runs"] + 1,

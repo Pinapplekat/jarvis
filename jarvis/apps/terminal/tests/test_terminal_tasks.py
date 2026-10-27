@@ -3,7 +3,7 @@ import threading
 from pathlib import Path
 
 import pytest
-from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolUseBlock
+from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage
 
 from jarvis.apps.terminal import actions as terminal
 from jarvis.apps.terminal import agent
@@ -18,8 +18,12 @@ def result(text, session="s1", error=False):
     return ResultMessage("success", 1, 1, error, 1, session, result=text)
 
 
-def uses(name, **tool_input):
-    return AssistantMessage([ToolUseBlock("t1", name, tool_input)], "m")
+def uses(name, tool_id="t1", **tool_input):
+    return AssistantMessage([ToolUseBlock(tool_id, name, tool_input)], "m")
+
+
+def ran(tool_id, error=False):
+    return UserMessage([ToolResultBlock(tool_id, "output", error)])
 
 
 def said(text):
@@ -39,10 +43,11 @@ class FakeClaude:
 
         async def play():
             for step in script:
-                if isinstance(step, tuple):  # ("hook", tool, input): Claude Code asks the hook first
-                    _, tool, tool_input = step
+                if isinstance(step, tuple):  # ("hook", tool, input[, id]): Claude Code asks the hook first
+                    _, tool, tool_input, *tool_id = step
                     check = options.hooks["PreToolUse"][0].hooks[0]
-                    out = await check({"tool_name": tool, "tool_input": tool_input, "cwd": str(options.cwd)}, "x", {})
+                    out = await check({"tool_name": tool, "tool_input": tool_input, "cwd": str(options.cwd)},
+                                      tool_id[0] if tool_id else "x", {})
                     self.decisions.append(out["hookSpecificOutput"]["permissionDecision"])
                 else:
                     yield step
@@ -135,9 +140,10 @@ def test_what_the_session_lists_itself_counts_too(runner_for, project, fake):
 
 
 def test_the_hook_denies_with_the_reason_and_fails_closed(project, folders):
-    needs = []
-    check = agent.hook(project, folders.for_task(project), True, project / ".scratch", needs)
+    needs, denied = [], set()
+    check = agent.hook(project, folders.for_task(project), True, project / ".scratch", needs, denied)
     out = asyncio.run(check({"tool_name": "Bash", "tool_input": {"command": "sudo ls"}, "cwd": str(project)}, "x", {}))
+    assert denied == {"x"}
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "needs Elijah's yes" in out["hookSpecificOutput"]["permissionDecisionReason"] and needs == ["sudo ls"]
     broken = asyncio.run(check({"nope": 1}, "x", {}))  # not a tool call at all: an error in the decision denies
@@ -257,13 +263,20 @@ def test_stopping_a_running_task_ends_the_session_and_sends_nothing(runner_for, 
 
 
 def test_task_status_reads_from_the_steps(runner_for, project, fake):
-    fake([uses("Read", file_path=str(project / "README.md")), uses("Bash", command="pytest -q"),
+    fake([uses("Read", "t1", file_path=str(project / "README.md")), ran("t1"),
+          ("hook", "Bash", {"command": "git push"}, "t2"), uses("Bash", "t2", command="git push"), ran("t2", error=True),
+          uses("Bash", "t3", command="pytest -q"), ran("t3", error=True),
+          uses("Bash", "t4", command="pytest -q"), ran("t4"),
+          ("hook", "Bash", {"command": "sudo ls"}, "t5"), uses("Bash", "t5", command="sudo ls"),  # no result came back
           result("STATUS: done\nPassing.")])
     runner, tasks, _ = runner_for()
     task_id = queue(tasks, project)
     runner.run_next()
     text = progress_text(tasks.get(task_id))
-    assert "Reading README.md" in text and "✓ Running pytest -q" in text and "(done" in text and text.endswith("Passing.")
+    assert "✓ Reading README.md" in text and "✗ Running git push" in text and "(done" in text
+    assert text.count("✗ Running pytest -q") == 1 and "✓ Running pytest -q" in text  # failed, then passed
+    assert "✗ Running sudo ls" in text  # refused, though its result never streamed back
+    assert text.endswith("Passing.\nNeeds Elijah's yes:\n$ git push\n$ sudo ls")
 
 
 def test_folders_for_tasks_are_checked(folders, work, project, tmp_path):
