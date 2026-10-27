@@ -45,7 +45,7 @@ def parse(command: object) -> list[str]:
         argv = [str(a) for a in command]
     else:
         text = str(command).strip()
-        if any(c in text for c in SHELL_CHARS):
+        if _shell_syntax(text):
             raise ValueError("shell syntax (pipes, redirects, $, ;, &&) isn't supported; one plain command only")
         try:
             argv = shlex.split(text)
@@ -56,6 +56,30 @@ def parse(command: object) -> list[str]:
     if any("\0" in a or "\n" in a for a in argv):
         raise ValueError("bad characters in command")
     return [os.path.expanduser(a) if a == "~" or a.startswith("~/") else a for a in argv]  # no shell to do it
+
+
+def _shell_syntax(text: str) -> bool:
+    """Shell characters outside quotes. Quoted ones are plain text to a shell too (a commit message with
+    `<noreply@…>`), except `$` and backticks inside double quotes, which a task's shell would still expand."""
+    quote, escaped = "", False
+    for c in text:
+        if c == "\n":
+            return True
+        if escaped:
+            escaped = False
+        elif quote == "'":
+            quote = "" if c == "'" else quote
+        elif c == "\\":
+            escaped = True
+        elif quote == '"':
+            if c in "$`":
+                return True
+            quote = "" if c == '"' else quote
+        elif c in "'\"":
+            quote = c
+        elif c in SHELL_CHARS:
+            return True
+    return False
 
 
 def full_path(arg: str, cwd: Path) -> Path:

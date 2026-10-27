@@ -79,10 +79,23 @@ def test_secrets_are_refused_whatever_the_grade(command, project, folders):
     assert grade(command, project, folders).kind == "reject", command
 
 
-@pytest.mark.parametrize("command", ["ls | head", "ls; rm x", "echo $(whoami)", "ls > out.txt", "ls && ls", "echo `x`"])
+@pytest.mark.parametrize("command", ["ls | head", "ls; rm x", "echo $(whoami)", "ls > out.txt", "ls && ls", "echo `x`",
+                                     'echo "$HOME"', 'echo "a `x` b"', "echo 'a' > b", 'echo "a" | x',
+                                     'echo "a\nb"', "echo \\'a > b"])
 def test_shell_syntax_is_refused_not_interpreted(command, project, folders):
     v = grade(command, project, folders)
     assert v.kind == "reject" and "shell syntax" in v.reason
+
+
+@pytest.mark.parametrize("command,arg", [
+    ('git commit -m "Add hi. Co-Authored-By: Claude <noreply@anthropic.com>"',
+     "Add hi. Co-Authored-By: Claude <noreply@anthropic.com>"),
+    ("grep -n 'a|b' notes.txt", "a|b"),
+    ("echo 'cost: $5; ok'", "cost: $5; ok"),
+])
+def test_quoted_shell_characters_are_plain_text(command, arg, project, folders):
+    v = grade(command, project, folders)
+    assert v.kind != "reject" and arg in v.argv, (command, v.reason)
 
 
 def test_rm_inside_the_project_becomes_a_move_to_the_trash(project, folders):
