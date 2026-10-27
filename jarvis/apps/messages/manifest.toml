@@ -1,0 +1,58 @@
+[app]
+name = "messages"
+description = "Texts and phone calls through this Mac (Messages and iPhone calling), and phone numbers from Contacts."
+runs_on = "node:messages"
+
+[[actions]]
+name = "find_contact"
+description = "Look someone up in Contacts: their names and phone numbers. Use it before texting or calling someone by name, so the ask shows the right number."
+effect = "read"
+timeout_s = 30
+[actions.input]
+type = "object"
+required = ["name"]
+additionalProperties = false
+[actions.input.properties.name]
+type = "string"
+minLength = 1
+maxLength = 80
+
+[[actions]]
+name = "send_text"
+description = "Send an iMessage or text from Elijah's Mac. Look the person up with find_contact first unless he gave the number; pass their name exactly as Contacts has it, so the number can be checked."
+effect = "outbound"
+confirm = "Text {name} at {number}: \"{body}\"?"
+timeout_s = 30
+[actions.input]
+type = "object"
+required = ["number", "body"]
+additionalProperties = false
+[actions.input.properties.number]
+type = "string"
+minLength = 3
+description = "The phone number (or the email address of their iMessage)."
+[actions.input.properties.name]
+type = "string"
+default = ""
+description = "Their name as Contacts has it. Empty for a number he typed."
+[actions.input.properties.body]
+type = "string"
+minLength = 1
+maxLength = 1000
+
+[[actions]]
+name = "call"
+description = "Call someone from Elijah's Mac through his iPhone. Look them up with find_contact first unless he gave the number."
+effect = "outbound"
+confirm = "Call {name} at {number}?"
+timeout_s = 30
+[actions.input]
+type = "object"
+required = ["number"]
+additionalProperties = false
+[actions.input.properties.number]
+type = "string"
+minLength = 3
+[actions.input.properties.name]
+type = "string"
+default = ""
