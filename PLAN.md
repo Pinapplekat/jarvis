@@ -184,7 +184,7 @@ notifications through the channel interface, a way to ask you something, and eve
 | music | spotify.py, applemusic.py, media.py | Mac node |
 | web (search, open, browse) | websearch.py, web.py, browser.py | host |
 | school (Canvas, deadlines) | canvas.py | host |
-| location and places | location.py (Telegram shares for now) | host |
+| location and places | location.py | iPhone app (after the rehaul) |
 | projects and repos | projects.py, repos.py | host |
 | tasks (long-running Claude Code work) | tasks.py, agent.py | host |
 
@@ -213,7 +213,7 @@ New loop:
 - **Channel interface:** send, ask, edit, show typing, incoming messages. Each channel is a plug-in.
 - **Discord** is the main way to message Falak: the bot's DMs, voice messages, photos, and buttons as
   optional shortcuts.
-- **Telegram** stays only for live location, until the iPhone app exists.
+- **Telegram** is dropped. Location comes with the iPhone app (decided 2026-10-27).
 - **The desk** (mic and speakers) is a channel too.
 - **Calls:**
   - Bots can't ring you. A call means joining a voice channel in a private server, and Falak joins too.
@@ -250,14 +250,14 @@ Each milestone becomes one brief for Sonnet, with goal, files, interfaces, tests
 | M7 | **Apps that share, everyday Mac apps:** `ctx.call` between apps, check-in retry, school `deadline import`, web, music, messages, timers | Check-ins read through `ctx.call`; search, music, texts and timers work on Discord |
 | M8 | **Work apps:** terminal (sandboxed), background jobs, tasks (Claude Code sessions), projects and repos | Parity checklist for everyday use passes |
 | M9 | **Voice:** "Hey Falak" wake word, Whisper, Kokoro at the desk; Discord voice calls | Talk at the desk and on a Discord call |
-| M10 | **Cutover:** data migration check, location and Telegram, old UI (HUD, Panel, Inbox) reading from the new host, launchd jobs switched, old code retired | You use only Falak for a week without falling back |
+| M10 | **Cutover:** data migration check, old UI (HUD, Panel, Inbox) reading from the new host, launchd jobs switched, old code retired | You use only Falak for a week without falling back |
 
 Mail (read, draft, send, mail watch) isn't scheduled yet. It needs the Mac node, since Graph is closed for
 Seattle Colleges and the old JARVIS reads Mail.app.
 
 ## After the rehaul
 
-1. iPhone app (Vaulted LLC account): pairing, location (Telegram retires), HealthKit, notifications, voice,
+1. iPhone app (Vaulted LLC account): pairing, location (places, "did he make it to class"), HealthKit, notifications, voice,
    camera, using the same app manifests in Swift.
 2. Watch app: quick answers, dictation, heart rate, haptics.
 3. Mac mini: move the host, add local models. The MacBook becomes a node.
