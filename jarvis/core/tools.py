@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass, field, replace
 
@@ -55,7 +56,7 @@ def _noted(reg: Registry, turn: TurnState, tool_name: str, outcome: object) -> N
 def _app_tool(reg: Registry, turn: TurnState, spec) -> Tool:
     async def call(args: dict) -> ToolReply:
         turn.tools_used.append(spec.name)
-        outcome = actions.run(reg, spec.name, args, turn.origin)
+        outcome = await asyncio.to_thread(actions.run, reg, spec.name, args, turn.origin)  # a device may take a while
         _noted(reg, turn, spec.name, outcome)
         return _reply(outcome)
 
@@ -83,7 +84,7 @@ def _answer_ask_tool(reg: Registry, turn: TurnState) -> Tool:
         why = _refusal(turn, ask_id, exists=row is not None)
         if why:
             return ToolReply(f"{why} Ask Elijah directly and wait for his reply.", is_error=True)
-        outcome = actions.answer_ask(reg, ask_id, yes)
+        outcome = await asyncio.to_thread(actions.answer_ask, reg, ask_id, yes)
         if row:
             _noted(reg, turn, row["tool"], outcome)
         return _reply(outcome)
@@ -108,7 +109,7 @@ def _undo_tool(reg: Registry, turn: TurnState) -> Tool:
         log_id = args.get("log_id")
         if log_id is not None and (not isinstance(log_id, int) or isinstance(log_id, bool)):
             return ToolReply("log_id must be an integer.", is_error=True)
-        return _reply(actions.undo(reg, log_id))
+        return _reply(await asyncio.to_thread(actions.undo, reg, log_id))
 
     schema = {
         "type": "object",

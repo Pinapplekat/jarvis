@@ -1,0 +1,86 @@
+[app]
+name = "eye"
+description = "Test device app: pictures and a live view from a pretend camera."
+runs_on = "node:eye"
+
+[settings.label]
+type = "string"
+default = "plain"
+description = "Shown in every result."
+
+[[actions]]
+name = "snap"
+description = "A picture."
+effect = "read"
+untrusted_output = true
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[actions]]
+name = "hello"
+description = "Say hello."
+effect = "read"
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[actions]]
+name = "fail"
+description = "Fail with a plain message."
+effect = "read"
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[actions]]
+name = "boom"
+description = "Crash."
+effect = "read"
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[actions]]
+name = "slow"
+description = "Take a long time."
+effect = "read"
+timeout_s = 1
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[actions]]
+name = "bump"
+description = "Count up (undoable)."
+effect = "local"
+undo = "unbump"
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[actions]]
+name = "db_peek"
+description = "Touch the database, which a node doesn't have."
+effect = "read"
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[sessions]]
+name = "live_view"
+description = "Open a pretend live view."
+effect = "read"
+untrusted_output = true
+idle_minutes = 5
+start = "start_live"
+sample = "sample_live"
+stop = "stop_live"
+timeout_s = 5
+[sessions.input]
+type = "object"
+additionalProperties = false
+[sessions.input.properties.name]
+type = "string"
+default = "front"
+description = "Which pretend camera."

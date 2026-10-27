@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from jarvis.core import context, conversation
+from jarvis.core import context, conversation, sessions
 from jarvis.core.actions import Origin
 from jarvis.contract.api import Attachment
 from jarvis.core.apps import Registry
@@ -61,6 +61,7 @@ async def handle_message(reg: Registry, brain: Brain, text: str, origin: Origin,
     """Run one turn. The files in `attachments` are deleted when it ends, whether or not they were viewed."""
     started = time.monotonic()
     try:
+        await asyncio.to_thread(sessions.sweep, reg, now)  # a view whose device left or sat idle closes before this turn
         message_id = conversation.add(reg.conn, "user", text, now)
         turn = TurnState(origin, latest_ask_id(reg), own_channels, attachments)
         images = sum(a.kind == "image" for a in attachments)

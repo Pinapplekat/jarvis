@@ -9,7 +9,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Union
 
 from jarvis.contract.api import ActionError, Result
-from jarvis.core.apps import LoadedApp, Registry, run_on_this_machine, tmp_dir
+from jarvis.core import dispatch, sessions
+from jarvis.core.apps import LoadedApp, Registry
+from jarvis.core.timeutil import stamp
 from jarvis.contract.manifest import ActionSpec
 from jarvis.contract.schema import fill_defaults, validate
 
@@ -58,15 +60,11 @@ def needs_confirmation(effect: str, origin: Origin, trusted: bool) -> bool:
     return False
 
 
-def _stamp(now: datetime | None = None) -> str:
-    return (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat(timespec="seconds")
-
-
 def _log(reg: Registry, tool: str, effect: str, status: str, args: str, text: str, undo: dict | None = None,
          subject: str | None = None) -> int:
     cur = reg.conn.execute(
         "INSERT INTO action_log (time, tool, effect, status, args, result, undo_json, subject) VALUES (?,?,?,?,?,?,?,?)",
-        (_stamp(), tool, effect, status, args, text[:LOG_TEXT_MAX], json.dumps(undo) if undo is not None else None,
+        (stamp(), tool, effect, status, args, text[:LOG_TEXT_MAX], json.dumps(undo) if undo is not None else None,
          subject),
     )
     return cur.lastrowid
@@ -91,16 +89,11 @@ def _fail(reg: Registry, app: LoadedApp, action: ActionSpec, args: object, messa
 
 
 def _execute(reg: Registry, app: LoadedApp, action: ActionSpec, args: dict) -> Ran | Failed:
-    if not run_on_this_machine(app.manifest.runs_on):
-        return _fail(reg, app, action, args, f"{app.manifest.name} needs a device that isn't connected")
     try:
-        result = getattr(app.module, action.handler)(app.ctx, **args)
-        if not isinstance(result, Result):
-            raise TypeError(f"handler returned {type(result).__name__}, not Result")
-        tmp = tmp_dir(reg.settings).resolve()
-        for att in result.attachments:
-            if att.path.resolve().parent != tmp:  # the core deletes attachments, so only its own temp files
-                raise ValueError(f"attachment {att.path} is outside the temp folder")
+        if action.session:
+            result = sessions.invoke(reg, app, action, args)
+        else:
+            result, _ = dispatch.call(reg, app, action.handler, args, action.timeout_s)
     except ActionError as e:
         return _fail(reg, app, action, args, str(e))
     except Exception:
@@ -128,17 +121,17 @@ def run(reg: Registry, tool_name: str, args: object, origin: Origin,
     question = action.confirm.format_map(_Fields(args))
     cur = reg.conn.execute(
         "INSERT INTO asks (tool, args_json, question, status, created_at, origin_json) VALUES (?,?,?,?,?,?)",
-        (tool_name, json.dumps(args), question, "pending", _stamp(), json.dumps(asdict(origin))),
+        (tool_name, json.dumps(args), question, "pending", stamp(), json.dumps(asdict(origin))),
     )
     _log(reg, tool_name, action.effect, "asked", _args_text(action, args), _question_text(action, question))
     return Asked(cur.lastrowid, question)
 
 
 def _expire(reg: Registry, now: datetime | None) -> None:
-    cutoff = _stamp((now or datetime.now(timezone.utc)) - ASK_TTL)
+    cutoff = stamp((now or datetime.now(timezone.utc)) - ASK_TTL)
     reg.conn.execute(
         "UPDATE asks SET status='expired', resolved_at=? WHERE status='pending' AND created_at < ?",
-        (_stamp(now), cutoff),
+        (stamp(now), cutoff),
     )
 
 
@@ -158,7 +151,7 @@ def answer_ask(reg: Registry, ask_id: int, yes: bool, now: datetime | None = Non
     found = reg.find(row["tool"])
     status = "approved" if yes else "declined"
     changed = reg.conn.execute(
-        "UPDATE asks SET status=?, resolved_at=? WHERE id=? AND status='pending'", (status, _stamp(now), ask_id)
+        "UPDATE asks SET status=?, resolved_at=? WHERE id=? AND status='pending'", (status, stamp(now), ask_id)
     ).rowcount
     if not changed:
         return Failed(f"Ask #{ask_id} was already answered.")
@@ -202,13 +195,13 @@ def undo(reg: Registry, log_id: int | None = None) -> Ran | Failed:
         if newer:
             return Failed("A newer change to the same thing came after it; undo that one first.")
     try:
-        result = getattr(app.module, action.undo)(app.ctx, json.loads(row["undo_json"]))
+        result, _ = dispatch.call(reg, app, action.undo, json.loads(row["undo_json"]), action.timeout_s, as_arg=True)
     except ActionError as e:
         return Failed(str(e))
     except Exception:
         app.ctx.log.exception("undo of %s failed", action.name)
         return Failed(f"Something went wrong undoing that in {app.manifest.name}")
-    reg.conn.execute("UPDATE action_log SET undone_at=? WHERE id=?", (_stamp(), row["id"]))
+    reg.conn.execute("UPDATE action_log SET undone_at=? WHERE id=?", (stamp(), row["id"]))
     new_id = _log(reg, f"{row['tool']} (undo)", action.effect, "ran", f"entry #{row['id']}", result.text)
     return Ran(result, new_id)
 

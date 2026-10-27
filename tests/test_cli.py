@@ -16,7 +16,7 @@ def test_dev_info(data_dir, capsys):
     (data_dir / ".env").write_text("SECRET_KEY=hunter2\n")
     assert cli.main(["dev", "info"]) == 0
     out = capsys.readouterr().out
-    assert str(data_dir) in out and "[1, 2, 3]" in out and "Falak" in out
+    assert str(data_dir) in out and "[1, 2, 3, 4]" in out and "Falak" in out
     assert "SECRET_KEY" in out and "hunter2" not in out
     assert "settings for missing apps: none" in out
 
@@ -92,3 +92,51 @@ def test_attachment_is_printed_then_deleted(data_dir, capsys, monkeypatch):
     assert "image: 4 bytes at" in out
     path = Path(out.split(" at ")[1].strip())
     assert not path.exists()
+
+
+def test_apps_lists_session_tools(data_dir, capsys):
+    cli.main(["apps"])
+    out = capsys.readouterr().out
+    assert "live_view_start [read]" in out and "live_view_look [read]" in out and "screen" in out
+
+
+def test_node_pair_prints_the_key_once_and_stores_a_hash(data_dir, capsys):
+    from jarvis.core import db, nodes
+    from jarvis.core.settings import load_settings
+
+    assert cli.main(["node", "pair", "mac"]) == 0
+    out = capsys.readouterr().out
+    key = out.split("FALAK_NODE_KEY=")[1].strip()
+    conn = db.connect(load_settings())
+    (row,) = conn.execute("SELECT * FROM nodes").fetchall()
+    assert row["key_hash"] == nodes.hash_key(key) and key not in tuple(row)
+    assert cli.main(["node", "pair", "mac"]) == 1
+    assert "already" in capsys.readouterr().err
+    assert cli.main(["node", "list"]) == 0
+    listed = capsys.readouterr().out
+    assert "mac [offline]" in listed and key not in listed
+    assert cli.main(["nodes"]) == 0
+    assert "No node is connected" in capsys.readouterr().out
+    assert cli.main(["node", "revoke", "mac"]) == 0
+    assert cli.main(["node", "revoke", "mac"]) == 1
+    cli.main(["node", "list"])
+    assert "mac [revoked]" in capsys.readouterr().out
+
+
+def test_nodes_lists_connected_ones_with_capabilities(data_dir, capsys):
+    from jarvis.core import db, nodes
+    from jarvis.core.settings import load_settings
+
+    conn = db.connect(load_settings())
+    nodes.pair(conn, "mac")
+    conn.execute("UPDATE nodes SET connected_at='2026-10-26T10:00:00+00:00', capabilities_json='[\"camera\",\"screen\"]'")
+    assert cli.main(["nodes"]) == 0
+    assert "mac: capabilities camera, screen" in capsys.readouterr().out
+    cli.main(["dev", "info"])
+    assert "1 connected" in capsys.readouterr().out
+
+
+def test_node_run_without_a_key_explains(data_dir, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("FALAK_NODE_DIR", str(tmp_path / "node"))
+    assert cli.main(["node", "run"]) == 1
+    assert "jarvis node pair" in capsys.readouterr().err

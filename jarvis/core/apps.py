@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
 import logging
 import sqlite3
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,11 +11,12 @@ from types import ModuleType
 
 from jarvis.core import db
 from jarvis.contract.api import AppContext
+from jarvis.contract.loader import DEFAULT_APPS_DIR, check_handlers, import_actions, manifest_paths
 from jarvis.contract.manifest import ActionSpec, Manifest, ManifestError, load_manifest
 from jarvis.contract.schema import validate
-from jarvis.core.settings import Settings, SettingsError, load_secrets
+from jarvis.contract.envfile import load_secrets
+from jarvis.core.settings import Settings, SettingsError
 
-DEFAULT_APPS_DIR = Path(__file__).resolve().parent.parent / "apps"
 SEP = "__"  # tool names are <app>__<action>
 TMP_MAX_AGE = 600  # seconds
 
@@ -42,16 +40,8 @@ class ToolSpec:
 @dataclass(frozen=True)
 class LoadedApp:
     manifest: Manifest
-    module: ModuleType
+    module: ModuleType | None  # None for apps that run on a node: the host never imports their code
     ctx: AppContext
-
-
-def run_on_this_machine(runs_on: str) -> bool:
-    """Whether this process may run an app. M2 has no node, so this Mac pretends to have every capability.
-
-    M5 replaces this with routing to the node that has the capability.
-    """
-    return True
 
 
 class Registry:
@@ -59,12 +49,13 @@ class Registry:
         self.settings = settings
         self.conn = conn
         self.apps = apps
+        self.nodes = None  # the NodeLink that reaches devices; set by jarvis serve (see core/dispatch.py)
 
     def actions(self) -> list[ToolSpec]:
         return [
             ToolSpec(name, a.name, a.description, a.effect, a.input, a.untrusted_output)
             for name, app in self.apps.items()
-            for a in app.manifest.actions
+            for a in app.manifest.tools
         ]
 
     def find(self, tool_name: str) -> tuple[LoadedApp, ActionSpec] | None:
@@ -72,7 +63,7 @@ class Registry:
         app = self.apps.get(app_name)
         if app is None:
             return None
-        return next(((app, a) for a in app.manifest.actions if a.name == action_name), None)
+        return next(((app, a) for a in app.manifest.tools if a.name == action_name), None)
 
     def close(self) -> None:
         self.conn.close()
@@ -96,27 +87,9 @@ def sweep_tmp(settings: Settings, now: float | None = None) -> int:
     return removed
 
 
-def _import_actions(apps_dir: Path, name: str) -> ModuleType:
-    path = apps_dir / name / "actions.py"
-    if not path.exists():
-        raise ManifestError(apps_dir / name / "manifest.toml", "actions.py is missing")
-    if apps_dir.resolve() == DEFAULT_APPS_DIR:
-        return importlib.import_module(f"jarvis.apps.{name}.actions")
-    module_name = f"falak_app_{name}_actions"
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def _check_handlers(manifest: Manifest, module: ModuleType) -> None:
-    if manifest.context is not None and not callable(getattr(module, manifest.context, None)):
-        raise ManifestError(manifest.path, f"context handler '{manifest.context}' not found in actions.py")
-    for action in manifest.actions:
-        for label, fn in (("handler", action.handler), ("undo handler", action.undo)):
-            if fn is not None and not callable(getattr(module, fn, None)):
-                raise ManifestError(manifest.path, f"action '{action.name}': {label} '{fn}' not found in actions.py")
+def node_app_settings(reg: Registry) -> dict[str, dict]:
+    """Merged settings of every enabled app that runs on a node; the welcome message hands them to the node."""
+    return {name: dict(app.ctx.settings) for name, app in reg.apps.items() if app.manifest.runs_on != "host"}
 
 
 def _app_settings(settings: Settings, manifest: Manifest) -> dict:
@@ -156,15 +129,17 @@ def load_apps(settings: Settings, apps_dir: Path = DEFAULT_APPS_DIR, extra_dirs:
             log.warning("settings.toml has [apps.%s] but no app named %s", name, name)
         secrets = load_secrets(settings.data_dir)
         loaded: dict[str, LoadedApp] = {}
-        for path in sorted(p for d in (apps_dir, *map(Path, extra_dirs)) for p in d.glob("*/manifest.toml")):
+        for path in manifest_paths(apps_dir, *extra_dirs):
             manifest = load_manifest(path)
             app_settings = _app_settings(settings, manifest)
             if settings.apps.get(manifest.name, {}).get("enabled", True) is False:
                 continue
-            module = _import_actions(path.parent.parent, manifest.name)
-            _check_handlers(manifest, module)
+            on_host = manifest.runs_on == "host"
+            module = import_actions(path.parent.parent, manifest.name) if on_host else None
+            if module is not None:
+                check_handlers(manifest, module)
             migrations = path.parent / "migrations"
-            if migrations.is_dir():
+            if on_host and migrations.is_dir():
                 db.migrate(conn, migrations, app=manifest.name)
             ctx = AppContext(
                 manifest.name,

@@ -5,7 +5,10 @@ import re
 
 import pytest
 
-from jarvis.core.apps import DEFAULT_APPS_DIR
+from types import SimpleNamespace
+
+from jarvis.contract.loader import DEFAULT_APPS_DIR, check_handlers, import_actions
+from jarvis.contract.manifest import load_manifest
 
 APPS = sorted(p.parent.name for p in DEFAULT_APPS_DIR.glob("*/manifest.toml"))
 TABLE_DDL = re.compile(
@@ -14,12 +17,16 @@ TABLE_DDL = re.compile(
 
 
 def test_apps_exist():
-    assert {"calculator", "memory", "camera"} <= set(APPS)
+    assert {"calculator", "memory", "camera", "screen"} <= set(APPS)
 
 
 @pytest.fixture
-def app(request, real_apps):
-    return real_apps.apps[request.param]
+def app(request):
+    """Read the way the node does: the manifest plus the imported code, whichever machine the app runs on."""
+    manifest = load_manifest(DEFAULT_APPS_DIR / request.param / "manifest.toml")
+    module = import_actions(DEFAULT_APPS_DIR, request.param)
+    check_handlers(manifest, module)
+    return SimpleNamespace(manifest=manifest, module=module)
 
 
 @pytest.mark.parametrize("app", APPS, indirect=True)
@@ -42,6 +49,18 @@ def test_untrusted_output_flag_and_context_handler(app):
     if app.manifest.context:
         fn = getattr(app.module, app.manifest.context)
         assert len(inspect.signature(fn).parameters) == 1  # (ctx)
+
+
+@pytest.mark.parametrize("app", APPS, indirect=True)
+def test_sessions_have_handlers_and_sane_settings(app):
+    for session in app.manifest.sessions:
+        assert session.effect in ("read", "local")
+        assert 1 <= session.idle_minutes <= 120
+        start, sample, stop = (getattr(app.module, h) for h in session.handlers())
+        props = set(session.input.get("properties", {}))
+        assert {p for p in inspect.signature(start).parameters if p != "ctx"} == props
+        assert len(inspect.signature(sample).parameters) == 2  # (ctx, state)
+        assert len(inspect.signature(stop).parameters) == 2
 
 
 @pytest.mark.parametrize("app", APPS, indirect=True)

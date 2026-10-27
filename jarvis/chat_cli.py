@@ -8,8 +8,10 @@ import sys
 from pathlib import Path
 
 from jarvis.channels.terminal import TerminalChannel
-from jarvis.core import loop
-from jarvis.core.apps import load_apps
+from jarvis import node_cli
+from jarvis.core import loop, sessions
+from jarvis.core.apps import load_apps, node_app_settings
+from jarvis.core.node_hub import NodeHub
 from jarvis.core.brain import Brain
 from jarvis.core.brain_sdk import SdkBrain
 from jarvis.core.channel import Incoming
@@ -65,13 +67,23 @@ def turns(settings: Settings, n: int) -> int:
     return 0
 
 
-def serve(settings: Settings, with_fixtures: bool = False, brain: Brain | None = None) -> int:
+def serve(settings: Settings, with_fixtures: bool = False, with_node: bool = False, brain: Brain | None = None) -> int:
     """Run Falak as a long-lived process hosting every enabled channel (Discord) until Ctrl-C."""
     extra = (FIXTURE_APPS,) if with_fixtures else ()
     if with_fixtures and not FIXTURE_APPS.is_dir():
         print(f"--with-fixtures needs {FIXTURE_APPS}, which is only in a source checkout", file=sys.stderr)
         return 2
-    host = Host(load_apps(settings, extra_dirs=extra), brain or _brain(settings))
+    reg = load_apps(settings, extra_dirs=extra)
+    sessions.abandon_open(reg, "host restarted")  # a host that died left its views open on paper only
+    hub = NodeHub(settings, lambda: node_app_settings(reg))
+    try:
+        hub.start()
+    except RuntimeError as e:
+        reg.close()
+        print(str(e), file=sys.stderr)
+        return 1
+    reg.nodes = hub
+    host = Host(reg, brain or _brain(settings))
     for channel in build_channels(settings, host):
         host.add_channel(channel)
     if not host.channels:
@@ -79,5 +91,10 @@ def serve(settings: Settings, with_fixtures: bool = False, brain: Brain | None =
         print("No channel is enabled, so there is nothing to serve. See docs/briefs/M4.md for the Discord setup.",
               file=sys.stderr)
         return 1
-    asyncio.run(host.run(handle_signals=True))
+    child = node_cli.start_child(settings) if with_node else None
+    try:
+        asyncio.run(host.run(handle_signals=True))
+    finally:
+        if child is not None:
+            node_cli.stop_child(child)
     return 0

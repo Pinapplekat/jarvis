@@ -18,7 +18,9 @@ def db_path(settings: Settings) -> Path:
 
 def _open(path: Path) -> sqlite3.Connection:
     # isolation_level=None: we manage transactions ourselves so a migration is atomic.
-    conn = sqlite3.connect(path, isolation_level=None)
+    # check_same_thread=False: actions run in worker threads so a slow device never blocks the event loop;
+    # sqlite3 serializes access to one connection, and each statement here is its own transaction.
+    conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")

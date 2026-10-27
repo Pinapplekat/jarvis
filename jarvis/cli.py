@@ -12,13 +12,15 @@ from jarvis.core import actions, db
 from jarvis.core.apps import Registry, load_apps, settings_for_missing_apps
 from jarvis.contract.manifest import ManifestError
 from jarvis.core.log import setup_logging
-from jarvis.core.settings import Settings, SettingsError, load_secrets, load_settings
+from jarvis.contract.envfile import load_secrets
+from jarvis.core.settings import Settings, SettingsError, load_settings
 
 
 def _info(settings: Settings) -> int:
     conn = db.connect(settings)
     try:
         versions = db.applied_versions(conn)
+        connected = conn.execute("SELECT COUNT(*) FROM nodes WHERE connected_at IS NOT NULL").fetchone()[0]
     finally:
         conn.close()
     print(f"data folder: {settings.data_dir}")
@@ -27,6 +29,7 @@ def _info(settings: Settings) -> int:
     print(f"assistant:   {settings.assistant_name}")
     print(f"log:         {settings.data_dir / 'logs' / 'falak.log'}")
     print(f"secret keys: {sorted(load_secrets(settings.data_dir)) or 'none'}")
+    print(f"nodes:       {connected} connected")
     print(f"settings for missing apps: {settings_for_missing_apps(settings) or 'none'}")
     return 0
 
@@ -70,7 +73,7 @@ def _apps_command(settings: Settings, args: argparse.Namespace) -> int:
         if args.group == "apps":
             for app in reg.apps.values():
                 print(f"{app.manifest.name} (runs on {app.manifest.runs_on}): {app.manifest.description}")
-                for a in app.manifest.actions:
+                for a in app.manifest.tools:
                     print(f"  {a.name} [{a.effect}] {a.description}")
             return 0
         if args.group == "run":
@@ -105,6 +108,12 @@ def build_parser(name: str) -> argparse.ArgumentParser:
     imp = dev.add_parser("import-db", help="copy the live JARVIS database into the Falak data folder")
     imp.add_argument("--source", help="source database (default: the live JARVIS database)")
     imp.add_argument("--overwrite", action="store_true", help="replace an existing falak.db")
+    node = sub.add_parser("node", help="pair, revoke and run device nodes").add_subparsers(dest="node_command")
+    for verb, text in (("pair", "pair a new node and print its key once"), ("revoke", "revoke a node")):
+        node.add_parser(verb, help=text).add_argument("name")
+    node.add_parser("list", help="every paired node")
+    node.add_parser("run", help="run this machine's node and connect it to the host")
+    sub.add_parser("nodes", help="nodes connected to the running host, with their capabilities")
     sub.add_parser("apps", help="list apps and their actions")
     run = sub.add_parser("run", help="run an action as <app>.<action>")
     run.add_argument("target")
@@ -118,6 +127,7 @@ def build_parser(name: str) -> argparse.ArgumentParser:
     sub.add_parser("log", help="recent actions").add_argument("-n", type=int, default=20)
     sub.add_parser("chat", help="talk to it in the terminal")
     serve = sub.add_parser("serve", help="run Falak and its channels (Discord) until Ctrl-C")
+    serve.add_argument("--with-node", action="store_true", help="also start this Mac's node as a child process (dev)")
     serve.add_argument("--with-fixtures", action="store_true", help="also load the test fixture apps (dev only)")
     sub.add_parser("ask", help="send one message and print the reply").add_argument("message")
     sub.add_parser("turns", help="recent turns: timing and tools used").add_argument("-n", type=int, default=20)
@@ -137,13 +147,17 @@ def main(argv: list[str] | None = None) -> int:
         return _info(settings)
     if args.group == "dev" and args.command == "import-db":
         return _import_db(settings, args.source, args.overwrite)
+    if args.group in ("node", "nodes"):
+        from jarvis import node_cli
+
+        return node_cli.command(settings, args)
     if args.group in ("apps", "run", "asks", "yes", "no", "undo", "log", "chat", "ask", "turns", "serve"):
         try:
             if args.group in ("chat", "ask", "turns", "serve"):
                 from jarvis import chat_cli  # loads the SDK, which the other commands don't need
 
                 if args.group == "serve":
-                    return chat_cli.serve(settings, args.with_fixtures)
+                    return chat_cli.serve(settings, args.with_fixtures, args.with_node)
                 if args.group == "chat":
                     return chat_cli.chat(settings)
                 if args.group == "ask":

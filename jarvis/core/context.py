@@ -6,8 +6,9 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from jarvis.core import actions, conversation
+from jarvis.core import actions, conversation, sessions
 from jarvis.core.apps import Registry
+from jarvis.core.timeutil import ago
 
 log = logging.getLogger("jarvis.core.context")
 
@@ -23,20 +24,6 @@ def system_prompt(assistant_name: str) -> str:
 
 def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
-
-
-def _ago(stamp: str, now: datetime) -> str:
-    try:
-        seconds = int((now - datetime.fromisoformat(stamp)).total_seconds())
-    except ValueError:
-        return "earlier"
-    if seconds < 90:
-        return "just now"
-    if seconds < 5400:
-        return f"{round(seconds / 60)} min ago"
-    if seconds < 172800:
-        return f"{round(seconds / 3600)} h ago"
-    return f"{round(seconds / 86400)} days ago"
 
 
 def app_blocks(reg: Registry) -> list[str]:
@@ -69,11 +56,12 @@ def build_prompt(reg: Registry, text: str, channel: str, message_id: int, now: d
     asks = actions.pending_asks(reg, now)
     if asks:
         lines.append("Pending asks (waiting on Elijah):")
-        lines += [f"  #{a['id']} {a['question']} ({_ago(a['created_at'], now)})" for a in asks]
+        lines += [f"  #{a['id']} {a['question']} ({ago(a['created_at'], now)})" for a in asks]
     log_rows = actions.recent_log(reg, RECENT_ACTIONS)
     if log_rows:
         lines.append("Last actions:")
-        lines += [f"  #{r['id']} {r['tool']} {r['status']} {_ago(r['time'], now)}" for r in log_rows]
+        lines += [f"  #{r['id']} {r['tool']} {r['status']} {ago(r['time'], now)}" for r in log_rows]
+    lines += sessions.context_lines(reg, now)
     lines += app_blocks(reg)
     if images:
         lines.append(f"Elijah attached {images} image{'s' if images > 1 else ''}; "

@@ -9,18 +9,20 @@ import signal
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from jarvis.core import actions, loop
+from jarvis.core import actions, loop, sessions
 from jarvis.core.actions import Origin
 from jarvis.core.apps import Registry, tmp_dir
 from jarvis.core.brain import Brain
 from jarvis.core.channel import AskResult, Channel, ChannelUnavailable, Incoming
 from jarvis.contract.schema import validate
-from jarvis.core.settings import Settings, SettingsError, load_secrets
+from jarvis.contract.envfile import load_secrets
+from jarvis.core.settings import Settings, SettingsError
 
 log = logging.getLogger("jarvis.host")
 
 CHANNEL_MODULES = {"discord": "jarvis.channels.discord"}  # channels that settings.toml and .env can switch on
 TERMINAL = "cli"
+SWEEP_EVERY = 30  # seconds
 
 
 def check_channel_sections(settings: Settings) -> list[str]:
@@ -102,7 +104,7 @@ class Host:
     async def answer(self, ask_id: int, yes: bool) -> AskResult:
         """A Yes/No button was pressed: answer the ask exactly as the loop's answer_ask would."""
         async with self._turn_lock:
-            out = actions.answer_ask(self.reg, ask_id, yes)
+            out = await asyncio.to_thread(actions.answer_ask, self.reg, ask_id, yes)
         if isinstance(out, actions.Ran):
             actions.release(out)
             return AskResult(True, out.result.text)
@@ -145,6 +147,16 @@ class Host:
         except Exception:
             log.exception("channel %s stopped with an error", channel.name)
 
+    async def _sweep(self) -> None:
+        """Every 30 s, close live views whose device left or that sat idle (each turn also checks)."""
+        while True:
+            await asyncio.sleep(SWEEP_EVERY)
+            try:
+                async with self._turn_lock:
+                    await asyncio.to_thread(sessions.sweep, self.reg)
+            except Exception:
+                log.exception("the session sweep failed")
+
     def request_stop(self) -> None:
         self._stop.set()
 
@@ -156,12 +168,14 @@ class Host:
         worker = asyncio.create_task(self._work())
         runners = [asyncio.create_task(self._run_channel(c)) for c in self.channels.values()]
         stopper = asyncio.create_task(self._stop.wait())
+        sweeper = asyncio.create_task(self._sweep())
         try:
             live = set(runners)
             while live and not self._stop.is_set():
                 done, _ = await asyncio.wait({*live, stopper}, return_when=asyncio.FIRST_COMPLETED)
                 live -= done
         finally:
+            sweeper.cancel()
             await self._shutdown(worker, runners, stopper)
 
     async def _shutdown(self, worker: asyncio.Task, runners: list[asyncio.Task], stopper: asyncio.Task) -> None:
@@ -188,6 +202,9 @@ class Host:
         self.close()
 
     def close(self) -> None:
+        sessions.stop_all(self.reg, "host stopped")  # the devices' capture processes must not outlive us
+        if self.reg.nodes is not None:
+            self.reg.nodes.stop()
         self.reg.close()
 
 
