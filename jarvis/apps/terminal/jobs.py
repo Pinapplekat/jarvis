@@ -232,8 +232,9 @@ class Watcher:
     """The thread that calls Jobs.check every CHECK_EVERY seconds while a job is running, and sleeps otherwise."""
 
     def __init__(self, jobs: Jobs, notify: Callable[[str], None], stall_minutes: Callable[[], int],
-                 every: float = CHECK_EVERY) -> None:
-        self.jobs, self.notify, self.stall_minutes, self.every = jobs, notify, stall_minutes, every
+                 every: float | None = None) -> None:
+        self.jobs, self.notify, self.stall_minutes = jobs, notify, stall_minutes
+        self.every = CHECK_EVERY if every is None else every
         self._wake, self._stop = threading.Event(), threading.Event()
         self._thread = threading.Thread(target=self._run, name="terminal-jobs", daemon=True)
 
