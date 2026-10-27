@@ -1,3 +1,4 @@
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -106,6 +107,7 @@ FAKE_PROCS: list[FakeProc] = []
 def live(monkeypatch):
     """ffmpeg and ffplay replaced: 'ffmpeg' writes a frame at once unless told not to."""
     FAKE_PROCS.clear()
+    camera._previews.clear()
     state = {"frame": b"frame1", "stderr": "", "dies": False}
 
     def spawn(argv, log=None):
@@ -213,3 +215,51 @@ def test_sample_reports_a_dead_or_frozen_feed(make_ctx, live):
     FAKE_PROCS[0].alive = False
     with pytest.raises(ActionError, match="has stopped"):
         camera.sample_live(ctx, state)
+
+
+def test_a_closed_preview_reopens_on_the_next_look(make_ctx, live):
+    ctx = make_ctx("camera")
+    state = camera.start_live(ctx).state
+    ffmpeg, first_preview = FAKE_PROCS
+    first_preview.alive = False  # Elijah closed the window
+    camera.sample_live(ctx, state)
+    assert len(FAKE_PROCS) == 3 and camera.PREVIEW_TITLE in FAKE_PROCS[2].argv
+    camera.sample_live(ctx, state)  # still open: no second window
+    assert len(FAKE_PROCS) == 3
+    camera.stop_live(ctx, state)
+    assert FAKE_PROCS[2].killed and ffmpeg.killed
+
+
+def test_no_preview_is_reopened_when_previews_are_off(make_ctx, live):
+    ctx = make_ctx("camera", preview=False)
+    state = camera.start_live(ctx).state
+    camera.sample_live(ctx, state)
+    assert len(FAKE_PROCS) == 1
+
+
+# ---- _kill with real processes (no camera involved) ------------------------------------------------------
+
+
+def test_kill_ends_the_whole_group_before_returning_so_nothing_writes_late(tmp_path):
+    late = tmp_path / "frame.jpg"
+    # Like ffmpeg, this writes a last "frame" when asked to stop politely; SIGKILL leaves it no chance.
+    proc = camera._spawn(["/bin/sh", "-c", 'trap "echo late > \\"$0\\"; exit 0" TERM; while :; do sleep 0.05; done',
+                          str(late)])
+    time.sleep(0.3)
+    camera._kill(proc.pid)
+    with pytest.raises(ProcessLookupError):
+        os.killpg(proc.pid, 0)
+    late.unlink(missing_ok=True)
+    time.sleep(0.3)
+    assert not late.exists()
+
+
+def test_kill_leaves_processes_it_did_not_start_alone():
+    other = subprocess.Popen(["/bin/sleep", "5"], start_new_session=True)
+    try:
+        camera._kill(other.pid)
+        time.sleep(0.3)  # a signal, had one been sent, would have landed by now
+        assert other.poll() is None
+    finally:
+        other.kill()
+        other.wait()

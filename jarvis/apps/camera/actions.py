@@ -19,6 +19,7 @@ FIRST_FRAME_WAIT = 10  # seconds for ffmpeg to produce the first frame
 STALE_AFTER = 10  # a frame file untouched this long means the feed froze
 PREVIEW_TITLE = "Falak: live view"
 _procs: dict[int, subprocess.Popen] = {}  # the capture and preview processes this node started, by pid
+_previews: dict[str, int] = {}  # frame file -> pid of its preview window, which Elijah may close and a look reopens
 
 
 def _imagesnap() -> str | None:
@@ -109,22 +110,26 @@ def _spawn(argv: list[str], log: Path | None = None) -> subprocess.Popen:
 
 
 def _kill(pid: int | None) -> None:
-    if not pid:
+    """End a process group this node started, and wait until every process in it is gone.
+
+    SIGKILL, not SIGTERM: ffmpeg answers SIGTERM by writing one last frame, which would land after the
+    frame file was deleted. Only pids in _procs are touched, so a stale pid can never hit someone else's group.
+    """
+    proc = _procs.pop(pid, None) if pid else None
+    if proc is None:
         return
-    proc = _procs.pop(pid, None)
     try:
-        os.killpg(pid, signal.SIGTERM)
+        os.killpg(pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
-    if proc is not None:
+    proc.wait(3)
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:  # the guard shell is reaped above; its child exits a moment later
         try:
-            proc.wait(3)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-            proc.wait(3)
+            os.killpg(pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return
+        time.sleep(0.02)
 
 
 def _alive(pid: int | None) -> bool:
@@ -172,9 +177,18 @@ def start_live(ctx: AppContext, device: str = "") -> SessionStarted:
         frame.unlink(missing_ok=True)
         log.unlink(missing_ok=True)
         raise
-    state = {"pid": capture.pid, "frame": str(frame), "log": str(log), "device": name,
-             "preview_pid": _start_preview(ctx, index)}
+    state = {"pid": capture.pid, "frame": str(frame), "log": str(log), "device": name, "index": index}
+    _ensure_preview(ctx, state)
     return SessionStarted(f"Watching {name}.", state)
+
+
+def _ensure_preview(ctx: AppContext, state: dict) -> None:
+    """Open the preview window for this view unless it's already showing (Elijah may have closed it)."""
+    if _alive(_previews.get(state["frame"])):
+        return
+    pid = _start_preview(ctx, state["index"])
+    if pid:
+        _previews[state["frame"]] = pid
 
 
 def _start_preview(ctx: AppContext, index: str) -> int | None:
@@ -202,12 +216,14 @@ def sample_live(ctx: AppContext, state: dict) -> Result:
         shutil.copyfile(frame, path)
     except FileNotFoundError:
         raise ActionError(f"The picture from {state['device']} is gone. Close the view and open it again.") from None
+    if "index" in state:
+        _ensure_preview(ctx, state)
     return Result(f"Current view from {state['device']}.", attachments=(Attachment("image", path, "image/jpeg"),))
 
 
 def stop_live(ctx: AppContext, state: dict) -> Result:
-    _kill(state.get("preview_pid"))
-    _kill(state.get("pid"))
+    _kill(_previews.pop(state["frame"], None) or state.get("preview_pid"))
+    _kill(state.get("pid"))  # returns once ffmpeg is gone, so nothing rewrites the frame after it's deleted
     for leftover in (state["frame"], state["frame"] + ".tmp", state["log"]):
         Path(leftover).unlink(missing_ok=True)
     return Result(f"Closed the view of {state['device']}.")
