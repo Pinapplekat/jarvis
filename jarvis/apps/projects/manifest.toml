@@ -1,0 +1,80 @@
+[app]
+name = "projects"
+description = "Elijah's projects and repos: what each is, its status, notes, and the live state of its git repo."
+uses = ["terminal"]
+
+[[actions]]
+name = "list_projects"
+description = "List Elijah's projects, one line each: name, status, kind and a short summary. Optionally only those with one status."
+effect = "read"
+[actions.input]
+type = "object"
+additionalProperties = false
+[actions.input.properties.status]
+type = "string"
+default = ""
+description = "active, paused, stalled, done or unknown; empty for all."
+
+[[actions]]
+name = "show_project"
+description = "One project in full: status, summary, notes and where it lives, plus the live git state (branch, last commit, uncommitted files) when his Mac is connected. The name can be part of the name."
+effect = "read"
+untrusted_output = true
+timeout_s = 30
+[actions.input]
+type = "object"
+required = ["name"]
+additionalProperties = false
+[actions.input.properties.name]
+type = "string"
+minLength = 1
+
+[[actions]]
+name = "update_project"
+description = "Change a project's status, summary or notes (only what you pass). Notes replace the old notes, so include what to keep."
+effect = "local"
+undo = "undo_update_project"
+[actions.input]
+type = "object"
+required = ["name"]
+additionalProperties = false
+[actions.input.properties.name]
+type = "string"
+minLength = 1
+[actions.input.properties.status]
+type = "string"
+enum = ["active", "paused", "stalled", "done", "unknown"]
+[actions.input.properties.summary]
+type = "string"
+maxLength = 1000
+[actions.input.properties.notes]
+type = "string"
+maxLength = 20000
+
+[[actions]]
+name = "add_project"
+description = "Add a project. path is its folder on the Mac, if it has one."
+effect = "local"
+undo = "undo_add_project"
+[actions.input]
+type = "object"
+required = ["name", "path", "kind"]
+additionalProperties = false
+[actions.input.properties.name]
+type = "string"
+minLength = 1
+maxLength = 80
+[actions.input.properties.path]
+type = "string"
+[actions.input.properties.kind]
+type = "string"
+enum = ["business", "personal", "school", "other"]
+
+[[jobs]]
+name = "sync"
+title = "project sync"
+description = "Look for git repos under Elijah's work folders and add each new one as a project (status unknown)."
+kind = "sync"
+every = "6h"
+quiet = "ignore"
+timeout_s = 60
