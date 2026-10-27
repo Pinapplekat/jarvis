@@ -87,6 +87,17 @@ docs/briefs/  # one brief per milestone
 - Schema changes are numbered migration files in `jarvis/core/migrations/`, never edits to a live database
   by hand.
 
+## Devices
+
+- Apps with `runs_on = "node:<cap>"` run in the **node** process, a separate program that connects to the host's
+  WebSocket (`node_listen`, `127.0.0.1:8765` for now). Validation, confirmations, the action log, asks and undo
+  stay on the host; `core/dispatch.py` is the one place a handler is run, in-process or on a node.
+- The host never imports a node app's code, and the node never opens the host database or imports `core`.
+- Nodes pair with `jarvis node pair <name>`; the host stores only the SHA-256 of the key. The node keeps its own
+  folder, `FALAK_NODE_DIR` (default `~/Library/Application Support/Falak-node/`).
+- A manifest `[[sessions]]` entry (a live view) gives the model `_start`, `_look` and `_stop` tools. The host owns
+  the `sessions` table; the node owns the running capture and closes it when the host link drops.
+
 ## Workflow
 
 - Work happens on the `rehaul` branch in its own git worktree, outside the folder the live JARVIS deploys

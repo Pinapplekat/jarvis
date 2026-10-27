@@ -140,3 +140,23 @@ def test_node_run_without_a_key_explains(data_dir, tmp_path, monkeypatch, capsys
     monkeypatch.setenv("FALAK_NODE_DIR", str(tmp_path / "node"))
     assert cli.main(["node", "run"]) == 1
     assert "jarvis node pair" in capsys.readouterr().err
+
+
+def test_with_node_pairs_a_node_once_and_starts_it_as_a_child(data_dir, tmp_path, monkeypatch):
+    from jarvis import node_cli
+    from jarvis.core import db, nodes
+    from jarvis.core.settings import load_settings
+    from jarvis.node import config as nc
+
+    monkeypatch.setenv("FALAK_NODE_DIR", str(tmp_path / "node"))
+    started = []
+    monkeypatch.setattr(node_cli.subprocess, "Popen", lambda argv: started.append(argv) or object())
+    settings = load_settings()
+    node_cli.start_child(settings)
+    cfg = nc.load_config()
+    assert cfg.key and cfg.host_url == "ws://127.0.0.1:8765" and cfg.name == "mac"
+    assert started[0][-3:] == ["node", "run"] or started[0][-2:] == ["node", "run"]
+    conn = db.connect(settings)
+    assert conn.execute("SELECT key_hash FROM nodes").fetchone()[0] == nodes.hash_key(cfg.key)
+    node_cli.start_child(settings)  # the second run reuses the key instead of pairing again
+    assert nc.load_config().key == cfg.key and conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == 1
