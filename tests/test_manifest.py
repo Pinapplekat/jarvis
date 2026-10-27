@@ -61,6 +61,8 @@ BAD = [
     ("outbound without confirm", GOOD.replace('"read"', '"outbound"'), "need a 'confirm'"),
     ("irreversible without confirm", GOOD.replace('"read"', '"irreversible"'), "need a 'confirm'"),
     ("confirm on read", GOOD.replace('effect = "read"', 'effect = "read"\nconfirm = "Sure?"'), "only for outbound"),
+    ("sends_data without confirm", GOOD.replace('effect = "read"', 'effect = "read"\nsends_data = true'),
+     "actions that send data need a 'confirm'"),
     ("confirm field not property", GOOD.replace('"read"', '"outbound"\nconfirm = "Send to {who}?"'), "{who}"),
     ("handler missing", GOOD.replace('name = "go"', 'name = "go"\nhandler = "nope"'), "handler 'nope' not found"),
     ("schema keyword", GOOD.replace('additionalProperties = false', 'additionalProperties = false\npattern = "x"'),

@@ -1,0 +1,60 @@
+[app]
+name = "web"
+description = "Search the web and read pages, without logins, cookies or JavaScript."
+runs_on = "host"
+secrets = ["SEARCH_API_KEY", "SEARCH_ENGINE_ID"]
+
+[settings.provider]
+type = "string"
+enum = ["brave", "google"]
+default = "brave"
+description = "Which search API SEARCH_API_KEY is for. Google also needs SEARCH_ENGINE_ID (its cx)."
+
+[settings.daily_limit]
+type = "integer"
+minimum = 1
+maximum = 1000
+default = 40
+description = "Searches per day, to keep the free tier's quota safe."
+
+[settings.blocklist]
+type = "string"
+default = ""
+description = "Extra domains (comma-separated) that are never opened, on top of the banking and payment sites."
+
+[[actions]]
+name = "search"
+description = "Search the web. Returns titles, snippets and links. Use it for anything current or that you aren't sure of. The query leaves the Mac, so keep personal details out of it."
+effect = "read"
+untrusted_output = true
+sends_data = true
+confirm = "Search the web for \"{query}\"?"
+timeout_s = 20
+[actions.input]
+type = "object"
+required = ["query"]
+additionalProperties = false
+[actions.input.properties.query]
+type = "string"
+minLength = 1
+[actions.input.properties.n]
+type = "integer"
+minimum = 1
+maximum = 10
+default = 5
+
+[[actions]]
+name = "read_page"
+description = "Read a web page: its text and links. Pages that need JavaScript come back thin. Never banking or payment sites, or addresses on this Mac or its network."
+effect = "read"
+untrusted_output = true
+sends_data = true
+confirm = "Open {url}?"
+timeout_s = 30
+[actions.input]
+type = "object"
+required = ["url"]
+additionalProperties = false
+[actions.input.properties.url]
+type = "string"
+minLength = 1

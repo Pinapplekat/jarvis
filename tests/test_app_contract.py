@@ -91,7 +91,7 @@ def test_the_jobs_the_brief_asks_for_exist():
 def test_effects_confirm_and_undo(app):
     for a in app.manifest.actions:
         assert a.effect in ("read", "local", "outbound", "irreversible")
-        assert (a.confirm is not None) == (a.effect in ("outbound", "irreversible"))
+        assert (a.confirm is not None) == (a.effect in ("outbound", "irreversible") or a.sends_data)
         assert a.undo is None or a.effect == "local"
         if a.undo:
             fn = getattr(app.module, a.undo)

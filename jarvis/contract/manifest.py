@@ -201,11 +201,13 @@ def _action(path: Path, table: dict) -> ActionSpec:
         problems = ["input: must have type object"]
     if problems:
         raise ManifestError(path, f"{where}: {problems[0]}")
-    if effect in ("outbound", "irreversible"):
+    sends = table.get("sends_data", False)
+    if effect in ("outbound", "irreversible") or sends is True:
         if not isinstance(confirm, str) or not confirm.strip():
-            raise ManifestError(path, f"{where}: {effect} actions need a 'confirm' question")
+            need = f"{effect} actions" if effect in ("outbound", "irreversible") else "actions that send data"
+            raise ManifestError(path, f"{where}: {need} need a 'confirm' question")
     elif confirm is not None:
-        raise ManifestError(path, f"{where}: 'confirm' is only for outbound and irreversible actions")
+        raise ManifestError(path, f"{where}: 'confirm' is only for outbound, irreversible and sends_data actions")
     if confirm is not None:
         for _, field, _, _ in string.Formatter().parse(confirm):
             if field is not None and field not in schema.get("properties", {}):
