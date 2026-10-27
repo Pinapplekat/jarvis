@@ -152,7 +152,7 @@ Runner = Callable[..., agent.Outcome]
 class TaskRunner:
     """Runs queued tasks one at a time in a worker thread."""
 
-    def __init__(self, tasks: Tasks, folders: Callable[[], Folders], settings: Mapping[str, object],
+    def __init__(self, tasks: Tasks, folders: Callable[[], Folders], settings: Callable[[], Mapping[str, object]],
                  notify: Callable[[str], None], runner: Runner | None = None, hang_seconds: float = 300) -> None:
         self.tasks, self.folders, self.settings, self.notify = tasks, folders, settings, notify
         self.runner = runner or agent.run_session
@@ -200,8 +200,8 @@ class TaskRunner:
     # ---- one task -------------------------------------------------------------------------------------
 
     def run(self, task_id: int) -> None:
-        s = self.settings
         while True:
+            s = self.settings()  # read every pass: a reconnect may have brought new settings
             t = self.tasks.get(task_id)
             if not t or t["status"] != "running" or self._stop.is_set():
                 return  # stopped from elsewhere, or the node is shutting down (it resumes on the next start)

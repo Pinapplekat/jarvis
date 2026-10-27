@@ -32,8 +32,9 @@ def runtime(tmp_path, work, monkeypatch):
 def test_the_node_runs_the_apps_start_once_and_stop_when_it_closes(runtime):
     assert terminal._service is not None
     first = terminal._service
-    runtime.configure({"terminal": dict(runtime._apps["terminal"].ctx.settings)})  # the host link came back
-    assert terminal._service is first
+    ctx = runtime._apps["terminal"].ctx
+    runtime.configure({"terminal": {**ctx.settings, "max_runs": 2}})  # the host link came back, with a new setting
+    assert terminal._service is first and runtime._apps["terminal"].ctx is ctx and ctx.settings["max_runs"] == 2
     runtime.close()
     assert terminal._service is None
 

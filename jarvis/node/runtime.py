@@ -82,9 +82,12 @@ class NodeRuntime:
         for name, app in self._apps.items():
             if name in settings:
                 secrets = {k: self._secrets[k] for k in app.manifest.secrets if k in self._secrets}
-                app.ctx = AppContext(name, settings[name], secrets, None, self._tmp,
-                                     data_dir=self._node_dir / name)
-                app.ctx.notify_hook = self.notify
+                if app.ctx is not None:  # a reconnect: same context (a started app holds it), fresh settings
+                    app.ctx.settings, app.ctx.secrets = settings[name], secrets
+                else:
+                    app.ctx = AppContext(name, settings[name], secrets, None, self._tmp,
+                                         data_dir=self._node_dir / name)
+                    app.ctx.notify_hook = self.notify
                 if app.manifest.start and name not in self._started:
                     self._started.add(name)
                     getattr(app.module, app.manifest.start)(app.ctx)

@@ -10,7 +10,6 @@ the grade, and shell syntax is refused, never interpreted.
 from __future__ import annotations
 
 import os
-import re
 import shlex
 import shutil
 import sys
@@ -19,58 +18,14 @@ from pathlib import Path
 
 from jarvis.apps.terminal.folders import Folders, inside
 from jarvis.apps.terminal.sandbox import is_secret, is_secret_path
-
-SHELL_CHARS = set("|&;<>`$\n")  # there's no shell, so these could only mislead
-READERS = {"ls", "cat", "head", "tail", "wc", "grep", "file", "stat", "du", "cd", "diff", "realpath", "shasum", "tree",
-           "mdfind"}
-LOOKUPS = {"which", "pgrep", "ps", "pwd", "date", "whoami", "uname", "sw_vers", "echo"}  # no file arguments
-HELP_FLAGS = {"--help", "-h", "help", "--version", "-V", "version"}
-GIT_READ = {"status", "log", "diff", "show", "blame", "ls-files", "rev-parse", "shortlog", "describe", "rev-list",
-            "ls-tree", "show-ref"}
-GIT_WRITE = {"add", "commit", "checkout", "switch", "restore", "stash", "branch", "mv", "rm", "tag", "fetch", "pull",
-             "merge", "init"}
-GIT_BRANCH_LIST = {"-a", "-r", "-v", "-vv", "--list", "--show-current", "--all", "--remotes"}
-GIT_REFUSED = {"push", "reset", "clean", "rebase", "config", "remote", "filter-branch", "gc", "prune"}
-FILE_WRITERS = {"mkdir", "touch", "cp", "mv"}
-RUNNERS = {"python", "python3", "make"}
-UV_OK = {"sync", "add", "remove", "lock", "run", "tree"}
-NPM_OK = {"install", "ci", "test", "run"}
-CRITICAL = {"sudo", "su", "doas", "diskutil", "dd", "mkfs", "newfs_apfs", "fdisk", "shutdown", "reboot", "halt",
-            "launchctl", "csrutil", "spctl", "security", "tccutil", "nvram", "pmset", "systemsetup", "networksetup",
-            "dscl", "passwd", "mail", "sendmail", "chown", "kextload", "softwareupdate", "scutil"}
-BLOCKED_FLAGS = {
-    "git": ("--output", "--ext-diff", "--textconv", "--exec", "--upload-pack", "--receive-pack",
-            "--open-files-in-pager"),
-    "tail": ("-f", "-F", "--follow", "--retry"),
-    "grep": ("-f", "--file", "--exclude-from", "--include-from"),
-    "find": ("-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"),
-    "date": ("-s", "--set"),
-    "sed": ("-i", "-I", "--in-place"),
-    "pytest": ("-p", "-c", "--rootdir", "--basetemp", "--confcutdir", "--pdb", "--trace", "--pyargs",
-               "--override-ini", "-o"),
-}
-GREP_EXCLUDES = ["--exclude=.env*", "--exclude=*token*", "--exclude=*secret*", "--exclude=*.db",
-                 "--exclude=*credential*", "--exclude=id_rsa*", "--exclude=id_ed25519*", "--exclude=*.pem",
-                 "--exclude=*.key", "--exclude=*.keychain*", "--exclude-dir=.git", "--exclude-dir=.venv*",
-                 "--exclude-dir=__pycache__", "--exclude-dir=.ssh", "--exclude-dir=.gnupg", "--exclude-dir=.aws",
-                 "--exclude-dir=Keychains", "--exclude-dir=Cookies", "--exclude-dir=Messages",
-                 "--exclude-dir=browser-profile"]
-UV_VALUE_FLAGS = {"--extra", "--with", "--project", "--python", "--group", "--directory", "--package", "--env-file",
-                  "--with-requirements", "-p"}
-OPEN_FLAGS = {"-R", "-g", "-j", "-n", "-F"}
-OPEN_RISKY = {".app", ".command", ".sh", ".zsh", ".bash", ".terminal", ".tool", ".scpt", ".applescript", ".workflow",
-              ".pkg", ".dmg", ".jar", ".action", ".webloc", ".url", ".inetloc", ".osax", ".scptd"}
-LSOF_SIMPLE = {"-n", "-P", "-t", "-a", "-w", "-l", "-U"}
-LSOF_VALUED = {"-i", "-p", "-c", "-u", "-s"}
-PUBLISH = {("npm", "publish"), ("uv", "publish"), ("brew", "uninstall"), ("brew", "remove"), ("defaults", "write"),
-           ("defaults", "delete"), ("crontab", "-r"), ("crontab", "-e")}
-REACHES_OUT = {"ssh", "scp", "rsync", "sftp", "ftp", "gh", "twine", "nc", "telnet"}
-OSASCRIPT_DANGER = re.compile(
-    r"do shell script|keystroke|key code|\bMessages\b|\bMail\b|\bsend\b|delete|\bFinder\b|Terminal|"
-    r"System (?:Settings|Preferences|Events.+(?:shut down|restart|log out|sleep))|administrator|password|"
-    r"empty (?:the )?trash|\bmove\b|duplicate|make new|\bquit\b|run script|open location|URL|keychain|"
-    r"clipboard|the clipboard|set the clipboard", re.I)
-
+from jarvis.apps.terminal.tables import (
+    SHELL_CHARS, READERS, LOOKUPS, HELP_FLAGS,
+    GIT_READ, GIT_WRITE, GIT_BRANCH_LIST, GIT_REFUSED,
+    FILE_WRITERS, RUNNERS, UV_OK, NPM_OK,
+    CRITICAL, BLOCKED_FLAGS, GREP_EXCLUDES, UV_VALUE_FLAGS,
+    OPEN_FLAGS, OPEN_RISKY, LSOF_SIMPLE, LSOF_VALUED,
+    PUBLISH, REACHES_OUT, OSASCRIPT_DANGER,
+)
 
 @dataclass
 class Verdict:
@@ -190,113 +145,127 @@ def classify(command: object, cwd: Path, folders: Folders) -> Verdict:
 
 def _grade(argv: list[str], tool: str, args: list[str], where: Path, folders: Folders) -> Verdict:
     root = folders.writable_root(where)
-    away = ("a read-only folder" if folders.project_root(where) else "outside your work folders")
-    if root is not None:
-        medium = dict(sandboxed=True, risk="medium", sandbox="write", root=str(root))
+    away = "a read-only folder" if folders.project_root(where) else "outside your work folders"
 
     if tool in CRITICAL:
         return _approval("critical", f"{tool} changes the system, credentials or reaches other people", argv)
     if tool in ("rm", "chmod", "mv") and _flags(args) & {"r", "R", "--recursive"} and (
             root is None or any(not a.startswith("-") and not inside(full_path(a, where), root) for a in args)):
         return _approval("critical", f"recursive {tool} outside the project", argv)
-
     if len(args) in (1, 2) and args[-1] in HELP_FLAGS and all(not a.startswith("/") for a in args):
         if shutil.which(tool):  # an installed tool explaining itself, sandboxed
             return Verdict("auto", f"{tool} help/version", argv, risk="low")
-
     if tool == "git":
         return _git(argv, args, where, folders)
-
-    rest = (args if tool == "pytest" else argv[3:] if argv[:3] == ["uv", "run", "pytest"]
-            or (tool in ("python", "python3") and argv[1:3] == ["-m", "pytest"]) else None)
-    if rest is not None:
-        if (bad := _blocked_flag("pytest", rest)):
-            return _approval("high", f"pytest flag {bad} isn't allowed automatically", argv)
-        return Verdict("auto", "running the tests", [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *rest],
-                       risk="low")
-
     if tool == "open":
         return _open(argv, args, where)
-
-    if tool == "osascript":  # app scripting: a click can be fine; typing, sending, deleting never are
-        script = " ".join(a for a in args if a != "-e")
-        if any(not a.startswith("-") and Path(a).suffix in (".scpt", ".applescript", ".js") for a in args):
-            return _approval("critical", "runs a script file", argv)
-        if OSASCRIPT_DANGER.search(script):
-            return _approval("critical", "this script can type, send, delete or change settings", argv)
-        return _approval("high", "app scripting isn't allowed automatically", argv)
-
-    if tool == "screen" and args[:1] in (["-ls"], ["-list"]) and len(args) <= 2:  # just lists sessions
-        return Verdict("auto", "read-only screen listing", argv, risk="low")
-
     if tool == "lsof":
         return _lsof(argv, args)
+    if tool == "rm":
+        return _rm(argv, args, where, root, away)
+    if tool == "osascript":
+        return _osascript(argv, args)
+    for check in (_tests, _readers):
+        if (v := check(argv, tool, args)) is not None:
+            return v
+    if tool == "mkdir" and (v := _mkdir(argv, args, where, folders, root)) is not None:
+        return v
+    if tool in FILE_WRITERS:
+        if root is None or _outside(args, where, root):
+            return _approval("high", f"{tool} {away if root is None else 'outside the project'}", argv)
+        return Verdict("auto", f"{tool} inside the project", argv, sandboxed=True, risk="medium", sandbox="write",
+                       root=str(root))
+    if tool in ("uv", "npm", *RUNNERS):
+        return _project_tool(argv, tool, args, where, folders, root, away)
+    if tool in REACHES_OUT:
+        return _approval("high", "reaches other machines or people", argv)
+    if (tool, args[0] if args else "") in PUBLISH:
+        return _approval("high", f"{tool} {args[0]} publishes, uninstalls or changes system settings", argv)
+    return _approval("high", f"{tool} isn't known to be safe", argv)
 
+
+def _tests(argv: list[str], tool: str, args: list[str]) -> Verdict | None:
+    rest = (args if tool == "pytest" else argv[3:] if argv[:3] == ["uv", "run", "pytest"]
+            or (tool in ("python", "python3") and argv[1:3] == ["-m", "pytest"]) else None)
+    if rest is None:
+        return None
+    if (bad := _blocked_flag("pytest", rest)):
+        return _approval("high", f"pytest flag {bad} isn't allowed automatically", argv)
+    return Verdict("auto", "running the tests", [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *rest],
+                   risk="low")
+
+
+def _osascript(argv: list[str], args: list[str]) -> Verdict:
+    """App scripting: a click can be fine; typing, sending, deleting never are."""
+    script = " ".join(a for a in args if a != "-e")
+    if any(not a.startswith("-") and Path(a).suffix in (".scpt", ".applescript", ".js") for a in args):
+        return _approval("critical", "runs a script file", argv)
+    if OSASCRIPT_DANGER.search(script):
+        return _approval("critical", "this script can type, send, delete or change settings", argv)
+    return _approval("high", "app scripting isn't allowed automatically", argv)
+
+
+def _readers(argv: list[str], tool: str, args: list[str]) -> Verdict | None:
+    """The read-only tools, which run anywhere in the no-writes, no-network sandbox."""
+    if tool == "screen" and args[:1] in (["-ls"], ["-list"]) and len(args) <= 2:  # just lists sessions
+        return Verdict("auto", "read-only screen listing", argv, risk="low")
     if tool in LOOKUPS:
         if (bad := _blocked_flag(tool, args)):
             return _approval("high", f"{tool} {bad} isn't allowed automatically", argv)
         # ps is setuid, which the sandbox can't launch; it only reads the process list and takes no files.
         return Verdict("auto", f"read-only {tool}", argv, sandboxed=tool != "ps", risk="low",
                        sandbox="read" if tool != "ps" else "")
-
     if tool == "find":
         if (bad := _blocked_flag("find", args)):
             return _approval("high", f"find {bad} can change or run things", argv)
         return Verdict("auto", "read-only find", argv, risk="low")
-
     if tool == "sed" and "-n" in args:  # printing lines; -i would edit in place
         if (bad := _blocked_flag("sed", args)):
             return _approval("high", f"sed {bad} edits files", argv)
         return Verdict("auto", "read-only sed", argv, risk="low")
-
     if tool in READERS:
         if (bad := _blocked_flag(tool, args)):
             return _approval("high", f"{tool} {bad} isn't allowed automatically", argv)
         safe = [tool, *GREP_EXCLUDES, *args] if tool == "grep" else argv
         return Verdict("auto", f"read-only {tool}", safe, risk="low")
+    return None
 
-    if tool == "rm":
-        return _rm(argv, args, where, root, away)
 
-    if tool == "mkdir" and (root is None or _outside(args, where, root)):
-        # Making a folder can't hurt anything: fine anywhere in his home or temp (secrets were refused above).
-        targets = [full_path(a, where) for a in args if not a.startswith("-")]
-        places = [Path.home().resolve(), Path("/private/tmp"), Path("/private/var/folders")]
-        if targets and all(any(inside(t, p) for p in places) for t in targets) \
-                and not any(folders.is_read_only(t) for t in targets):
-            parent = Path(os.path.commonpath([str(t.parent) for t in targets]))
-            while not parent.exists() and parent != parent.parent:
-                parent = parent.parent
-            return Verdict("auto", "making a folder", argv, sandboxed=True, risk="medium", sandbox="write",
-                           root=str(parent))
+def _mkdir(argv: list[str], args: list[str], where: Path, folders: Folders, root: Path | None) -> Verdict | None:
+    """Making a folder can't hurt anything: fine anywhere in his home or temp (secrets were refused before), unless
+    it is a project's own mkdir, which is graded as project work."""
+    if root is not None and not _outside(args, where, root):
+        return None
+    targets = [full_path(a, where) for a in args if not a.startswith("-")]
+    places = [Path.home().resolve(), Path("/private/tmp"), Path("/private/var/folders")]
+    if not targets or not all(any(inside(t, p) for p in places) for t in targets) \
+            or any(folders.is_read_only(t) for t in targets):
+        return None
+    parent = Path(os.path.commonpath([str(t.parent) for t in targets]))
+    while not parent.exists() and parent != parent.parent:
+        parent = parent.parent
+    return Verdict("auto", "making a folder", argv, sandboxed=True, risk="medium", sandbox="write", root=str(parent))
 
-    if tool in FILE_WRITERS:
-        if root is None or _outside(args, where, root):
-            return _approval("high", f"{tool} {away if root is None else 'outside the project'}", argv)
-        return Verdict("auto", f"{tool} inside the project", argv, **medium)
 
-    if tool in ("uv", "npm", *RUNNERS):
-        if root is None:
-            return _approval("high", f"{tool} {away}", argv)
-        sub = args[0] if args else ""
-        if tool == "uv" and sub == "run":
-            inner = _uv_inner(args)
-            if inner and inner[0] not in ("python", "python3", "pytest", "jarvis", "ruff", "mypy") \
-                    and not (where / inner[0]).is_file():
-                return _grade(inner, Path(inner[0]).name, inner[1:], where, folders)  # judged like what it runs
-        elif tool == "uv" and sub not in UV_OK:
-            return _approval("high", f"uv {sub} isn't known to be safe", argv)
-        if tool == "npm" and sub not in NPM_OK:
-            return _approval("high", f"npm {sub} isn't known to be safe", argv)
-        if tool in ("python", "python3") and (why := _outside([a for a in args[:1] if not a.startswith("-")], where, root)):
-            return _approval("high", f"runs {why}, outside the project", argv)
-        return Verdict("auto", f"{tool} in the project (writes stay inside it)", argv, **medium)
-
-    if tool in REACHES_OUT:
-        return _approval("high", "reaches other machines or people", argv)
-    if (tool, args[0] if args else "") in PUBLISH:
-        return _approval("high", f"{tool} {args[0]} publishes, uninstalls or changes system settings", argv)
-    return _approval("high", f"{tool} isn't known to be safe", argv)
+def _project_tool(argv: list[str], tool: str, args: list[str], where: Path, folders: Folders, root: Path | None,
+                  away: str) -> Verdict:
+    """uv, npm, python and make: ordinary project work, writing only inside the project."""
+    if root is None:
+        return _approval("high", f"{tool} {away}", argv)
+    sub = args[0] if args else ""
+    if tool == "uv" and sub == "run":
+        inner = _uv_inner(args)
+        if inner and inner[0] not in ("python", "python3", "pytest", "jarvis", "ruff", "mypy") \
+                and not (where / inner[0]).is_file():
+            return _grade(inner, Path(inner[0]).name, inner[1:], where, folders)  # judged like what it runs
+    elif tool == "uv" and sub not in UV_OK:
+        return _approval("high", f"uv {sub} isn't known to be safe", argv)
+    if tool == "npm" and sub not in NPM_OK:
+        return _approval("high", f"npm {sub} isn't known to be safe", argv)
+    if tool in ("python", "python3") and (why := _outside([a for a in args[:1] if not a.startswith("-")], where, root)):
+        return _approval("high", f"runs {why}, outside the project", argv)
+    return Verdict("auto", f"{tool} in the project (writes stay inside it)", argv, sandboxed=True, risk="medium",
+                   sandbox="write", root=str(root))
 
 
 def _git(argv: list[str], args: list[str], where: Path, folders: Folders) -> Verdict:
@@ -320,7 +289,8 @@ def _git(argv: list[str], args: list[str], where: Path, folders: Folders) -> Ver
                or sub == "tag" and rest[1:] in ([], ["-l"], ["--list"]) or sub == "stash" and rest[1:] == ["list"])
     if sub in GIT_READ or listing:
         extra = ["--no-ext-diff", "--no-textconv"] if sub in ("diff", "log", "show") else []
-        safe = ["git", "--no-optional-locks", "-c", "core.pager=cat", "-c", "color.ui=false", *prefix, sub, *extra,
+        safe = ["git", "--no-optional-locks", "-c", "core.pager=cat", "-c", "color.ui=false",
+                "-c", "core.fsmonitor=false", *prefix, sub, *extra,
                 *rest[1:]]
         return Verdict("auto", f"read-only git {sub}", safe, risk="low")
     if sub == "push" or (sub == "branch" and _flags(rest[1:]) & {"D", "--force"}):

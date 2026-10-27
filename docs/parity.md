@@ -49,7 +49,7 @@ changing `[ ]` to `[x]` here.
 |---|---|---|---|
 | Desk voice | `voice.py`, `ears.py`, `warm.py`, "Hey JARVIS" | **M9**: wake word, Whisper, Kokoro, Discord voice calls | none yet |
 | HUD, panel, menubar | `hud.py`, `panel.py`, `menubar.py` | **M10**: old UI reading from the new host. UI overhaul is **later** | none yet |
-| Location | Telegram location intake, `location.py`, 12 places | **iPhone app**: location arrives with the app, not through Telegram | none yet |
+| Location | Telegram location intake, `location.py`, 8 places | **iPhone app**: location arrives with the app, not through Telegram | none yet |
 | Terminal sense | a zsh hook logged every command (86 observations) | **later**: nothing in Falak reads a timeline yet | none yet |
 | Git sense | `repos.py` noticed commits and branch switches (31 observations) | **later**: same, no timeline yet. `find_repos` and `repo_state` exist for projects | none yet |
 | Self-edit | `selfedit.py`, approved plans built on branches (65 so far) | **later**: tasks never edit Falak's own code or data (`read_only` folders). Comes back with prod mode, see `PLAN.md` | none |

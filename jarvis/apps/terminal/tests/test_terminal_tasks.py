@@ -65,7 +65,7 @@ def runner_for(tmp_path, folders):
     def make(**settings):
         said_to_elijah = []
         tasks = Tasks(tmp_path / "tasks")
-        return TaskRunner(tasks, lambda: folders, {**SETTINGS, **settings}, said_to_elijah.append,
+        return TaskRunner(tasks, lambda: folders, lambda: {**SETTINGS, **settings}, said_to_elijah.append,
                           hang_seconds=5), tasks, said_to_elijah
     return make
 

@@ -27,8 +27,8 @@ class Service:
 
     def __init__(self, ctx: AppContext) -> None:
         self.watcher = Watcher(_jobs(ctx), ctx.notify, lambda: ctx.settings["job_stall_minutes"])
-        self.worker = TaskRunner(_task_store(ctx), lambda: Folders.from_settings(ctx.settings), ctx.settings,
-                                 ctx.notify)
+        self.worker = TaskRunner(_task_store(ctx), lambda: Folders.from_settings(ctx.settings),
+                                 lambda: ctx.settings, ctx.notify)
 
 
 def start(ctx: AppContext) -> None:
@@ -65,7 +65,7 @@ def _folder(text: str, folders: Folders) -> Path:
     raw = os.path.expanduser(text.strip())
     path = Path(raw)
     if not path.is_absolute():
-        path = next((root / raw for root in folders.work_roots if (root / raw).is_dir()), Path.cwd() / raw)
+        path = next((root / raw for root in folders.work_roots if (root / raw).is_dir()), Path.home() / raw)
     path = path.resolve()
     if not path.is_dir():
         raise ActionError(f"There is no folder {text}.")
