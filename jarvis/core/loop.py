@@ -11,9 +11,10 @@ from datetime import datetime, timezone
 
 from jarvis.core import context, conversation
 from jarvis.core.actions import Origin
+from jarvis.core.api import Attachment
 from jarvis.core.apps import Registry
 from jarvis.core.brain import Brain, BrainResult
-from jarvis.core.tools import TurnState, build_tools, latest_ask_id
+from jarvis.core.tools import TurnState, build_tools, latest_ask_id, new_pending_asks
 
 log = logging.getLogger("jarvis.core.loop")
 
@@ -24,6 +25,8 @@ class Reply:
     tools: tuple[str, ...]
     error: str | None
     turn_id: int
+    ms: int = 0
+    new_asks: tuple[int, ...] = ()  # asks this turn created that are still pending
 
 
 def _fallback(error: str, tools: list[str]) -> str:
@@ -52,14 +55,23 @@ def _record_turn(reg: Registry, channel: str, ms: int, result: BrainResult, tool
     ).lastrowid
 
 
-async def handle_message(reg: Registry, brain: Brain, text: str, origin: Origin, now: datetime | None = None) -> Reply:
+async def handle_message(reg: Registry, brain: Brain, text: str, origin: Origin, now: datetime | None = None, *,
+                         own_channels: frozenset[str] = frozenset({"cli"}),
+                         attachments: tuple[Attachment, ...] = ()) -> Reply:
+    """Run one turn. The files in `attachments` are deleted when it ends, whether or not they were viewed."""
     started = time.monotonic()
-    message_id = conversation.add(reg.conn, "user", text, now)
-    turn = TurnState(origin, latest_ask_id(reg))
-    prompt = context.build_prompt(reg, text, origin.channel, message_id, now)
-    result = await _think(brain, reg, turn, context.system_prompt(reg.settings.assistant_name), prompt)
-    error = result.error or (None if result.text.strip() else "the model said nothing")
-    reply = _fallback(error, turn.tools_used) if error else result.text.strip()
-    conversation.add(reg.conn, "assistant", reply, now)
-    turn_id = _record_turn(reg, origin.channel, int((time.monotonic() - started) * 1000), result, turn.tools_used, error)
-    return Reply(reply, tuple(turn.tools_used), error, turn_id)
+    try:
+        message_id = conversation.add(reg.conn, "user", text, now)
+        turn = TurnState(origin, latest_ask_id(reg), own_channels, attachments)
+        images = sum(a.kind == "image" for a in attachments)
+        prompt = context.build_prompt(reg, text, origin.channel, message_id, now, images)
+        result = await _think(brain, reg, turn, context.system_prompt(reg.settings.assistant_name), prompt)
+        error = result.error or (None if result.text.strip() else "the model said nothing")
+        reply = _fallback(error, turn.tools_used) if error else result.text.strip()
+        conversation.add(reg.conn, "assistant", reply, now)
+        ms = int((time.monotonic() - started) * 1000)
+        turn_id = _record_turn(reg, origin.channel, ms, result, turn.tools_used, error)
+        return Reply(reply, tuple(turn.tools_used), error, turn_id, ms, new_pending_asks(reg, turn))
+    finally:
+        for att in attachments:
+            att.path.unlink(missing_ok=True)

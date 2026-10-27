@@ -57,7 +57,8 @@ def app_blocks(reg: Registry) -> list[str]:
     return blocks
 
 
-def build_prompt(reg: Registry, text: str, channel: str, message_id: int, now: datetime | None = None) -> str:
+def build_prompt(reg: Registry, text: str, channel: str, message_id: int, now: datetime | None = None,
+                 images: int = 0) -> str:
     now = (now or datetime.now(timezone.utc)).astimezone()
     lines = ["[Context from Falak, not Elijah's words]",
              f"It is {now.strftime('%A %Y-%m-%d %H:%M %Z')}. Channel: {channel}."]
@@ -74,5 +75,8 @@ def build_prompt(reg: Registry, text: str, channel: str, message_id: int, now: d
         lines.append("Last actions:")
         lines += [f"  #{r['id']} {r['tool']} {r['status']} {_ago(r['time'], now)}" for r in log_rows]
     lines += app_blocks(reg)
+    if images:
+        lines.append(f"Elijah attached {images} image{'s' if images > 1 else ''}; "
+                     "look at one with falak__view_attachment(n), counting from 1.")
     lines += ["[End of context]", "", "Elijah says:", text]
     return "\n".join(lines)

@@ -24,6 +24,7 @@ class Settings:
     max_turns: int = 12  # model/tool round trips allowed in one turn
     turn_timeout_seconds: int = 120
     apps: dict[str, dict] = field(default_factory=dict)  # per-app sections; used from M2
+    channels: dict[str, dict] = field(default_factory=dict)  # per-channel sections; each channel checks its own keys
 
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
@@ -42,8 +43,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         raise SettingsError(
             f"{path}: unknown setting(s): {', '.join(unknown)} (known: {', '.join(sorted(allowed))})"
         )
-    if not isinstance(values.get("apps", {}), dict):
-        raise SettingsError(f"{path}: 'apps' must be a table of [apps.<name>] sections")
+    for table in ("apps", "channels"):
+        if not isinstance(values.get(table, {}), dict) or not all(isinstance(v, dict) for v in values.get(table, {}).values()):
+            raise SettingsError(f"{path}: '{table}' must be a table of [{table}.<name>] sections")
     for key in ("assistant_name", "log_level", "model"):
         if key in values and not (isinstance(values[key], str) and values[key].strip()):
             raise SettingsError(f"{path}: '{key}' must be text")

@@ -143,8 +143,11 @@ def settings_for_missing_apps(settings: Settings, apps_dir: Path = DEFAULT_APPS_
     return sorted(name for name in settings.apps if name not in installed)
 
 
-def load_apps(settings: Settings, apps_dir: Path = DEFAULT_APPS_DIR) -> Registry:
-    """Load every enabled app under `apps_dir`: validate, import, migrate. Raises ManifestError/SettingsError."""
+def load_apps(settings: Settings, apps_dir: Path = DEFAULT_APPS_DIR, extra_dirs: tuple[Path, ...] = ()) -> Registry:
+    """Load every enabled app under `apps_dir` (and `extra_dirs`): validate, import, migrate.
+
+    Raises ManifestError/SettingsError.
+    """
     apps_dir = Path(apps_dir)
     conn = db.connect(settings)
     try:
@@ -153,12 +156,12 @@ def load_apps(settings: Settings, apps_dir: Path = DEFAULT_APPS_DIR) -> Registry
             log.warning("settings.toml has [apps.%s] but no app named %s", name, name)
         secrets = load_secrets(settings.data_dir)
         loaded: dict[str, LoadedApp] = {}
-        for path in sorted(apps_dir.glob("*/manifest.toml")):
+        for path in sorted(p for d in (apps_dir, *map(Path, extra_dirs)) for p in d.glob("*/manifest.toml")):
             manifest = load_manifest(path)
             app_settings = _app_settings(settings, manifest)
             if settings.apps.get(manifest.name, {}).get("enabled", True) is False:
                 continue
-            module = _import_actions(apps_dir, manifest.name)
+            module = _import_actions(path.parent.parent, manifest.name)
             _check_handlers(manifest, module)
             migrations = path.parent / "migrations"
             if migrations.is_dir():
