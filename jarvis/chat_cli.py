@@ -52,6 +52,12 @@ def chat(settings: Settings, brain: Brain | None = None) -> int:
     return 0
 
 
+def jobs_run(settings: Settings, target: str, force: bool, brain: Brain | None = None) -> int:
+    from jarvis import jobs_cli
+
+    return jobs_cli.run_job(settings, target, force, brain or _brain(settings))
+
+
 def turns(settings: Settings, n: int) -> int:
     reg = load_apps(settings)
     try:

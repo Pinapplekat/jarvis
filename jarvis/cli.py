@@ -8,12 +8,17 @@ import sys
 from pathlib import Path
 
 from jarvis import __version__
-from jarvis.core import actions, db
+from jarvis.contract.loader import DEFAULT_APPS_DIR, manifest_paths
+from jarvis.contract.manifest import ManifestError, load_manifest
+from jarvis.core import actions, db, outbox
 from jarvis.core.apps import Registry, load_apps, settings_for_missing_apps
-from jarvis.contract.manifest import ManifestError
 from jarvis.core.log import setup_logging
 from jarvis.contract.envfile import load_secrets
 from jarvis.core.settings import Settings, SettingsError, load_settings
+
+
+def _job_count() -> int:
+    return sum(len(load_manifest(p).jobs) for p in manifest_paths(DEFAULT_APPS_DIR))
 
 
 def _info(settings: Settings) -> int:
@@ -21,6 +26,7 @@ def _info(settings: Settings) -> int:
     try:
         versions = db.applied_versions(conn)
         connected = conn.execute("SELECT COUNT(*) FROM nodes WHERE connected_at IS NOT NULL").fetchone()[0]
+        unsent = outbox.unsent_count(conn)
     finally:
         conn.close()
     print(f"data folder: {settings.data_dir}")
@@ -30,6 +36,7 @@ def _info(settings: Settings) -> int:
     print(f"log:         {settings.data_dir / 'logs' / 'falak.log'}")
     print(f"secret keys: {sorted(load_secrets(settings.data_dir)) or 'none'}")
     print(f"nodes:       {connected} connected")
+    print(f"jobs:        {_job_count()} (unsent outbox messages: {unsent})")
     print(f"settings for missing apps: {settings_for_missing_apps(settings) or 'none'}")
     return 0
 
@@ -131,6 +138,12 @@ def build_parser(name: str) -> argparse.ArgumentParser:
     serve.add_argument("--with-fixtures", action="store_true", help="also load the test fixture apps (dev only)")
     sub.add_parser("ask", help="send one message and print the reply").add_argument("message")
     sub.add_parser("turns", help="recent turns: timing and tools used").add_argument("-n", type=int, default=20)
+    jobs = sub.add_parser("jobs", help="the apps' scheduled jobs: last and next run")
+    jobs_sub = jobs.add_subparsers(dest="jobs_command")
+    jobs_run = jobs_sub.add_parser("run", help="run one job now, as <app>.<job>")
+    jobs_run.add_argument("target")
+    jobs_run.add_argument("--force", action="store_true", help="run even in quiet hours")
+    sub.add_parser("outbox", help="messages Falak has sent or is waiting to send").add_argument("-n", type=int, default=20)
     return parser
 
 
@@ -151,13 +164,20 @@ def main(argv: list[str] | None = None) -> int:
         from jarvis import node_cli
 
         return node_cli.command(settings, args)
-    if args.group in ("apps", "run", "asks", "yes", "no", "undo", "log", "chat", "ask", "turns", "serve"):
+    if args.group in ("apps", "run", "asks", "yes", "no", "undo", "log", "chat", "ask", "turns", "serve", "jobs",
+                      "outbox"):
         try:
-            if args.group in ("chat", "ask", "turns", "serve"):
+            if args.group == "outbox" or (args.group == "jobs" and not args.jobs_command):
+                from jarvis import jobs_cli
+
+                return jobs_cli.show_outbox(settings, args.n) if args.group == "outbox" else jobs_cli.list_jobs(settings)
+            if args.group in ("chat", "ask", "turns", "serve", "jobs"):
                 from jarvis import chat_cli  # loads the SDK, which the other commands don't need
 
                 if args.group == "serve":
                     return chat_cli.serve(settings, args.with_fixtures, args.with_node)
+                if args.group == "jobs":
+                    return chat_cli.jobs_run(settings, args.target, args.force)
                 if args.group == "chat":
                     return chat_cli.chat(settings)
                 if args.group == "ask":

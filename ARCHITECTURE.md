@@ -98,6 +98,19 @@ docs/briefs/  # one brief per milestone
 - A manifest `[[sessions]]` entry (a live view) gives the model `_start`, `_look` and `_stop` tools. The host owns
   the `sessions` table; the node owns the running capture and closes it when the host link drops.
 
+## Jobs and the outbox
+
+- An app's `[[jobs]]` are scheduled work that runs inside `jarvis serve` (host apps only). `core/scheduler.py` is the
+  one scheduler: it replaces the old 5-minute tick, and nothing else should loop on a timer.
+- A handler is `handler(ctx, run: JobRun) -> JobResult`. It runs in a worker thread with its own SQLite connection,
+  never the shared one. It can ask to run sooner (`JobResult.wake_at`, `ctx.wake("<job>")`) and can ask for a
+  **thinking turn** (`JobResult.think`): the same agent loop as a chat turn, with the origin `job:<app>.<job>`, so
+  `answer_ask` refuses there. Thinking turns wait behind chat and count against `thinking_runs_per_day`.
+- Everything Falak says first is a row in the `outbox` table (`Host.notify`). One sender task delivers it through
+  `notify_channel`, keeps failures and retries, and adds each sent message to the conversation. Nothing is dropped.
+- The scheduler's state lives in the `jobs` and `job_runs` tables, so a restart neither repeats nor forgets a run.
+  Quiet hours, the timezone and the catch-up window are core settings (`quiet_hours`, `timezone`, `catch_up_minutes`).
+
 ## Workflow
 
 - Work happens on the `rehaul` branch in its own git worktree, outside the folder the live JARVIS deploys
