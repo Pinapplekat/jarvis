@@ -31,6 +31,7 @@ class NodeRuntime:
     def __init__(self, node_dir: Path, tmp_dir: Path, apps_dir: Path = DEFAULT_APPS_DIR,
                  extra_dirs: tuple[Path, ...] = ()) -> None:
         self._tmp, self._secrets = tmp_dir, load_secrets(node_dir)
+        self._clear_tmp()
         self._apps: dict[str, _App] = {}
         self._live: list[tuple[str, str, dict]] = []  # (app, stop handler, state) of sessions started here
         self._live_lock = threading.Lock()
@@ -45,6 +46,19 @@ class NodeRuntime:
                 log.error("skipping %s: %s", path.parent.name, e)
                 continue
             self._apps[manifest.name] = _App(manifest, module, threading.Lock())
+
+    def _clear_tmp(self) -> None:
+        """Nothing is live before the runtime exists, so anything in tmp is left over from a crash or a kill:
+        photos and frames of Elijah's camera and screen. They go."""
+        if not self._tmp.is_dir():
+            return
+        removed = 0
+        for f in self._tmp.iterdir():
+            if f.is_file():
+                f.unlink(missing_ok=True)
+                removed += 1
+        if removed:
+            log.info("removed %d leftover file(s) from %s", removed, self._tmp)
 
     @property
     def apps(self) -> list[str]:

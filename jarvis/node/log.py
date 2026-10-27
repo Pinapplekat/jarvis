@@ -8,12 +8,12 @@ from logging.handlers import RotatingFileHandler
 from jarvis.contract.logfmt import JsonFormatter
 from jarvis.node.config import NodeConfig
 
-_MARK = "_falak_node"
-
-
 def setup_logging(config: NodeConfig, level: str = "INFO") -> None:
+    """The node process owns its logging: it drops every handler set up before it, such as the host's, which
+    `jarvis node run` gets from the CLI's common startup. Otherwise each line prints twice and lands in the
+    host's log too."""
     root = logging.getLogger()
-    for h in [h for h in root.handlers if getattr(h, _MARK, False)]:
+    for h in list(root.handlers):
         root.removeHandler(h)
         h.close()
     config.log_dir.mkdir(parents=True, exist_ok=True)
@@ -22,6 +22,5 @@ def setup_logging(config: NodeConfig, level: str = "INFO") -> None:
     stderr = logging.StreamHandler()
     stderr.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     for h in (file_handler, stderr):
-        setattr(h, _MARK, True)
         root.addHandler(h)
     root.setLevel(level)
