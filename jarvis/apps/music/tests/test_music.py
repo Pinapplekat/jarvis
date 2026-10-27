@@ -37,7 +37,8 @@ TOKEN = {("POST", spotify.TOKEN_URL): (200, {"access_token": "at1", "expires_in"
 DEVICES = {("GET", spotify.DEVICES_URL): (200, {"devices": [{"id": "d2", "name": "Phone"},
                                                             {"id": "d1", "name": "MacBook", "is_active": True}]})}
 SEARCH = {("GET", spotify.SEARCH_URL): (200, {
-    "tracks": {"items": [{"uri": "spotify:track:" + "a" * 22, "name": "Redbone", "artists": [{"name": "Childish Gambino"}]}]},
+    "tracks": {"items": [{"uri": "spotify:track:" + "a" * 22, "name": "Redbone", "artists": [{"name": "Childish Gambino"}],
+                          "album": {"uri": "spotify:album:" + "e" * 22}}]},
     "artists": {"items": [{"uri": "spotify:artist:" + "b" * 22, "name": "Redbones"}]},
     "playlists": {"items": []}})}
 
@@ -99,7 +100,8 @@ def test_play_picks_the_exact_song_and_starts_it_on_the_active_device(make_ctx, 
     out = music.play(ctx(make_ctx), "redbone")
     assert out.text == "Playing Redbone by Childish Gambino on Spotify."
     put = next(c for c in fake.calls if c[0] == "PUT" and c[1] == spotify.PLAY_URL)
-    assert put[2] == {"device_id": "d1"} and put[4] == {"uris": ["spotify:track:" + "a" * 22]}
+    assert put[2] == {"device_id": "d1"}
+    assert put[4] == {"context_uri": "spotify:album:" + "e" * 22, "offset": {"uri": "spotify:track:" + "a" * 22}}
     assert fake.calls[1][5]["Authorization"] == "Bearer at1"
 
 
@@ -226,6 +228,7 @@ def test_a_song_that_never_starts_is_not_reported_and_music_takes_over(make_ctx,
     assert out.text == ("Playing Redbone by Childish Gambino in Music (Spotify: Spotify took the command for "
                         "Redbone by Childish Gambino but nothing started playing).")
     assert any(c[1].endswith("/pause") for c in fake.calls)  # a late start can't play over Music
+    assert apps["scripts"][0][1] == ("Redbone Childish Gambino",)  # Music looks for the song Spotify found
 
 
 def test_a_regional_copy_of_the_song_counts_by_name(make_ctx, sp, apps):
@@ -243,3 +246,14 @@ def test_an_artist_counts_once_something_new_plays(make_ctx, sp, apps):
              ("GET", spotify.PLAYER_URL): [IDLE, ON_REDBONE]})
     out = music.play(ctx(make_ctx), "Redbones")
     assert out.text == "Playing the artist Redbones, starting with Redbone by Childish Gambino on Spotify."
+
+
+def test_a_song_without_an_album_link_is_sent_on_its_own(make_ctx, sp, apps):
+    install, _ = sp
+    lone = {("GET", spotify.SEARCH_URL): (200, {"tracks": {"items": [
+        {"uri": REDBONE, "name": "Redbone", "artists": [{"name": "Childish Gambino"}]}]}})}
+    fake = install({**TOKEN, **DEVICES, **lone, ("PUT", spotify.PLAY_URL): (204, {}),
+                    ("GET", spotify.PLAYER_URL): [IDLE, ON_REDBONE]})
+    music.play(ctx(make_ctx), "redbone", "song")
+    put = next(c for c in fake.calls if c[0] == "PUT" and c[1] == spotify.PLAY_URL)
+    assert put[4] == {"uris": [REDBONE]}

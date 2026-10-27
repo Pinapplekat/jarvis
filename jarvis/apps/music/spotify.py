@@ -43,6 +43,14 @@ class NoMatch(SpotifyError):
     pass
 
 
+class NotStarted(SpotifyError):
+    """Spotify accepted the play command but nothing started. `song`/`artist` say what it had found."""
+
+    def __init__(self, message: str, song: str = "", artist: str = "") -> None:
+        super().__init__(message)
+        self.song, self.artist = song, artist
+
+
 class Restricted(SpotifyError):
     """Spotify won't do it right now (already paused, nothing to skip to)."""
 
@@ -193,7 +201,8 @@ class Account:
         """Starts the best match on his active device (or the first open one). Returns what is really playing.
         Spotify answers 204 even when nothing starts (a track it can't play here), so it's only reported once
         the player says so; otherwise it's paused and SpotifyError says what happened."""
-        uri, what = best(self.search(query, kind), query, kind)
+        results = self.search(query, kind)
+        uri, what = best(results, query, kind)
         if not URI.fullmatch(uri):
             raise SpotifyError(f"Spotify returned an odd link ({uri[:60]!r})")
         devices = self._devices()
@@ -201,7 +210,12 @@ class Account:
             raise SpotifyError(NO_DEVICE)
         device = next((d for d in devices if d.get("is_active")), devices[0])
         before = self.now_playing()
-        body = {"uris": [uri]} if uri.startswith("spotify:track:") else {"context_uri": uri}
+        body = {"context_uri": uri}
+        if uri.startswith("spotify:track:"):
+            # A lone track sent as {"uris": [...]} gets a 204 and never starts on Elijah's Mac (seen on Discord,
+            # Oct 27); artists and playlists, sent as a context, do. So a song starts as its album, at that song.
+            album = _album_of(results, uri)
+            body = {"context_uri": album, "offset": {"uri": uri}} if album else {"uris": [uri]}
         self.call("PUT", PLAY_URL, params={"device_id": device["id"]}, body=body)
         playing = self._started(uri, what, before)
         if playing:
@@ -210,7 +224,8 @@ class Account:
             self.player("PUT", "/pause")  # so a late start can't play over the Music backup
         except SpotifyError:
             pass
-        raise SpotifyError(f"Spotify took the command for {what} but nothing started playing")
+        song, artist = _track_names(results, uri)
+        raise NotStarted(f"Spotify took the command for {what} but nothing started playing", song, artist)
 
     def _started(self, uri: str, what: str, before: dict | None) -> str:
         """'Song by Artist' once the player is really playing what was asked: that song (by link, or by name when
@@ -327,6 +342,21 @@ def best(results: dict, query: str, kind: str = "any") -> tuple[str, str]:
         if found[t]:
             return found[t][0]["uri"], label(t, found[t][0])
     raise NoMatch(f"Spotify found nothing for {query!r}")
+
+
+def _track_names(results: dict, uri: str) -> tuple[str, str]:
+    for item in (results.get("tracks") or {}).get("items") or []:
+        if item and item.get("uri") == uri:
+            return str(item.get("name") or ""), str(((item.get("artists") or [{}])[0] or {}).get("name") or "")
+    return "", ""
+
+
+def _album_of(results: dict, track_uri: str) -> str | None:
+    for item in (results.get("tracks") or {}).get("items") or []:
+        if item and item.get("uri") == track_uri:
+            album = str((item.get("album") or {}).get("uri") or "")
+            return album if URI.fullmatch(album) and album.startswith("spotify:album:") else None
+    return None
 
 
 def describe(item: dict | None) -> str:

@@ -193,18 +193,22 @@ def media_control(ctx: AppContext, op: str, value) -> str:
 def play(ctx: AppContext, query: str, kind: str = "any") -> Result:
     """Spotify first; Apple Music when Spotify isn't set up, fails or has no match."""
     query = " ".join(query.split())
-    acct, why = _account(ctx), ""
+    acct, why, backup = _account(ctx), "", query
     if acct.configured():
         try:
             return Result(f"Playing {acct.play(query, kind)} on Spotify.")  # what the player says is on
         except spotify.NoMatch:
             why = "Spotify found nothing"
+        except spotify.NotStarted as e:
+            why = f"Spotify: {e}"
+            if e.song:  # Spotify already knew which song he meant: "Redbone" alone finds the band Redbone in Music
+                backup = f"{e.song} {e.artist}".strip()
         except spotify.SpotifyError as e:
             why = f"Spotify: {e}"
     else:
         why = "Spotify isn't set up"
     try:
-        return Result(f"Playing {applemusic.play(query)} in Music ({why}).")
+        return Result(f"Playing {applemusic.play(backup)} in Music ({why}).")
     except applemusic.AppleMusicError as e:
         raise ActionError(f"I couldn't play '{query}'. {why[:1].upper()}{why[1:]}, and Music: {e}.") from None
 
