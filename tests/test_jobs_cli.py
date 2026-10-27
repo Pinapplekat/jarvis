@@ -22,7 +22,7 @@ def run(settings, target, brain=None, force=False):
 def test_jobs_lists_every_job_with_its_trigger(data_dir, capsys):
     assert cli.main(["jobs"]) == 0
     out = capsys.readouterr().out.splitlines()
-    assert len(out) == 6
+    assert len(out) == 7
     by_name = {line.split()[0]: line for line in out}
     assert "every 15m" in by_name["reminders.deliver"] and "every 2h" in by_name["school.sync"]
     assert "at 02:00" in by_name["journal.write"] and "at 07:00" in by_name["checkins.morning"]
@@ -100,4 +100,4 @@ def test_dev_info_shows_the_job_count_and_unsent_messages(data_dir, capsys):
     outbox.add(conn, "hello", "t")
     conn.close()
     cli.main(["dev", "info"])
-    assert "jobs:        6 (unsent outbox messages: 1)" in capsys.readouterr().out
+    assert "jobs:        7 (unsent outbox messages: 1)" in capsys.readouterr().out

@@ -80,7 +80,7 @@ def test_the_jobs_the_brief_asks_for_exist():
     jobs = {(m.name, j.name): j for m in (load_manifest(DEFAULT_APPS_DIR / a / "manifest.toml") for a in APPS)
             for j in m.jobs}
     assert set(jobs) == {("reminders", "deliver"), ("school", "sync"), ("school", "nudge"),
-                         ("checkins", "morning"), ("checkins", "evening"), ("journal", "write")}
+                         ("checkins", "morning"), ("checkins", "evening"), ("journal", "write"), ("projects", "sync")}
     assert jobs[("reminders", "deliver")].quiet == "ignore" and jobs[("school", "nudge")].quiet == "hold"
     assert jobs[("school", "sync")].needs == ("network",) and jobs[("school", "sync")].every == 7200
     assert jobs[("checkins", "morning")].quiet == "skip" and jobs[("journal", "write")].at == ("02:00",)
