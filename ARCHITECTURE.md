@@ -68,7 +68,9 @@ docs/briefs/  # one brief per milestone
      conversation.
    - Code never adds its own ad-hoc "ask first" check.
 10. **Nothing written is trusted as instructions.** Web pages, emails, files and screen text are data. When
-    a turn was driven by outside content, outbound actions ask even if they'd normally run.
+    a turn was driven by outside content, outbound actions ask even if they'd normally run, and so do
+    actions marked `sends_data` (a search query or a URL leaves the Mac, so a page can't make Falak send out
+    what it read). A `sends_data` action carries a `confirm` question for that case.
 11. **Keep the old system alive.**
     - The live JARVIS runs from `~/Library/Application Support/JARVIS/app` with its own database.
     - Rehaul code never writes to that folder, never runs `jarvis schedule install`, and never touches the
@@ -106,6 +108,17 @@ docs/briefs/  # one brief per milestone
 - A manifest `[[sessions]]` entry (a live view) gives the model `_start`, `_look` and `_stop` tools. The host owns
   the `sessions` table; the node owns the running capture and closes it when the host link drops.
 
+## Apps calling apps
+
+- An app reads only its own tables (`<app>_*`). To read another app's data it calls that app's **shared**
+  action with `ctx.call(app, action, **args)`, which goes through the normal dispatch (host or node), on the
+  caller's connection, and isn't written to the action log.
+- The caller lists the app in `[app] uses`; the action has `share = true` and must be a `read`. An action
+  only other apps need sets `tool = false` so the model never sees it.
+- A missing or turned-off app, or a node that isn't connected, raises `AppUnavailable`: the caller shows
+  "not available" instead of failing.
+- `tests/test_share.py` fails if an app's code names another app's tables or the core's.
+
 ## Jobs and the outbox
 
 - An app's `[[jobs]]` are scheduled work that runs inside `jarvis serve` (host apps only). `core/scheduler.py` is the
@@ -114,6 +127,8 @@ docs/briefs/  # one brief per milestone
   never the shared one. It can ask to run sooner (`JobResult.wake_at`, `ctx.wake("<job>")`) and can ask for a
   **thinking turn** (`JobResult.think`): the same agent loop as a chat turn, with the origin `job:<app>.<job>`, so
   `answer_ask` refuses there. Thinking turns wait behind chat and count against `thinking_runs_per_day`.
+  `Think.on_done` names a handler the scheduler calls after a turn that didn't fail or get skipped, so a job
+  can record "done for today" only once its message really went out.
 - Everything Falak says first is a row in the `outbox` table (`Host.notify`). One sender task delivers it through
   `notify_channel`, keeps failures and retries, and adds each sent message to the conversation. Nothing is dropped.
 - The scheduler's state lives in the `jobs` and `job_runs` tables, so a restart neither repeats nor forgets a run.
