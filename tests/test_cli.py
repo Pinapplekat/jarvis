@@ -171,3 +171,11 @@ def test_deadline_import_reads_the_weekly_file(data_dir, tmp_path, capsys):
     assert "Saved 1 deadline." in capsys.readouterr().out
     f.write_text("{}")
     assert cli.main(["deadline", "import", str(f)]) == 2
+
+
+def test_start_runs_serve_with_the_node(data_dir, monkeypatch):
+    from jarvis import chat_cli
+
+    seen = []
+    monkeypatch.setattr(chat_cli, "serve", lambda settings, with_fixtures=False, with_node=False: seen.append(with_node) or 0)
+    assert cli.main(["start"]) == 0 and seen == [True]

@@ -152,6 +152,7 @@ def build_parser(name: str) -> argparse.ArgumentParser:
     )
     sub.add_parser("log", help="recent actions").add_argument("-n", type=int, default=20)
     sub.add_parser("chat", help="talk to it in the terminal")
+    sub.add_parser("start", help="run Falak and this Mac's node together until Ctrl-C (the everyday command)")
     serve = sub.add_parser("serve", help="run Falak and its channels (Discord) until Ctrl-C")
     serve.add_argument("--with-node", action="store_true", help="also start this Mac's node as a child process (dev)")
     serve.add_argument("--with-fixtures", action="store_true", help="also load the test fixture apps (dev only)")
@@ -184,15 +185,17 @@ def main(argv: list[str] | None = None) -> int:
 
         return node_cli.command(settings, args)
     if args.group in ("apps", "run", "deadline", "asks", "yes", "no", "undo", "log", "chat", "ask", "turns", "serve",
-                      "jobs", "outbox"):
+                      "start", "jobs", "outbox"):
         try:
             if args.group == "outbox" or (args.group == "jobs" and not args.jobs_command):
                 from jarvis import jobs_cli
 
                 return jobs_cli.show_outbox(settings, args.n) if args.group == "outbox" else jobs_cli.list_jobs(settings)
-            if args.group in ("chat", "ask", "turns", "serve", "jobs"):
+            if args.group in ("chat", "ask", "turns", "serve", "start", "jobs"):
                 from jarvis import chat_cli  # loads the SDK, which the other commands don't need
 
+                if args.group == "start":
+                    return chat_cli.serve(settings, with_node=True)
                 if args.group == "serve":
                     return chat_cli.serve(settings, args.with_fixtures, args.with_node)
                 if args.group == "jobs":

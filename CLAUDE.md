@@ -10,6 +10,8 @@ Falak is a personal assistant: a host with an agent loop, tool apps, channels an
 - `uv sync --extra dev`
 - `uv run pytest`
 - `uv run jarvis dev info`
+- `bin/falak` runs this checkout's CLI from anywhere (Elijah links it into `~/.local/bin`). `falak start` runs
+  Falak and this Mac's node together. It uses Falak-dev, so builders don't run it (see the Falak-dev rule).
 
 ## Live-system rules
 

@@ -1,0 +1,5 @@
+#!/bin/sh
+# `falak <command>` from anywhere: runs this checkout's CLI. `falak start` runs Falak and this Mac's node.
+# Linked into ~/.local/bin; the folder is found through the link, so the checkout can move.
+here=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+exec uv run --quiet --directory "$here" jarvis "$@"
