@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from jarvis.contract.schema import check_schema, validate
+from jarvis.contract.timespec import MIN_EVERY_S, parse_clock, parse_interval
 
 EFFECTS = ("read", "local", "outbound", "irreversible")
 _NAME = re.compile(r"^[a-z][a-z0-9]*(_[a-z0-9]+)*$")  # snake_case; no "__", which joins app and action
@@ -18,7 +19,10 @@ _ACTION_KEYS = {"name", "description", "effect", "handler", "undo", "confirm", "
                 "timeout_s"}
 _SESSION_KEYS = {"name", "description", "effect", "untrusted_output", "idle_minutes", "start", "sample", "stop", "input",
                  "timeout_s"}
-_NOT_YET = {"jobs": "M6"}
+_JOB_KEYS = {"name", "title", "description", "handler", "kind", "every", "at", "quiet", "needs", "timeout_s"}
+JOB_KINDS = ("deliver", "sync", "think")
+JOB_QUIET = ("ignore", "hold", "skip")
+JOB_NEEDS = ("network",)
 DEFAULT_TIMEOUT_S = 30
 PHASES = ("start", "look", "stop")  # the three tools a session gives the model
 
@@ -79,6 +83,20 @@ class SessionSpec:
 
 
 @dataclass(frozen=True)
+class JobSpec:
+    name: str
+    title: str  # how failure messages name it: "Canvas sync keeps failing"
+    description: str
+    handler: str  # handler(ctx, run: JobRun) -> JobResult
+    kind: str  # deliver | sync | think
+    every: int | None  # seconds
+    at: tuple[str, ...]  # "HH:MM", or "$<setting>" naming a string setting of the app that holds one
+    quiet: str  # ignore | hold | skip
+    needs: tuple[str, ...]
+    timeout_s: float
+
+
+@dataclass(frozen=True)
 class Manifest:
     name: str
     description: str
@@ -89,6 +107,7 @@ class Manifest:
     path: Path
     context: str | None = None  # handler returning a short text block for every turn prompt
     sessions: tuple[SessionSpec, ...] = ()
+    jobs: tuple[JobSpec, ...] = ()
 
     @property
     def tools(self) -> tuple[ActionSpec, ...]:
@@ -97,9 +116,6 @@ class Manifest:
 
 
 def _unknown(path: Path, where: str, given: dict, allowed: set[str]) -> None:
-    for key in sorted(given):
-        if key in _NOT_YET and where == "the manifest":
-            raise ManifestError(path, f"'{key}' is not valid yet ({_NOT_YET[key]} adds it)")
     extra = sorted(set(given) - allowed)
     if extra:
         raise ManifestError(path, f"unknown key(s) in {where}: {', '.join(extra)}")
@@ -192,6 +208,50 @@ def _action(path: Path, table: dict) -> ActionSpec:
                       _timeout(path, where, table))
 
 
+def _job(path: Path, table: dict, settings: dict) -> JobSpec:
+    _unknown(path, "a job", table, _JOB_KEYS)
+    name = _text(path, "a job", table, "name")
+    where = f"job '{name}'"
+    if not _NAME.match(name):
+        raise ManifestError(path, f"{where}: name must be snake_case")
+    description = _text(path, where, table, "description")
+    title = table.get("title", name.replace("_", " "))
+    if not isinstance(title, str) or not title.strip():
+        raise ManifestError(path, f"{where}: title must be text")
+    handler = table.get("handler", name)
+    if not (isinstance(handler, str) and handler.isidentifier()):
+        raise ManifestError(path, f"{where}: handler must be a function name")
+    kind, quiet = table.get("kind"), table.get("quiet", "hold")
+    if kind not in JOB_KINDS:
+        raise ManifestError(path, f"{where}: kind must be one of {', '.join(JOB_KINDS)}")
+    if quiet not in JOB_QUIET:
+        raise ManifestError(path, f"{where}: quiet must be one of {', '.join(JOB_QUIET)}")
+    if kind == "think" and quiet == "ignore":
+        raise ManifestError(path, f"{where}: a think job may not use quiet = \"ignore\" (use hold or skip)")
+    needs = table.get("needs", [])
+    if not isinstance(needs, list) or any(n not in JOB_NEEDS for n in needs):
+        raise ManifestError(path, f"{where}: needs takes only: {', '.join(JOB_NEEDS)}")
+    every, at = table.get("every"), table.get("at", [])
+    if every is None and not at:
+        raise ManifestError(path, f"{where}: needs 'every' or 'at' (or both)")
+    if every is not None and parse_interval(every) is None:
+        raise ManifestError(path, f"{where}: every must look like 30s, 15m or 6h, and be at least {MIN_EVERY_S}s")
+    times = [at] if isinstance(at, str) else at
+    if not isinstance(times, list) or not all(isinstance(t, str) for t in times):
+        raise ManifestError(path, f"{where}: at must be a time or a list of times like \"07:00\"")
+    for t in times:
+        if t.startswith("$"):
+            if settings.get(t[1:], {}).get("type") != "string":
+                raise ManifestError(path, f"{where}: at = \"{t}\" must name a string setting of the app")
+        elif parse_clock(t) is None:
+            raise ManifestError(path, f"{where}: at time '{t}' must look like 07:00")
+    timeout = table.get("timeout_s", 60)
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= 600:
+        raise ManifestError(path, f"{where}: timeout_s must be a whole number from 1 to 600")
+    return JobSpec(name, title, description, handler, kind, parse_interval(every) if every else None, tuple(times),
+                   quiet, tuple(needs), timeout)
+
+
 SETTING_TYPES = ("string", "integer", "number", "boolean")
 
 
@@ -221,7 +281,7 @@ def load_manifest(path: Path, folder: str | None = None) -> Manifest:
         raw = tomllib.loads(path.read_text())
     except (OSError, tomllib.TOMLDecodeError) as e:
         raise ManifestError(path, str(e)) from e
-    _unknown(path, "the manifest", raw, {"app", "settings", "actions", "sessions"})
+    _unknown(path, "the manifest", raw, {"app", "settings", "actions", "sessions", "jobs"})
     app = raw.get("app")
     if not isinstance(app, dict):
         raise ManifestError(path, "missing [app] table")
@@ -242,14 +302,20 @@ def load_manifest(path: Path, folder: str | None = None) -> Manifest:
     context = app.get("context")
     if context is not None and not (isinstance(context, str) and context.isidentifier()):
         raise ManifestError(path, "context must be a function name")
-    tables, session_tables = raw.get("actions", []), raw.get("sessions", [])
-    if not isinstance(tables, list) or not isinstance(session_tables, list):
-        raise ManifestError(path, "[[actions]] and [[sessions]] must be lists of tables")
-    if not tables and not session_tables:
-        raise ManifestError(path, "an app needs at least one [[actions]] or [[sessions]] entry")
+    tables, session_tables, job_tables = raw.get("actions", []), raw.get("sessions", []), raw.get("jobs", [])
+    if not all(isinstance(t, list) for t in (tables, session_tables, job_tables)):
+        raise ManifestError(path, "[[actions]], [[sessions]] and [[jobs]] must be lists of tables")
+    if not tables and not session_tables and not job_tables:
+        raise ManifestError(path, "an app needs at least one [[actions]], [[sessions]] or [[jobs]] entry")
+    if job_tables and runs_on != "host":
+        raise ManifestError(path, "[[jobs]] only run for host apps for now (this app runs on a node)")
     actions = tuple(_action(path, t) for t in tables)
     sessions = tuple(_session(path, t) for t in session_tables)
+    jobs = tuple(_job(path, t, settings) for t in job_tables)
+    job_names = [j.name for j in jobs]
+    if len(set(job_names)) != len(job_names):
+        raise ManifestError(path, f"duplicate job name '{next(n for n in job_names if job_names.count(n) > 1)}'")
     names = [a.name for a in actions + tuple(t for s in sessions for t in s.tools())]
     if len(set(names)) != len(names):
         raise ManifestError(path, f"duplicate tool name '{next(n for n in names if names.count(n) > 1)}'")
-    return Manifest(name, description, runs_on, tuple(secrets), settings, actions, path, context, sessions)
+    return Manifest(name, description, runs_on, tuple(secrets), settings, actions, path, context, sessions, jobs)

@@ -8,12 +8,15 @@ import logging
 import signal
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
-from jarvis.core import actions, loop, sessions
+from jarvis.contract.api import ActionError, Think
+from jarvis.core import actions, loop, outbox, sessions
 from jarvis.core.actions import Origin
 from jarvis.core.apps import Registry, tmp_dir
 from jarvis.core.brain import Brain
 from jarvis.core.channel import AskResult, Channel, ChannelUnavailable, Incoming
+from jarvis.core.scheduler import Scheduler, Skip
 from jarvis.contract.schema import validate
 from jarvis.contract.envfile import load_secrets
 from jarvis.core.settings import Settings, SettingsError
@@ -87,6 +90,11 @@ class Host:
         self._turn_lock = asyncio.Lock()  # a turn or a button answer, never two at once (one SQLite thread)
         self._stop = asyncio.Event()
         self._stopping = False
+        self._queued = 0  # chat messages delivered and not yet answered; thinking turns let them go first
+        self._budget_logged = None  # the local day the over-budget line was last logged
+        self.sender = outbox.Sender(reg.conn, self._notify_channel, lambda: datetime.now(timezone.utc),
+                                    reg.settings.tz())
+        self._scheduler: Scheduler | None = None
 
     def add_channel(self, channel: Channel) -> None:
         self.channels[channel.name] = channel
@@ -99,7 +107,49 @@ class Host:
         if self._stopping:
             _discard(incoming)
             return
+        self._queued += 1
         await self._queue.put(incoming)
+
+    @property
+    def scheduler(self) -> Scheduler:
+        if self._scheduler is None:  # only `serve` and `jobs run` need it; chat and ask don't touch the jobs table
+            self._scheduler = Scheduler(self.reg, self.notify, self.think)
+        return self._scheduler
+
+    def _notify_channel(self) -> Channel | None:
+        """Where Falak speaks first: the notify_channel setting, else the first channel that's running."""
+        return self.channels.get(self.reg.settings.notify_channel) or next(iter(self.channels.values()), None)
+
+    def notify(self, text: str, source: str, not_before: datetime | None = None) -> None:
+        """Say something to Elijah unprompted: one row in the outbox, and the sender is woken."""
+        outbox.add(self.reg.conn, text, source, not_before=not_before)
+        self.sender.nudge()
+
+    async def think(self, app: str, job: str, think: Think, not_before: datetime | None = None) -> str:
+        """A job's thinking turn: waits behind chat, counts against the daily budget, and delivers via the outbox."""
+        limit = self.reg.settings.thinking_runs_per_day
+        if loop.thinking_runs_today(self.reg) >= limit:
+            today = datetime.now(self.reg.settings.tz()).date()
+            if self._budget_logged != today:
+                self._budget_logged = today
+                log.warning("thinking turns: the budget of %d a day is used up; skipping until tomorrow", limit)
+            raise Skip("budget")
+        source = f"job:{app}.{job}"
+        while self._queued or self._turn_lock.locked():  # never ahead of a chat message, never in the middle of one
+            await asyncio.sleep(0.05)
+        async with self._turn_lock:
+            reply = await loop.handle_job(self.reg, self.brain, think.prompt, Origin(source, think.untrusted),
+                                          own_channels=self.own_channels)
+        log.info("turn channel=%s ms=%d tools=%s error=%s", source, reply.ms, ",".join(reply.tools) or "-",
+                 reply.error or "-")
+        if reply.error:
+            raise ActionError(f"the thinking turn failed: {reply.error}")
+        if not think.deliver:
+            return "thought, not sent"
+        if reply.text == "(nothing)":
+            return "nothing to say"
+        self.notify(reply.text, source, not_before)
+        return "replied"
 
     async def answer(self, ask_id: int, yes: bool) -> AskResult:
         """A Yes/No button was pressed: answer the ask exactly as the loop's answer_ask would."""
@@ -138,6 +188,8 @@ class Host:
                 await self.turn(item)
             except Exception:
                 log.exception("a turn failed on %s", item.channel)
+            finally:
+                self._queued -= 1
 
     async def _run_channel(self, channel: Channel) -> None:
         try:
@@ -169,6 +221,7 @@ class Host:
         runners = [asyncio.create_task(self._run_channel(c)) for c in self.channels.values()]
         stopper = asyncio.create_task(self._stop.wait())
         sweeper = asyncio.create_task(self._sweep())
+        background = [asyncio.create_task(self.scheduler.run()), asyncio.create_task(self.sender.run())]
         try:
             live = set(runners)
             while live and not self._stop.is_set():
@@ -176,6 +229,11 @@ class Host:
                 live -= done
         finally:
             sweeper.cancel()
+            self.scheduler.stop()
+            self.sender.stop()
+            for task in background:
+                task.cancel()
+            await asyncio.gather(*background, return_exceptions=True)
             await self._shutdown(worker, runners, stopper)
 
     async def _shutdown(self, worker: asyncio.Task, runners: list[asyncio.Task], stopper: asyncio.Task) -> None:
@@ -195,6 +253,7 @@ class Host:
             if isinstance(item, Incoming):
                 _discard(item)
                 dropped += 1
+                self._queued -= 1
         if dropped:
             log.warning("shutting down with %d unanswered message(s)", dropped)
         self._queue.put_nowait(_Stop())

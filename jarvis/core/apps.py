@@ -147,6 +147,7 @@ def load_apps(settings: Settings, apps_dir: Path = DEFAULT_APPS_DIR, extra_dirs:
                 {k: secrets[k] for k in manifest.secrets if k in secrets},
                 conn,
                 tmp_dir(settings),
+                settings.tz(),
             )
             loaded[manifest.name] = LoadedApp(manifest, module, ctx)
         return Registry(settings, conn, loaded)

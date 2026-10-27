@@ -52,7 +52,6 @@ BAD = [
     ("unknown app key", GOOD.replace('runs_on = "host"', 'runs_on = "host"\ncolor = 1'), "unknown key(s) in [app]: color"),
     ("unknown action key", GOOD.replace('effect = "read"', 'effect = "read"\nspeed = 1'), "unknown key(s) in an action"),
     ("unknown top key", GOOD + "\n[extra]\nx = 1\n", "unknown key(s) in the manifest: extra"),
-    ("jobs", GOOD + "\n[[jobs]]\n", "'jobs' is not valid yet"),
     ("name mismatch", GOOD.replace('name = "demo"', 'name = "other"'), "must equal the folder name"),
     ("runs_on", GOOD.replace('"host"', '"cloud"'), "runs_on must be"),
     ("node runs_on ok but empty cap", GOOD.replace('"host"', '"node:"'), "runs_on must be"),

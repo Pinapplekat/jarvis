@@ -54,3 +54,16 @@ def make_ctx(tmp_path):
         return AppContext(app, settings, {}, None, tmp)
 
     return make
+
+
+@pytest.fixture
+def jobs_reg(settings):
+    """A registry holding only the ticker fixture app, whose jobs do whatever the test says."""
+    from pathlib import Path
+
+    from jarvis.core.apps import load_apps
+
+    reg = load_apps(settings, Path(__file__).parent / "tests" / "fixtures" / "jobapps")
+    reg.apps["ticker"].module.reset()
+    yield reg
+    reg.close()

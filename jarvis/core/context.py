@@ -44,11 +44,23 @@ def app_blocks(reg: Registry) -> list[str]:
     return blocks
 
 
-def build_prompt(reg: Registry, text: str, channel: str, message_id: int, now: datetime | None = None,
-                 images: int = 0) -> str:
-    now = (now or datetime.now(timezone.utc)).astimezone()
+THINKING_ADDENDUM = (
+    "This turn is {name} speaking first: nobody has said anything, and what you write is sent to Elijah as it is. "
+    "Keep it short. If there is nothing worth saying, reply with exactly (nothing)."
+)
+
+
+def thinking_prompt(assistant_name: str) -> str:
+    return system_prompt(assistant_name) + "\n\n" + THINKING_ADDENDUM.format(name=assistant_name)
+
+
+def build_prompt(reg: Registry, text: str, channel: str, message_id: int | None, now: datetime | None = None,
+                 images: int = 0, task: bool = False) -> str:
+    """The context block, then Elijah's message, or (task=True) the task a job gave Falak to do on its own."""
+    now = (now or datetime.now(timezone.utc)).astimezone(reg.settings.tz())
     lines = ["[Context from Falak, not Elijah's words]",
-             f"It is {now.strftime('%A %Y-%m-%d %H:%M %Z')}. Channel: {channel}."]
+             f"It is {now.strftime('%A %Y-%m-%d %H:%M %Z')} (UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}). "
+             f"Channel: {channel}."]
     history = conversation.recent(reg.conn, RECENT_MESSAGES, before_id=message_id)
     if history:
         lines.append("Recent conversation:")
@@ -66,5 +78,6 @@ def build_prompt(reg: Registry, text: str, channel: str, message_id: int, now: d
     if images:
         lines.append(f"Elijah attached {images} image{'s' if images > 1 else ''}; "
                      "look at one with falak__view_attachment(n), counting from 1.")
-    lines += ["[End of context]", "", "Elijah says:", text]
+    heading = "Your task now (Elijah has not said anything; you are starting this):" if task else "Elijah says:"
+    lines += ["[End of context]", "", heading, text]
     return "\n".join(lines)

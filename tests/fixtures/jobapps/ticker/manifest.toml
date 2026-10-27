@@ -1,0 +1,66 @@
+[app]
+name = "ticker"
+description = "Test app with one job of every shape."
+context = "context"
+
+[settings.at_time]
+type = "string"
+default = "06:30"
+
+[[actions]]
+name = "poke"
+description = "Wake the beat job."
+effect = "local"
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[jobs]]
+name = "beat"
+title = "the beat"
+description = "Every 15 minutes, delivery."
+kind = "deliver"
+every = "15m"
+quiet = "ignore"
+timeout_s = 5
+
+[[jobs]]
+name = "daily"
+title = "the daily"
+description = "Twice a day, messages held in quiet hours."
+kind = "sync"
+at = ["07:00", "21:00"]
+quiet = "hold"
+
+[[jobs]]
+name = "silent"
+title = "the silent one"
+description = "Does not run in quiet hours."
+kind = "sync"
+every = "1h"
+quiet = "skip"
+
+[[jobs]]
+name = "needy"
+title = "Canvas sync"
+description = "Needs the network."
+kind = "sync"
+every = "1h"
+needs = ["network"]
+quiet = "ignore"
+
+[[jobs]]
+name = "thinker"
+title = "the thinker"
+description = "Asks for a thinking turn."
+kind = "think"
+every = "6h"
+quiet = "hold"
+
+[[jobs]]
+name = "named"
+title = "the named"
+description = "Its time comes from a setting."
+kind = "sync"
+at = "$at_time"
+quiet = "ignore"

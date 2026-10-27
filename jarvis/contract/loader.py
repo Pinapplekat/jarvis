@@ -34,6 +34,9 @@ def check_handlers(manifest: Manifest, module: ModuleType) -> None:
         for label, fn in (("handler", action.handler), ("undo handler", action.undo)):
             if fn is not None and not callable(getattr(module, fn, None)):
                 raise ManifestError(manifest.path, f"action '{action.name}': {label} '{fn}' not found in actions.py")
+    for job in manifest.jobs:
+        if not callable(getattr(module, job.handler, None)):
+            raise ManifestError(manifest.path, f"job '{job.name}': handler '{job.handler}' not found in actions.py")
     for session in manifest.sessions:
         for label, fn in zip(("start", "sample", "stop"), session.handlers()):
             if not callable(getattr(module, fn, None)):

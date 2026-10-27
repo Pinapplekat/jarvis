@@ -6,7 +6,9 @@ import logging
 import os
 import sqlite3
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone, tzinfo
 from pathlib import Path
 from typing import Mapping
 
@@ -35,6 +37,29 @@ class SessionStarted:
     state: dict  # JSON-serializable; the host stores it, the node keeps the live resources it points at
 
 
+@dataclass(frozen=True)
+class JobRun:
+    now: datetime  # timezone-aware, in Elijah's timezone
+    last_ok_at: datetime | None
+    reason: str  # "every", "at", "wake", "manual" or "catch-up"
+    quiet: bool  # inside quiet hours right now
+
+
+@dataclass(frozen=True)
+class Think:
+    prompt: str  # what the thinking turn is about, with the data it needs
+    deliver: bool = True  # send the reply to Elijah; False for jobs that only use tools
+    untrusted: bool = False  # the prompt quotes someone else's words (assignment titles, mail)
+
+
+@dataclass(frozen=True)
+class JobResult:
+    summary: str  # one line for the job log: "sent 2", "17 deadlines, 1 new"
+    messages: tuple[str, ...] = ()  # sent to Elijah exactly as written
+    think: Think | None = None  # ask the host for a thinking turn (counts against the budget)
+    wake_at: datetime | None = None
+
+
 class ActionError(Exception):
     """A failure to tell Elijah about in plain words ('The camera is in use by another app')."""
 
@@ -49,6 +74,7 @@ class AppContext:
         secrets: Mapping[str, str],
         db: sqlite3.Connection | None,
         tmp_dir: Path,
+        tz: tzinfo | None = None,
     ) -> None:
         self.name = name
         self.settings = settings  # manifest defaults overridden by settings.toml [apps.<name>]
@@ -56,6 +82,36 @@ class AppContext:
         self.log = logging.getLogger(f"jarvis.apps.{name}")
         self._db = db  # an app may use only tables named <app>_*
         self._tmp_dir = tmp_dir
+        self.tz: tzinfo = tz or timezone.utc  # Elijah's timezone (the core setting)
+        self.wake_hook: Callable[[str, str], None] | None = None  # set by the scheduler inside `jarvis serve`
+
+    def now(self) -> datetime:
+        return datetime.now(self.tz)
+
+    def wake(self, job: str) -> None:
+        """Run one of this app's jobs now. Does nothing outside `jarvis serve`."""
+        if self.wake_hook is not None:
+            self.wake_hook(self.name, job)
+
+    def with_db(self, db: sqlite3.Connection) -> "AppContext":
+        """The same context on another connection. Each job run gets its own (SQLite connections are per thread)."""
+        other = AppContext(self.name, self.settings, self.secrets, db, self._tmp_dir, self.tz)
+        other.wake_hook = self.wake_hook
+        return other
+
+    def chat_between(self, start: datetime, end: datetime) -> list[tuple[datetime, str, str]]:
+        """The conversation in [start, end): (when, 'Elijah' or 'Falak', text), oldest first."""
+        rows = self.db.execute("SELECT at, role, text FROM chat_log WHERE at >= ? AND at < ? ORDER BY id",
+                               (_utc(start), _utc(end))).fetchall()
+        return [(datetime.fromisoformat(r["at"]).astimezone(self.tz), "Elijah" if r["role"] == "user" else "Falak",
+                 r["text"]) for r in rows]
+
+    def actions_between(self, start: datetime, end: datetime) -> list[tuple[datetime, str, str, str]]:
+        """What actions ran in [start, end): (when, tool, status, result text). Arguments are never included."""
+        rows = self.db.execute("SELECT time, tool, status, result FROM action_log WHERE time >= ? AND time < ? "
+                               "ORDER BY id", (_utc(start), _utc(end))).fetchall()
+        return [(datetime.fromisoformat(r["time"]).astimezone(self.tz), r["tool"], r["status"], r["result"])
+                for r in rows]
 
     @property
     def db(self) -> sqlite3.Connection:
@@ -68,3 +124,7 @@ class AppContext:
         fd, path = tempfile.mkstemp(suffix=suffix, dir=self._tmp_dir)
         os.close(fd)
         return Path(path)
+
+
+def _utc(when: datetime) -> str:
+    return when.astimezone(timezone.utc).isoformat(timespec="seconds")
