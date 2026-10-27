@@ -63,6 +63,11 @@ def read_journal(ctx: AppContext, day: str) -> Result:
     return Result(text, data={"day": day, "entry": row["entry"], "open_loops": loops})
 
 
+def latest_entry(ctx: AppContext) -> Result:
+    r = ctx.db.execute("SELECT day FROM journal_entries ORDER BY day DESC LIMIT 1").fetchone()
+    return read_journal(ctx, r["day"]) if r else Result("There's no journal yet.", data=None)
+
+
 def write(ctx: AppContext, run: JobRun) -> JobResult:
     """Ask for a thinking turn that writes up yesterday. Once a day, unless run by hand."""
     yesterday = run.now.date() - timedelta(days=1)

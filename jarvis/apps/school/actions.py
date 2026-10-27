@@ -107,6 +107,24 @@ def upcoming(ctx: AppContext, days: int = 7) -> Result:
                                             for d in rows if now <= d.due < end]})
 
 
+def _span(start: str, end: str) -> tuple[datetime, datetime]:
+    try:
+        low, high = datetime.fromisoformat(start), datetime.fromisoformat(end)
+    except ValueError:
+        raise ActionError("start and end need to look like 2026-10-26T00:00:00-07:00.") from None
+    if low.tzinfo is None or high.tzinfo is None:
+        raise ActionError("start and end need a UTC offset.")
+    return low, high
+
+
+def deadlines_between(ctx: AppContext, start: str, end: str) -> Result:
+    low, high = _span(start, end)
+    found = sorted((d for d in load_deadlines(ctx) if low <= d.due < high), key=lambda d: d.due)
+    return Result(f"{len(found)} deadlines", data={"deadlines": [
+        {"key": d.key, "course": d.course, "title": d.title, "due": d.due.astimezone(ctx.tz).isoformat(),
+         "done": d.done, "status": d.status, "kind": d.kind, "url": d.url} for d in found]})
+
+
 def mark_done(ctx: AppContext, key: str) -> Result:
     row = ctx.db.execute("SELECT title, hand_done FROM school_deadlines WHERE key=?", (key,)).fetchone()
     if row is None:

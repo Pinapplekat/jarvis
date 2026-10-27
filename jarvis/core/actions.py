@@ -51,13 +51,15 @@ class Declined:
 Outcome = Union[Ran, Asked, Failed, Declined]
 
 
-def needs_confirmation(effect: str, origin: Origin, trusted: bool) -> bool:
-    """The only place the ask-or-run decision is made. `trusted`: a learned rule allows this tool."""
+def needs_confirmation(effect: str, origin: Origin, trusted: bool, sends_data: bool = False) -> bool:
+    """The only place the ask-or-run decision is made. `trusted`: a learned rule allows this tool.
+    `sends_data`: the arguments leave the device, so once outside content has steered the turn it asks
+    (a page can't make Falak put what it read into a search or a URL)."""
     if effect == "irreversible":
         return True
     if effect == "outbound":
         return not trusted or origin.outside_content
-    return False
+    return sends_data and origin.outside_content
 
 
 def _log(reg: Registry, tool: str, effect: str, status: str, args: str, text: str, undo: dict | None = None,
@@ -116,7 +118,7 @@ def run(reg: Registry, tool_name: str, args: object, origin: Origin,
     problems = validate(action.input, args)
     if problems:
         return _fail(reg, app, action, args, "Invalid input: " + "; ".join(problems))
-    if not needs_confirmation(action.effect, origin, tool_name in allowed):
+    if not needs_confirmation(action.effect, origin, tool_name in allowed, action.sends_data):
         return _execute(reg, app, action, args)
     question = action.confirm.format_map(_Fields(args))
     cur = reg.conn.execute(

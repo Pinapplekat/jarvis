@@ -91,7 +91,7 @@ def test_either_can_be_turned_off(real_apps):
 
 
 def test_missing_apps_show_as_not_available_instead_of_failing(real_apps):
-    real_apps.conn.execute("ALTER TABLE school_deadlines RENAME TO school_deadlines_away")
+    del real_apps.apps["school"]  # school turned off in settings.toml
     prompt = run_job(real_apps, "morning", MORNING).think.prompt
     assert "Deadlines (next 2 days): (not available)" in prompt
 

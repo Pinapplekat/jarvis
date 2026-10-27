@@ -2,6 +2,7 @@
 name = "journal"
 description = "The nightly journal: Falak writes up each day so weeks later it still knows what happened."
 runs_on = "host"
+uses = ["school", "reminders"]
 
 [[actions]]
 name = "save_entry"
@@ -30,6 +31,7 @@ type = "string"
 name = "read_journal"
 description = "Read the journal entry for a day, e.g. to answer 'what did I do last Tuesday?'."
 effect = "read"
+share = true
 [actions.input]
 type = "object"
 required = ["day"]
@@ -37,6 +39,16 @@ additionalProperties = false
 [actions.input.properties.day]
 type = "string"
 description = "The local date, YYYY-MM-DD."
+
+[[actions]]
+name = "latest_entry"
+description = "For other apps: the most recent journal entry and its open loops."
+effect = "read"
+share = true
+tool = false
+[actions.input]
+type = "object"
+additionalProperties = false
 
 [[jobs]]
 name = "write"

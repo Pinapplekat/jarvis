@@ -25,6 +25,24 @@ maximum = 60
 default = 7
 
 [[actions]]
+name = "deadlines_between"
+description = "For other apps: every deadline due in [start, end), with whether it's done."
+effect = "read"
+share = true
+tool = false
+untrusted_output = true
+[actions.input]
+type = "object"
+required = ["start", "end"]
+additionalProperties = false
+[actions.input.properties.start]
+type = "string"
+description = "ISO 8601 with offset; included."
+[actions.input.properties.end]
+type = "string"
+description = "ISO 8601 with offset; excluded."
+
+[[actions]]
 name = "mark_done"
 description = "Mark a deadline done by hand, for work Canvas can't track (use the key shown by upcoming)."
 effect = "local"

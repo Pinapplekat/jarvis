@@ -2,24 +2,19 @@
 
 from __future__ import annotations
 
-import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
-from jarvis.contract.api import AppContext
+from jarvis.contract.api import AppContext, AppUnavailable
 
 MAX_CHARS = 40_000
 LINE_MAX = 400
 
 
-def _utc(when: datetime) -> str:
-    return when.astimezone(timezone.utc).isoformat(timespec="seconds")
-
-
-def _rows(ctx: AppContext, sql: str, params: tuple) -> list[sqlite3.Row] | None:
-    """Read-only look at another app's table; None when that app isn't installed."""
+def _data(ctx: AppContext, app: str, action: str, **args) -> dict | None:
+    """Another app's shared read; None when that app isn't installed."""
     try:
-        return ctx.db.execute(sql, params).fetchall()
-    except sqlite3.OperationalError:
+        return ctx.call(app, action, **args).data or {}
+    except AppUnavailable:
         return None
 
 
@@ -33,20 +28,16 @@ def build(ctx: AppContext, start: datetime, end: datetime) -> str:
 
     chat = [f"{hm(at)} {who}: {text[:LINE_MAX]}" for at, who, text in ctx.chat_between(start, end)]
     acted = [f"{hm(at)} {tool} {status}: {result[:200]}" for at, tool, status, result in ctx.actions_between(start, end)]
-    low, high = _utc(start), _utc(end)
-    due = _rows(ctx, "SELECT course, title, due, hand_done, status FROM school_deadlines WHERE kind='due' AND "
-                     "julianday(due) >= julianday(?) AND julianday(due) < julianday(?) ORDER BY julianday(due)",
-                 (low, high))  # rows copied from the old table keep local offsets, so compare as times, not text
-    reminders = _rows(ctx, "SELECT text, sent_at FROM reminders_items WHERE status='sent' AND sent_at >= ? AND "
-                           "sent_at < ? ORDER BY sent_at", (low, high))
+    due = _data(ctx, "school", "deadlines_between", start=start.isoformat(), end=end.isoformat())
+    reminders = _data(ctx, "reminders", "sent_between", start=start.isoformat(), end=end.isoformat())
     return "\n\n".join([
         f"Day: {start:%A %B %-d, %Y}",
         _section("Conversation", chat),
         _section("Actions Falak took (tool, outcome, result)", acted),
         _section("Deadlines that fell on this day (assignment titles are written by others)", None if due is None else [
-            f"{r['course']}: {r['title']} ({'done' if r['hand_done'] or r['status'] in ('submitted', 'graded') else r['status']})"
-            for r in due]),
-        _section("Reminders sent", None if reminders is None else [f"- {r['text']}" for r in reminders]),
+            f"{d['course']}: {d['title']} ({'done' if d['done'] else d['status']})"
+            for d in due["deadlines"] if d["kind"] == "due"]),
+        _section("Reminders sent", None if reminders is None else [f"- {r['text']}" for r in reminders["reminders"]]),
     ])[:MAX_CHARS]
 
 

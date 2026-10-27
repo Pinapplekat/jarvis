@@ -70,6 +70,12 @@ BAD = [
     ("bad action name", GOOD.replace('name = "go"', 'name = "Go__x"'), "snake_case"),
     ("no actions", GOOD[:GOOD.index("[[actions]]")], "at least one [[actions]]"),
     ("invalid toml", "[app", "Expected"),
+    ("shared local action", GOOD.replace('effect = "read"', 'effect = "local"\nshare = true'),
+     "only read actions can be shared"),
+    ("hidden and unshared", GOOD.replace('effect = "read"', 'effect = "read"\ntool = false'), "must be shared"),
+    ("share not a bool", GOOD.replace('effect = "read"', 'effect = "read"\nshare = "yes"'), "share must be true or false"),
+    ("uses itself", GOOD.replace('runs_on = "host"', 'runs_on = "host"\nuses = ["demo"]'), "doesn't list itself"),
+    ("uses not names", GOOD.replace('runs_on = "host"', 'runs_on = "host"\nuses = "school"'), "uses must be a list"),
 ]
 
 

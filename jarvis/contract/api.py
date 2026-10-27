@@ -64,6 +64,14 @@ class ActionError(Exception):
     """A failure to tell Elijah about in plain words ('The camera is in use by another app')."""
 
 
+class AppUnavailable(ActionError):
+    """ctx.call: the other app isn't installed, is turned off, or its device isn't connected."""
+
+
+# ctx.call goes through this: (calling app, app, action, args, the caller's connection) -> Result. Set by the core.
+CallHook = Callable[[str, str, str, dict, "sqlite3.Connection | None"], Result]
+
+
 class AppContext:
     """Passed as the first argument to every handler."""
 
@@ -84,6 +92,7 @@ class AppContext:
         self._tmp_dir = tmp_dir
         self.tz: tzinfo = tz or timezone.utc  # Elijah's timezone (the core setting)
         self.wake_hook: Callable[[str, str], None] | None = None  # set by the scheduler inside `jarvis serve`
+        self.call_hook: CallHook | None = None  # set by the core when the apps are loaded on the host
 
     def now(self) -> datetime:
         return datetime.now(self.tz)
@@ -96,8 +105,15 @@ class AppContext:
     def with_db(self, db: sqlite3.Connection) -> "AppContext":
         """The same context on another connection. Each job run gets its own (SQLite connections are per thread)."""
         other = AppContext(self.name, self.settings, self.secrets, db, self._tmp_dir, self.tz)
-        other.wake_hook = self.wake_hook
+        other.wake_hook, other.call_hook = self.wake_hook, self.call_hook
         return other
+
+    def call(self, app: str, action: str, **args) -> Result:
+        """Run another app's shared read action (listed in this app's `uses`). Raises AppUnavailable when that app
+        isn't there; the caller says "not available" instead of failing."""
+        if self.call_hook is None:
+            raise AppUnavailable(f"{app} can't be reached from here.")
+        return self.call_hook(self.name, app, action, args, self._db)
 
     def chat_between(self, start: datetime, end: datetime) -> list[tuple[datetime, str, str]]:
         """The conversation in [start, end): (when, 'Elijah' or 'Falak', text), oldest first."""

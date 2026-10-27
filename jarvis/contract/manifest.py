@@ -14,9 +14,9 @@ from jarvis.contract.timespec import MIN_EVERY_S, parse_clock, parse_interval
 EFFECTS = ("read", "local", "outbound", "irreversible")
 _NAME = re.compile(r"^[a-z][a-z0-9]*(_[a-z0-9]+)*$")  # snake_case; no "__", which joins app and action
 _RUNS_ON = re.compile(r"^(host|node:[a-z][a-z0-9_]*)$")
-_APP_KEYS = {"name", "description", "runs_on", "secrets", "context"}
+_APP_KEYS = {"name", "description", "runs_on", "secrets", "context", "uses"}
 _ACTION_KEYS = {"name", "description", "effect", "handler", "undo", "confirm", "log_args", "untrusted_output", "input",
-                "timeout_s"}
+                "timeout_s", "share", "tool", "sends_data"}
 _SESSION_KEYS = {"name", "description", "effect", "untrusted_output", "idle_minutes", "start", "sample", "stop", "input",
                  "timeout_s"}
 _JOB_KEYS = {"name", "title", "description", "handler", "kind", "every", "at", "quiet", "needs", "timeout_s"}
@@ -48,6 +48,9 @@ class ActionSpec:
     timeout_s: int = DEFAULT_TIMEOUT_S  # how long a device may take before the call fails
     session: str | None = None  # set on the tools a [[sessions]] entry generates
     phase: str | None = None  # "start", "look" or "stop"
+    share: bool = False  # other apps that list this one in `uses` may call it (read actions only)
+    tool: bool = True  # offered to the model; false for actions only other apps call
+    sends_data: bool = False  # its arguments leave the device (a search query, a URL)
 
 
 @dataclass(frozen=True)
@@ -108,11 +111,17 @@ class Manifest:
     context: str | None = None  # handler returning a short text block for every turn prompt
     sessions: tuple[SessionSpec, ...] = ()
     jobs: tuple[JobSpec, ...] = ()
+    uses: tuple[str, ...] = ()  # apps whose shared actions this one may call with ctx.call
 
     @property
     def tools(self) -> tuple[ActionSpec, ...]:
-        """Every tool the app gives the model: its actions plus the three generated for each session."""
+        """Every action the app has: its actions plus the three generated for each session."""
         return self.actions + tuple(t for s in self.sessions for t in s.tools())
+
+    @property
+    def model_tools(self) -> tuple[ActionSpec, ...]:
+        """The tools the model is offered: everything but actions marked tool = false."""
+        return tuple(t for t in self.tools if t.tool)
 
 
 def _unknown(path: Path, where: str, given: dict, allowed: set[str]) -> None:
@@ -204,8 +213,17 @@ def _action(path: Path, table: dict) -> ActionSpec:
     untrusted = table.get("untrusted_output", False)
     if not isinstance(untrusted, bool):
         raise ManifestError(path, f"{where}: untrusted_output must be true or false")
+    flags = {}
+    for key, default in (("share", False), ("tool", True), ("sends_data", False)):
+        flags[key] = table.get(key, default)
+        if not isinstance(flags[key], bool):
+            raise ManifestError(path, f"{where}: {key} must be true or false")
+    if flags["share"] and effect != "read":
+        raise ManifestError(path, f"{where}: only read actions can be shared with other apps")
+    if not flags["tool"] and not flags["share"]:
+        raise ManifestError(path, f"{where}: an action with tool = false must be shared, or nothing can call it")
     return ActionSpec(name, description, effect, schema, handler, undo, confirm, log_args, untrusted,
-                      _timeout(path, where, table))
+                      _timeout(path, where, table), **flags)
 
 
 def _job(path: Path, table: dict, settings: dict) -> JobSpec:
@@ -302,6 +320,11 @@ def load_manifest(path: Path, folder: str | None = None) -> Manifest:
     context = app.get("context")
     if context is not None and not (isinstance(context, str) and context.isidentifier()):
         raise ManifestError(path, "context must be a function name")
+    uses = app.get("uses", [])
+    if not isinstance(uses, list) or not all(isinstance(u, str) and _NAME.match(u) for u in uses):
+        raise ManifestError(path, "uses must be a list of app names")
+    if name in uses:
+        raise ManifestError(path, "an app doesn't list itself in uses")
     tables, session_tables, job_tables = raw.get("actions", []), raw.get("sessions", []), raw.get("jobs", [])
     if not all(isinstance(t, list) for t in (tables, session_tables, job_tables)):
         raise ManifestError(path, "[[actions]], [[sessions]] and [[jobs]] must be lists of tables")
@@ -318,4 +341,5 @@ def load_manifest(path: Path, folder: str | None = None) -> Manifest:
     names = [a.name for a in actions + tuple(t for s in sessions for t in s.tools())]
     if len(set(names)) != len(names):
         raise ManifestError(path, f"duplicate tool name '{next(n for n in names if names.count(n) > 1)}'")
-    return Manifest(name, description, runs_on, tuple(secrets), settings, actions, path, context, sessions, jobs)
+    return Manifest(name, description, runs_on, tuple(secrets), settings, actions, path, context, sessions, jobs,
+                    tuple(uses))

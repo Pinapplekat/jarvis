@@ -59,6 +59,17 @@ def list_reminders(ctx: AppContext, days: int = 7) -> Result:
     return Result("\n".join(lines), data={"reminders": [dict(r) for r in rows]})
 
 
+def sent_between(ctx: AppContext, start: str, end: str) -> Result:
+    try:
+        low, high = datetime.fromisoformat(start), datetime.fromisoformat(end)
+    except ValueError:
+        raise ActionError("start and end need to look like 2026-10-26T00:00:00-07:00.") from None
+    rows = ctx.db.execute(
+        "SELECT id, text, sent_at FROM reminders_items WHERE status='sent' AND julianday(sent_at) >= julianday(?) "
+        "AND julianday(sent_at) < julianday(?) ORDER BY julianday(sent_at)", (_utc(low), _utc(high))).fetchall()
+    return Result(f"{len(rows)} sent", data={"reminders": [dict(r) for r in rows]})
+
+
 def cancel_reminder(ctx: AppContext, id: int) -> Result:
     row = ctx.db.execute("SELECT text, status FROM reminders_items WHERE id=?", (id,)).fetchone()
     if row is None:

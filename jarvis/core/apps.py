@@ -31,6 +31,7 @@ class ToolSpec:
     effect: str
     input_schema: dict
     untrusted_output: bool = False
+    sends_data: bool = False
 
     @property
     def name(self) -> str:
@@ -53,9 +54,9 @@ class Registry:
 
     def actions(self) -> list[ToolSpec]:
         return [
-            ToolSpec(name, a.name, a.description, a.effect, a.input, a.untrusted_output)
+            ToolSpec(name, a.name, a.description, a.effect, a.input, a.untrusted_output, a.sends_data)
             for name, app in self.apps.items()
-            for a in app.manifest.tools
+            for a in app.manifest.model_tools
         ]
 
     def find(self, tool_name: str) -> tuple[LoadedApp, ActionSpec] | None:
@@ -150,7 +151,11 @@ def load_apps(settings: Settings, apps_dir: Path = DEFAULT_APPS_DIR, extra_dirs:
                 settings.tz(),
             )
             loaded[manifest.name] = LoadedApp(manifest, module, ctx)
-        return Registry(settings, conn, loaded)
+        reg = Registry(settings, conn, loaded)
+        from jarvis.core import share  # share uses dispatch, which imports this module
+
+        share.install(reg)
+        return reg
     except BaseException:
         conn.close()
         raise

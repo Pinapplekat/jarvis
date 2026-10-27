@@ -2,6 +2,7 @@
 name = "checkins"
 description = "The morning brief and the evening check-in, which Falak starts on its own."
 runs_on = "host"
+uses = ["school", "reminders", "journal"]
 
 [settings.morning]
 type = "string"
