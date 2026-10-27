@@ -8,10 +8,10 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Union
 
-from jarvis.core.api import ActionError, Result
+from jarvis.contract.api import ActionError, Result
 from jarvis.core.apps import LoadedApp, Registry, run_on_this_machine, tmp_dir
-from jarvis.core.manifest import ActionSpec
-from jarvis.core.schema import fill_defaults, validate
+from jarvis.contract.manifest import ActionSpec
+from jarvis.contract.schema import fill_defaults, validate
 
 ASK_TTL = timedelta(hours=24)
 NOT_LOGGED = "(not logged)"

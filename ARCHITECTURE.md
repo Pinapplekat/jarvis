@@ -13,8 +13,9 @@ jarvis/
   core/       # the brain side: agent loop, memory, confirmations, scheduler, channel interface, settings
   channels/   # one adapter per way of talking to Falak (discord.py, terminal.py)
   host.py     # composition root: loads apps and channels, routes each message to the agent loop
+  contract/   # what apps, host and node share: handler API, manifest parser, schema subset
   node/       # the device runtime: runs device apps, talks to the host
-  protocol/   # message types and the capability list, shared by core and node
+  protocol/   # host-node message types, shared by core and node
   apps/       # every tool, one folder each
     <name>/
       manifest.toml
@@ -34,15 +35,16 @@ docs/briefs/  # one brief per milestone
    one channel interface, one settings loader and one logger. Never add a second path or a "backup" copy
    of the same logic in another process.
 3. **The dependency direction is fixed.**
-   - `apps` may import `jarvis.core.api` (the small surface the core gives apps), `jarvis.protocol` and
-     their own folder. They never import another app, `jarvis.node` or the rest of `jarvis.core`.
-   - `channels` may import `jarvis.core.channel`, `jarvis.core.api` and `jarvis.protocol`, nothing else from
-     the core. Only `channels/discord.py` imports `discord`.
+   - `contract` (the handler API, manifests and the schema subset) imports nothing else from `jarvis`.
+   - `apps` may import `jarvis.contract.api`, `jarvis.protocol` and their own folder. They never import
+     another app, `jarvis.node` or `jarvis.core`.
+   - `core`, `node` and `channels` may import `contract` and `protocol`.
+   - `channels` may import `jarvis.core.channel` and nothing else from the core. Only `channels/discord.py`
+     imports `discord`.
    - `core` never imports `channels` or `host`. `host.py` is the one place that wires them together.
-   - `core` and `node` may import `protocol`.
+   - `core` and `node` never import each other.
    - `protocol` imports nothing else from `jarvis`. Both sides depend on it, so it depends on neither.
    - Nothing imports `legacy`.
-   - `core` and `node` never import each other.
    - `tests/test_layout.py` enforces these rules, including relative imports.
 4. **Short prompt, generated tool docs.** The system prompt holds persona and principles only, about one
    screen. Tool descriptions come from manifests. A new behavior goes into an app or a principle, never

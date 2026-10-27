@@ -13,9 +13,9 @@ from pathlib import Path
 from types import ModuleType
 
 from jarvis.core import db
-from jarvis.core.api import AppContext
-from jarvis.core.manifest import ActionSpec, Manifest, ManifestError, load_manifest
-from jarvis.core.schema import validate
+from jarvis.contract.api import AppContext
+from jarvis.contract.manifest import ActionSpec, Manifest, ManifestError, load_manifest
+from jarvis.contract.schema import validate
 from jarvis.core.settings import Settings, SettingsError, load_secrets
 
 DEFAULT_APPS_DIR = Path(__file__).resolve().parent.parent / "apps"

@@ -1,4 +1,4 @@
-from jarvis.core.api import AppContext, Attachment, Result
+from jarvis.contract.api import AppContext, Attachment, Result
 
 NOTES: list[str] = []
 SENT: list[tuple] = []

@@ -8,7 +8,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from jarvis.core.schema import check_schema, validate
+from jarvis.contract.schema import check_schema, validate
 
 EFFECTS = ("read", "local", "outbound", "irreversible")
 _NAME = re.compile(r"^[a-z][a-z0-9]*(_[a-z0-9]+)*$")  # snake_case; no "__", which joins app and action

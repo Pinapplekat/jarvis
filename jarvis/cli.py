@@ -10,7 +10,7 @@ from pathlib import Path
 from jarvis import __version__
 from jarvis.core import actions, db
 from jarvis.core.apps import Registry, load_apps, settings_for_missing_apps
-from jarvis.core.manifest import ManifestError
+from jarvis.contract.manifest import ManifestError
 from jarvis.core.log import setup_logging
 from jarvis.core.settings import Settings, SettingsError, load_secrets, load_settings
 

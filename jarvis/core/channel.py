@@ -7,7 +7,7 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Protocol
 
-from jarvis.core.api import Attachment
+from jarvis.contract.api import Attachment
 
 
 @dataclass(frozen=True)

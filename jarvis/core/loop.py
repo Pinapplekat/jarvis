@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from jarvis.core import context, conversation
 from jarvis.core.actions import Origin
-from jarvis.core.api import Attachment
+from jarvis.contract.api import Attachment
 from jarvis.core.apps import Registry
 from jarvis.core.brain import Brain, BrainResult
 from jarvis.core.tools import TurnState, build_tools, latest_ask_id, new_pending_asks

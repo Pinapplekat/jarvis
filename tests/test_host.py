@@ -7,7 +7,7 @@ from scripted_brain import ScriptedBrain
 
 from jarvis.core import loop
 from jarvis.core.actions import Origin
-from jarvis.core.api import Attachment
+from jarvis.contract.api import Attachment
 from jarvis.core.channel import Incoming
 from jarvis.core.settings import SettingsError, load_settings
 from jarvis.host import Host, build_channels, check_channel_sections

@@ -1,7 +1,7 @@
 import pytest
 
 from jarvis.core.apps import load_apps, settings_for_missing_apps
-from jarvis.core.manifest import ManifestError
+from jarvis.contract.manifest import ManifestError
 from jarvis.core.settings import SettingsError, load_settings
 
 GOOD = '''

@@ -3,7 +3,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from jarvis.core.api import ActionError, AppContext, Attachment, Result
+from jarvis.contract.api import ActionError, AppContext, Attachment, Result
 
 TIMEOUT = 10
 DENIED = re.compile(r"not authori[sz]ed|denied|permission|access", re.I)

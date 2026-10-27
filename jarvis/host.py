@@ -14,7 +14,7 @@ from jarvis.core.actions import Origin
 from jarvis.core.apps import Registry, tmp_dir
 from jarvis.core.brain import Brain
 from jarvis.core.channel import AskResult, Channel, ChannelUnavailable, Incoming
-from jarvis.core.schema import validate
+from jarvis.contract.schema import validate
 from jarvis.core.settings import Settings, SettingsError, load_secrets
 
 log = logging.getLogger("jarvis.host")

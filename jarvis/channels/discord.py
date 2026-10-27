@@ -12,7 +12,7 @@ from pathlib import Path
 
 import discord
 
-from jarvis.core.api import Attachment
+from jarvis.contract.api import Attachment
 from jarvis.core.channel import AnswerAsk, ChannelUnavailable, Deliver, Incoming
 
 log = logging.getLogger("jarvis.channels.discord")

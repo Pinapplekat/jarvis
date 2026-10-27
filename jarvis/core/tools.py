@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 
 from jarvis.core import actions
 from jarvis.core.actions import Origin
-from jarvis.core.api import Attachment
+from jarvis.contract.api import Attachment
 from jarvis.core.apps import SEP, Registry
 from jarvis.core.brain import Image, Tool, ToolReply
 

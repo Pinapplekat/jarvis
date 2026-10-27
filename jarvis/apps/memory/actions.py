@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from jarvis.core.api import ActionError, AppContext, Result
+from jarvis.contract.api import ActionError, AppContext, Result
 
 COLUMNS = "id, category, key, value, source, updated_at"
 LIMIT = 20

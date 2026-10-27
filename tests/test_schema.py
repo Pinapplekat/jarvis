@@ -1,6 +1,6 @@
 import pytest
 
-from jarvis.core.schema import check_schema, fill_defaults, validate
+from jarvis.contract.schema import check_schema, fill_defaults, validate
 
 SCHEMA = {
     "type": "object",

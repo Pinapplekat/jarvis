@@ -48,13 +48,17 @@ def test_relative_imports_are_resolved(tmp_path):
     assert list(imports(f, "jarvis.core.db")) == ["jarvis.node", "jarvis.core.settings", "jarvis.protocol"]
 
 
+def test_contract_imports_nothing_else_from_jarvis():
+    assert hits("jarvis.contract", ["jarvis"], allowed=["jarvis.contract"]) == []
+
+
 def test_core_independent_of_node_apps_channels_host_legacy():
     banned = ["jarvis.node", "jarvis.apps", "jarvis.channels", "jarvis.host", "legacy"]
     assert hits("jarvis.core", banned) == []
 
 
-def test_channels_import_only_the_channel_interface_api_and_protocol():
-    allowed = ["jarvis.core.channel", "jarvis.core.api", "jarvis.protocol", "jarvis.channels"]
+def test_channels_import_only_the_channel_interface_contract_and_protocol():
+    allowed = ["jarvis.core.channel", "jarvis.contract", "jarvis.protocol", "jarvis.channels"]
     assert hits("jarvis.channels", ["jarvis"], allowed=allowed) == []
 
 
@@ -72,7 +76,7 @@ def test_protocol_imports_nothing_else_from_jarvis():
 
 
 def app_violations(apps_dir, package="jarvis.apps"):
-    """Imports in each app's own code (not its tests/) that go beyond the core api, protocol and itself."""
+    """Imports in each app's own code (not its tests/) that go beyond the contract api, protocol and itself."""
     found = []
     for path in sorted(apps_dir.rglob("*.py")):
         rel = path.relative_to(apps_dir)
@@ -83,19 +87,19 @@ def app_violations(apps_dir, package="jarvis.apps"):
         found += [
             f"{name} imports {i}"
             for i in imports(path, name)
-            if within(i, "jarvis") and not any(within(i, a) for a in ("jarvis.core.api", "jarvis.protocol", own))
+            if within(i, "jarvis") and not any(within(i, a) for a in ("jarvis.contract.api", "jarvis.protocol", own))
         ]
     return found
 
 
-def test_apps_use_only_the_core_api_and_protocol():
+def test_apps_use_only_the_contract_api_and_protocol():
     assert app_violations(PKG / "apps") == []
 
 
 def test_app_check_catches_violations_in_actions_but_not_tests(tmp_path):
     app = tmp_path / "demo"
     (app / "tests").mkdir(parents=True)
-    (app / "actions.py").write_text("from jarvis.core import db\nfrom jarvis.core.api import Result\n")
+    (app / "actions.py").write_text("from jarvis.core import db\nfrom jarvis.contract.api import Result\n")
     (app / "tests" / "test_x.py").write_text("from jarvis.core import db\n")
     assert app_violations(tmp_path) == ["jarvis.apps.demo.actions imports jarvis.core"]
 
