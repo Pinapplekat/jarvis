@@ -60,6 +60,7 @@ BAD = [
     ("undo handler missing", GOOD.replace('"read"', '"local"\nundo = "nope"'), "undo handler 'nope' not found"),
     ("outbound without confirm", GOOD.replace('"read"', '"outbound"'), "need a 'confirm'"),
     ("irreversible without confirm", GOOD.replace('"read"', '"irreversible"'), "need a 'confirm'"),
+    ("plan without confirm", GOOD.replace('"read"', '"plan"'), "need a 'confirm'"),
     ("confirm on read", GOOD.replace('effect = "read"', 'effect = "read"\nconfirm = "Sure?"'), "only for outbound"),
     ("sends_data without confirm", GOOD.replace('effect = "read"', 'effect = "read"\nsends_data = true'),
      "actions that send data need a 'confirm'"),

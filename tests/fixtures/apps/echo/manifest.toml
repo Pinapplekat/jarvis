@@ -73,3 +73,15 @@ effect = "read"
 [actions.input]
 type = "object"
 additionalProperties = false
+
+[[actions]]
+name = "project"
+description = "Start a long job the user wants to steer."
+effect = "plan"
+confirm = "Here's my plan: {plan}. Go?"
+[actions.input]
+type = "object"
+required = ["plan"]
+additionalProperties = false
+[actions.input.properties.plan]
+type = "string"

@@ -44,3 +44,8 @@ def photo(ctx: AppContext) -> Result:
 
 def boom(ctx: AppContext) -> Result:
     raise RuntimeError("secret internal detail")
+
+
+def project(ctx: AppContext, plan: str) -> Result:
+    WIPED.append(f"project:{plan}")
+    return Result("started")

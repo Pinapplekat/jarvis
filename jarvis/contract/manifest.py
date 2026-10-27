@@ -11,7 +11,8 @@ from pathlib import Path
 from jarvis.contract.schema import check_schema, validate
 from jarvis.contract.timespec import MIN_EVERY_S, parse_clock, parse_interval
 
-EFFECTS = ("read", "local", "outbound", "irreversible")
+EFFECTS = ("read", "local", "outbound", "irreversible", "plan")
+ASKS = ("outbound", "irreversible", "plan")  # effects whose actions carry a `confirm` question
 _NAME = re.compile(r"^[a-z][a-z0-9]*(_[a-z0-9]+)*$")  # snake_case; no "__", which joins app and action
 _RUNS_ON = re.compile(r"^(host|node:[a-z][a-z0-9_]*)$")
 _APP_KEYS = {"name", "description", "runs_on", "secrets", "context", "uses", "start", "stop"}
@@ -204,12 +205,12 @@ def _action(path: Path, table: dict) -> ActionSpec:
     if problems:
         raise ManifestError(path, f"{where}: {problems[0]}")
     sends = table.get("sends_data", False)
-    if effect in ("outbound", "irreversible") or sends is True:
+    if effect in ASKS or sends is True:
         if not isinstance(confirm, str) or not confirm.strip():
-            need = f"{effect} actions" if effect in ("outbound", "irreversible") else "actions that send data"
+            need = f"{effect} actions" if effect in ASKS else "actions that send data"
             raise ManifestError(path, f"{where}: {need} need a 'confirm' question")
     elif confirm is not None:
-        raise ManifestError(path, f"{where}: 'confirm' is only for outbound, irreversible and sends_data actions")
+        raise ManifestError(path, f"{where}: 'confirm' is only for outbound, irreversible, plan and sends_data actions")
     if confirm is not None:
         for _, field, _, _ in string.Formatter().parse(confirm):
             if field is not None and field not in schema.get("properties", {}):

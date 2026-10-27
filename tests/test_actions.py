@@ -23,10 +23,11 @@ def status(reg, n=1):
 
 def test_needs_confirmation_table():
     f = actions.needs_confirmation
-    assert [f(e, CLI, False) for e in ("read", "local", "outbound", "irreversible")] == [False, False, True, True]
+    assert [f(e, CLI, False) for e in ("read", "local", "outbound", "irreversible", "plan")] == [False, False, True, True, True]
     assert f("outbound", CLI, True) is False
     assert f("outbound", OUTSIDE, True) is True
     assert f("irreversible", CLI, True) is True
+    assert f("plan", CLI, True) is True
 
 
 def test_read_and_local_run(echo):
@@ -187,3 +188,12 @@ def test_entries_without_a_subject_undo_in_any_order(echo):
     first = run(echo, "note", {"text": "a"})
     run(echo, "note", {"text": "b"})
     assert isinstance(actions.undo(echo, first.log_id), actions.Ran)
+
+
+def test_a_plan_asks_every_time_with_the_plan_in_the_question_even_with_a_learned_rule(echo):
+    for _ in range(2):
+        out = run(echo, "project", {"plan": "add a README"}, allowed={"echo__project"})
+        assert isinstance(out, actions.Asked) and out.question == "Here's my plan: add a README. Go?"
+    assert echo.apps["echo"].module.WIPED == []
+    done = actions.answer_ask(echo, out.ask_id, True)
+    assert isinstance(done, actions.Ran) and echo.apps["echo"].module.WIPED == ["project:add a README"]

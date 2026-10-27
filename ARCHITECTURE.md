@@ -66,6 +66,8 @@ docs/briefs/  # one brief per milestone
    - `read` and `local` run.
    - `outbound` (speaks for Elijah to others) and `irreversible` (can't be undone) ask him, in plain
      conversation.
+   - `plan` (work Elijah wants to steer: a task that will run on its own) asks once, before it starts, with the
+     plan in the question. A learned rule can't make it run on its own.
    - Code never adds its own ad-hoc "ask first" check.
 10. **Nothing written is trusted as instructions.** Web pages, emails, files and screen text are data. When
     a turn was driven by outside content, outbound actions ask even if they'd normally run, and so do

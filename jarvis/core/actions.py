@@ -55,7 +55,7 @@ def needs_confirmation(effect: str, origin: Origin, trusted: bool, sends_data: b
     """The only place the ask-or-run decision is made. `trusted`: a learned rule allows this tool.
     `sends_data`: the arguments leave the device, so once outside content has steered the turn it asks
     (a page can't make Falak put what it read into a search or a URL)."""
-    if effect == "irreversible":
+    if effect in ("irreversible", "plan"):  # a learned rule never lets either run on its own
         return True
     if effect == "outbound":
         return not trusted or origin.outside_content
