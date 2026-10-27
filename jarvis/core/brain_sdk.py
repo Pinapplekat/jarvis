@@ -47,6 +47,9 @@ class SdkBrain:
             model=self.model,
             max_turns=self.max_turns,
             cwd=self.cwd,
+            # Claude Code otherwise keeps every turn, and every photo and screenshot a tool returned, under
+            # ~/.claude/projects. Nothing Falak sees is stored unless Elijah asks.
+            extra_args={"no-session-persistence": None},
             stderr=lambda line: log.debug("claude: %s", line.rstrip()),
         )
 

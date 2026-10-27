@@ -40,3 +40,4 @@ def test_options_isolate_the_brain_from_everything_but_falak_tools(tmp_path):
     assert (o.system_prompt, o.model, o.max_turns) == ("be calm", "sonnet", 7)
     assert Path(o.cwd) == tmp_path / "scratch" and Path(o.cwd).is_dir()
     assert "ANTHROPIC_API_KEY" not in o.env
+    assert o.extra_args == {"no-session-persistence": None}  # no transcripts or photo copies on disk
