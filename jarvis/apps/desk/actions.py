@@ -72,6 +72,9 @@ class Runner:
     def _run(self) -> None:
         try:
             self.session = self._setup()
+        except ImportError as e:  # the `desk` extra isn't installed on this node: the desk is simply off
+            log.warning("the desk is off: %s (install it with `uv sync --extra desk`)", e)
+            return
         except Exception as e:
             log.exception("the desk could not start")
             self.ctx.notify(f"The desk couldn't start: {e}")

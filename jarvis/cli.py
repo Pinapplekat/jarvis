@@ -137,6 +137,10 @@ def build_parser(name: str) -> argparse.ArgumentParser:
     node.add_parser("list", help="every paired node")
     node.add_parser("run", help="run this machine's node and connect it to the host")
     node.add_parser("music-login", help="sign the music app in to Spotify (once, on the node's Mac)")
+    voice = sub.add_parser("voice", help="the speech models for the desk and calls").add_subparsers(
+        dest="voice_command", required=True)
+    voice.add_parser("setup", help="copy or download the listening and speaking models into Falak's folder")
+    voice.add_parser("status", help="which speech models are in place")
     sub.add_parser("nodes", help="nodes connected to the running host, with their capabilities")
     sub.add_parser("apps", help="list apps and their actions")
     run = sub.add_parser("run", help="run an action as <app>.<action>")
@@ -180,6 +184,10 @@ def main(argv: list[str] | None = None) -> int:
         return _info(settings)
     if args.group == "dev" and args.command == "import-db":
         return _import_db(settings, args.source, args.overwrite)
+    if args.group == "voice":
+        from jarvis import voice_cli
+
+        return voice_cli.setup(settings) if args.voice_command == "setup" else voice_cli.status(settings)
     if args.group in ("node", "nodes"):
         from jarvis import node_cli
 
