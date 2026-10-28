@@ -45,7 +45,8 @@ class Fetched:
     notices: list[browse.Notice] = field(default_factory=list)
     source: str = "feed"  # token | browser | feed
     why_not_browser: str = ""  # set when the browser was tried and the feed was used instead
-    asked_to_sign_in: bool = False  # the browser said unavailable or signed out
+    asked_to_sign_in: bool = False  # the browser said Canvas is signed out
+    no_node: bool = False  # the Mac that runs the browser isn't connected (yet): try again soon, say nothing
 
 
 def fetch(ctx: AppContext) -> Fetched:
@@ -55,20 +56,20 @@ def fetch(ctx: AppContext) -> Fetched:
     if token:
         return Fetched(canvas.CanvasClient(base, token, _opener()).fetch_deadlines(ctx.tz, ctx.now().date()),
                        source="token")
-    why, sign_in = "", False
+    why, sign_in, no_node = "", False, False
     try:
         client = browse.BrowserClient(ctx, base)
         return Fetched(client.fetch_deadlines(ctx.tz, ctx.now().date()), client.fetch_notices(ctx.now().date()),
                        source="browser")
     except browse.SignedOut:
         why, sign_in = "Canvas wants a sign-in", True
-    except AppUnavailable as e:
-        why, sign_in = str(e), True
+    except AppUnavailable as e:  # not a sign-in problem: the host starts before the Mac connects, and links drop
+        why, no_node = str(e), True
     except ActionError as e:  # the browser answered but couldn't do it (not installed, the site was down)
         why = str(e)
     if feed:
         return Fetched(canvas.from_feed(canvas.fetch_feed(feed, _opener()), ctx.tz), source="feed",
-                       why_not_browser=why, asked_to_sign_in=sign_in)
+                       why_not_browser=why, asked_to_sign_in=sign_in, no_node=no_node)
     raise NotSetUp(f"Canvas isn't set up: {SIGN_IN_AGAIN[:-1] if sign_in else why} Or add CANVAS_ICS_URL (the "
                    "Calendar Feed link) to the .env file.") from None
 
@@ -114,9 +115,12 @@ def _state(ctx: AppContext, key: str, value: str | None = None) -> str | None:
     return value
 
 
-def run_sync(ctx: AppContext) -> tuple[str, str | None, str]:
-    """Sync once. Returns (what happened, a message for Elijah or None, why the browser wasn't used). The sign-in
-    message goes out once, and not again until Canvas has worked."""
+NO_NODE_RETRY = timedelta(minutes=10)
+
+
+def run_sync(ctx: AppContext) -> tuple[str, str | None, str, bool]:
+    """Sync once. Returns (what happened, a message for Elijah or None, why the browser wasn't used, whether the Mac
+    that runs the browser wasn't connected). The sign-in message goes out once, and not again until Canvas worked."""
     got = fetch(ctx)
     count, new = store(ctx, got.deadlines)
     summary = f"{count} deadlines, {new} new"
@@ -130,16 +134,19 @@ def run_sync(ctx: AppContext) -> tuple[str, str | None, str]:
         message = SIGN_IN_AGAIN
     if got.why_not_browser:
         ctx.log.info("Canvas came from the calendar feed: %s", got.why_not_browser)
+    if got.no_node:
+        summary += "; the Mac isn't connected, trying the browser again soon"
     ctx.wake("nudge")
-    return summary, message, got.why_not_browser
+    return summary, message, got.why_not_browser, got.no_node
 
 
 def sync(ctx: AppContext, run: JobRun) -> JobResult:
     try:
-        summary, message, _ = run_sync(ctx)
+        summary, message, _, no_node = run_sync(ctx)
     except NotSetUp:
         return JobResult("not set up (no sign-in, CANVAS_ICS_URL or CANVAS_TOKEN)")  # not worth a message
-    return JobResult(summary, (message,) if message else ())
+    soon = run.now + NO_NODE_RETRY if no_node else None
+    return JobResult(summary, (message,) if message else (), wake_at=soon)
 
 
 def date_notices(ctx: AppContext, since: str) -> Result:
@@ -214,7 +221,7 @@ def undo_import_deadlines(ctx: AppContext, undo: dict) -> Result:
 
 def sync_now(ctx: AppContext) -> Result:
     try:
-        summary, message, why = run_sync(ctx)
+        summary, message, why, _ = run_sync(ctx)
     except NotSetUp as e:
         raise ActionError(str(e)) from None
     return Result(f"Synced Canvas: {summary}." + (f" (From the calendar feed: {why}.)" if why else "")

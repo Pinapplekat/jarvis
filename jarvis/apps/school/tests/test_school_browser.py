@@ -148,11 +148,13 @@ def test_signed_out_falls_back_to_the_feed_and_says_so_once(real_apps):
     assert len(job(app, "sync").messages) == 1  # it worked, so the next sign-out is news again
 
 
-def test_no_node_is_the_same_as_signed_out(real_apps):
+def test_no_node_falls_back_quietly_and_tries_again_soon(real_apps):
+    # The host starts before the Mac connects, so this happens on every `falak start`: not a reason to nag him.
     app = setup(real_apps, FakeBrowser(unavailable=True), {"CANVAS_ICS_URL": FEED_URL})
     app.module.canvas.fetch_feed = lambda url, opener=None: b"BEGIN:VCALENDAR\nEND:VCALENDAR\n"
-    assert job(app, "sync").messages == ("Canvas wants you to sign in again; say 'sign in to Canvas' at your Mac.",)
-    assert job(app, "sync").messages == ()
+    result = job(app, "sync")
+    assert result.messages == () and "isn't connected" in result.summary
+    assert result.wake_at is not None and result.wake_at - NOW <= timedelta(minutes=10)
 
 
 def test_a_browser_that_cant_fetch_uses_the_feed_quietly_and_says_why_on_demand(real_apps):
@@ -170,7 +172,7 @@ def test_nothing_set_up_is_quiet_for_the_job_and_an_error_for_a_request(real_app
     result = job(app, "sync")
     assert result.summary.startswith("not set up") and result.messages == ()
     out = actions.run(real_apps, "school__sync_now", {}, CLI)
-    assert "isn't set up" in out.message and "sign in again" in out.message
+    assert "isn't set up" in out.message and "isn't connected" in out.message
 
 
 def test_the_three_hour_nudge_works_for_browser_rows_with_submission_status(real_apps):

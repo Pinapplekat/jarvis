@@ -124,7 +124,7 @@ def test_the_feed_is_the_fallback_without_a_token(real_apps, monkeypatch):
 
     app, opener = school(real_apps, monkeypatch, [("feed.ics", FEED)])
     app.ctx.secrets = {"CANVAS_ICS_URL": "https://canvas.test/feed.ics"}
-    assert job(app, "sync").summary == "3 deadlines, 3 new"
+    assert job(app, "sync").summary.startswith("3 deadlines, 3 new")  # (no browser to try here)
     assert opener.requests[0][1] is None  # no token sent
     rows = real_apps.conn.execute("SELECT trackable, kind FROM school_deadlines").fetchall()
     assert {r["trackable"] for r in rows} == {0} and {r["kind"] for r in rows} == {"due", "event"}
