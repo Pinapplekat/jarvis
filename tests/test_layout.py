@@ -75,10 +75,10 @@ def test_speech_imports_nothing_else_from_jarvis():
     assert hits("jarvis.speech", ["jarvis"], allowed=["jarvis.speech"]) == []
 
 
-def test_only_channels_and_the_host_import_speech():
+def test_only_channels_the_host_and_the_voice_command_import_speech():
     importers = sorted({n for p, n in modules() if not within(n, "jarvis.speech")
                         and any(within(i, "jarvis.speech") for i in imports(p, n)) and ".tests." not in n})
-    assert all(within(n, "jarvis.channels") or n == "jarvis.host" for n in importers), importers
+    assert all(within(n, "jarvis.channels") or n in ("jarvis.host", "jarvis.voice_cli") for n in importers), importers
 
 
 def test_protocol_imports_nothing_else_from_jarvis():

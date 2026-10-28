@@ -8,7 +8,9 @@ from scripted_brain import ScriptedBrain
 from test_voice_turns import StreamingBrain
 
 from jarvis.channels import desk as desk_module
+from jarvis.channels import voice_services
 from jarvis.channels.desk import DeskChannel
+from jarvis.channels.voice_services import VoiceServices
 from jarvis.core import conversation, outbox
 from jarvis.core.brain import BrainResult
 from jarvis.host import Host
@@ -49,8 +51,8 @@ def make_desk(listener, make_voice=lambda engine: PcmVoice(), clock=None, auto_d
             asyncio.get_running_loop().call_soon(channel.on_frame, node, m.PlaybackStopped(msg.stream, 0, "done").to_json())
         return True
 
-    channel = DeskChannel(listener=lambda: listener, voice=VoiceManager(make_voice, 30), engine=lambda: "kokoro",
-                          profile=profile, send_frame=send, **kwargs)
+    services = VoiceServices(lambda: listener, VoiceManager(make_voice, 30), lambda: "kokoro", profile)
+    channel = DeskChannel(services=services, send_frame=send, **kwargs)
     return channel, sent
 
 
@@ -197,7 +199,7 @@ def test_a_trailing_and_is_held_and_joined_with_what_comes_next(echo):
 
     async def scenario(host):
         utterance(desk, 1)
-        await until(lambda: len(desk._utterances) == 0 and desk._held is not None, "the request to be held")
+        await until(lambda: len(desk._utterances) == 0 and desk._joiner.holding, "the request to be held")
         assert brain.prompts == []  # not answered yet
         utterance(desk, 2)
         await until(lambda: brain.prompts, "the joined request")
@@ -208,7 +210,7 @@ def test_a_trailing_and_is_held_and_joined_with_what_comes_next(echo):
 
 
 def test_a_held_request_goes_ahead_when_he_does_not_carry_on(echo, monkeypatch):
-    monkeypatch.setattr(desk_module, "GRACE_S", 0.05)
+    monkeypatch.setattr(voice_services, "GRACE_S", 0.05)
     brain = ScriptedBrain(text="Done.")
     desk, sent = make_desk(Listener("remind me to call Emily and"))
 
@@ -223,7 +225,7 @@ def test_a_held_request_goes_ahead_when_he_does_not_carry_on(echo, monkeypatch):
 @pytest.mark.parametrize("text,held", [("what's on tomorrow", False), ("call Emily and", True), ("hmm… um", True),
                                        ("so...", True), ("sandwich", False), ("Okay.", False)])
 def test_what_counts_as_trailing_off(text, held):
-    assert bool(desk_module.TRAILING.search(text)) is held
+    assert bool(voice_services.TRAILING.search(text)) is held
 
 
 def test_a_cough_is_not_a_request(echo):

@@ -1,4 +1,4 @@
-"""Turns the speech probability of each 30 ms microphone frame into 'how long has he been talking' and 'how long has it
+"""Turns the speech probability of each 30 ms audio frame (a microphone at the desk, Elijah on a call) into 'how long has he been talking' and 'how long has it
 been quiet', which is all the state machine needs."""
 
 from __future__ import annotations

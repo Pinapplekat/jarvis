@@ -96,8 +96,10 @@ def voice_channel(host: "Host", hub) -> Channel | None:
     def profile() -> VoiceProfile:
         return VoiceProfile.from_dict(share.call(reg, "desk", "voice", "current_voice", {}).data["profile"])
 
-    channel = desk.create(data_dir=reg.settings.data_dir, engine=lambda: voice["engine"], profile=profile,
-                          send_frame=hub.send_voice, idle_minutes=voice["idle_minutes"])
+    services = desk.make_services(data_dir=reg.settings.data_dir, engine=lambda: voice["engine"], profile=profile,
+                                  idle_minutes=voice["idle_minutes"])
+    host.voice_services = services
+    channel = desk.DeskChannel(services=services, send_frame=hub.send_voice)
     hub.voice_sink = channel.on_frame
     return channel
 
@@ -111,6 +113,7 @@ class Host:
     def __init__(self, reg: Registry, brain: Brain, channels: list[Channel] | None = None,
                  on_reply: Callable[[Incoming, loop.Reply], None] | None = None) -> None:
         self.reg, self.brain, self.on_reply = reg, brain, on_reply
+        self.voice_services = None  # the one listener and loaded voice that the desk and a Discord call share
         self.brains: dict[str, Brain] = {}  # a channel may think with its own brain (the desk: a faster model)
         self.channels: dict[str, Channel] = {}
         for ch in channels or []:

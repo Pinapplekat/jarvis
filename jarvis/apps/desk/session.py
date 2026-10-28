@@ -13,7 +13,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from jarvis.apps.desk.machine import FOLLOW_UP, IDLE, SPEAKING, DeskMachine, Effect, Timing
-from jarvis.apps.desk.tracker import FRAME_MS, SpeechTracker
+from jarvis.protocol.tracker import FRAME_MS, SpeechTracker
 from jarvis.protocol import messages as m
 
 log = logging.getLogger("jarvis.apps.desk")

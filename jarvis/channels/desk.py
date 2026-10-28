@@ -7,7 +7,6 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
-import re
 import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -15,6 +14,7 @@ from pathlib import Path
 
 from jarvis.core.channel import ChannelUnavailable, Deliver, Incoming
 from jarvis.channels.desk_speech import DeskReply, DeskSpeech, TurnTimes
+from jarvis.channels.voice_services import Joiner, VoiceServices
 from jarvis.protocol import messages as m
 from jarvis.speech import Listener, VoiceManager, VoiceProfile
 
@@ -33,20 +33,14 @@ AT_THE_MAC = 60.0  # seconds since his last key or mouse input that still count 
 PRESENCE_FRESH = 45.0  # a Presence report older than this means the node is gone or quiet
 SPEAK_FIRST_STREAMS = 1 << 31  # ids for things Falak says first; his utterances count up from 1 on the node
 SPOKEN_ERROR = "Sorry sir, I couldn't make that out."
-# A turn that trails off ("and...", "um") is held for a moment: he usually carries on, and the two parts are one request.
-TRAILING = re.compile(r"(?:\b(?:and|um+|uh+|er|so|but|or|then|because)\b|…|\.\.\.)[\s,.]*$", re.IGNORECASE)
-GRACE_S = 2.5
-MAX_GRACES = 2
 
 
 class DeskChannel:
     name = NAME
 
-    def __init__(self, *, listener: Callable[[], Listener], voice: VoiceManager, engine: Callable[[], str],
-                 profile: Callable[[], VoiceProfile], send_frame: Callable[[str, str | bytes], bool],
+    def __init__(self, *, services: VoiceServices, send_frame: Callable[[str, str | bytes], bool],
                  clock: Callable[[], float] = time.monotonic) -> None:
-        self._listener_factory, self._listener = listener, None
-        self._voice, self._engine, self._profile, self._send_frame, self._clock = voice, engine, profile, send_frame, clock
+        self.services, self._send_frame, self._clock = services, send_frame, clock
         self._deliver: Deliver | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop = asyncio.Event()
@@ -56,9 +50,7 @@ class DeskChannel:
         self._node = ""  # the desk node heard from most recently
         self._presence: tuple[float, float, bool] | None = None  # (when, idle_s, conversation open)
         self._ids = itertools.count(SPEAK_FIRST_STREAMS)
-        self._warmed = False
-        self._held: tuple[str, str, int, TurnTimes, int] | None = None  # text, node, stream, clock, graces used
-        self._release_timer: asyncio.TimerHandle | None = None
+        self._joiner = Joiner(self._deliver_text)
 
     # ---- frames from the node (arrive in the hub's thread) -------------------------------------------------
 
@@ -82,7 +74,7 @@ class DeskChannel:
         msg = m.parse(frame)
         if isinstance(msg, m.VoiceStart):
             self._utterances[msg.stream] = (node, bytearray())
-            self._warm()
+            self.services.warm_in_background()
         elif isinstance(msg, m.VoiceEnd) and msg.stream in self._utterances:
             self._times[msg.stream] = TurnTimes(self._clock())
             asyncio.ensure_future(self._heard(msg.stream))
@@ -91,26 +83,11 @@ class DeskChannel:
         elif isinstance(msg, m.Presence):
             self._presence = (self._clock(), msg.idle_s, msg.conversation)
 
-    def _warm(self) -> None:
-        """A conversation is starting: load the voice now so the first sentence doesn't wait for the model."""
-        if not self._warmed and not self._voice.loaded:
-            self._warmed = True
-            engine, profile = self._engine(), self._profile()
-            asyncio.ensure_future(asyncio.to_thread(self._warm_quietly, engine, profile))
-
-    def _warm_quietly(self, engine: str, profile: VoiceProfile) -> None:
-        try:
-            self._voice.warm(engine, profile)
-        except Exception:
-            log.exception("could not load the %s voice", engine)
-        finally:
-            self._warmed = False
-
     async def _heard(self, stream: int) -> None:
         node, pcm = self._utterances.pop(stream)
         times = self._times.pop(stream)
         try:
-            text = await asyncio.to_thread(self._transcribe, bytes(pcm))
+            text = await asyncio.to_thread(self.services.transcribe, bytes(pcm))
         except Exception:
             log.exception("could not transcribe an utterance")
             await self._say_now(node, SPOKEN_ERROR)
@@ -119,35 +96,11 @@ class DeskChannel:
         if not text.strip() or self._deliver is None:
             return  # a cough or a click
         log.info("desk heard (%.1fs of audio): %r", len(pcm) / 32000, text[:80])
-        graces = 0
-        if self._held is not None:  # he carried on: one request in two parts
-            held_text, _, _, held_times, graces = self._held
-            self._cancel_hold()
-            text, times.speech_ended = f"{held_text} {text.strip()}", held_times.speech_ended
-        if TRAILING.search(text) and graces < MAX_GRACES:
-            self._held = (text.strip(), node, stream, times, graces + 1)
-            self._release_timer = asyncio.get_running_loop().call_later(
-                GRACE_S, lambda: asyncio.ensure_future(self._release()))
-            return
-        await self._deliver(Incoming(NAME, text.strip(), reply_to=DeskReply(node, stream, times)))
+        await self._joiner.offer(text, DeskReply(node, stream, times))
 
-    def _cancel_hold(self) -> None:
-        self._held = None
-        if self._release_timer is not None:
-            self._release_timer.cancel()
-            self._release_timer = None
-
-    async def _release(self) -> None:
-        """He did not carry on: the held request goes ahead as it was."""
-        held, self._held, self._release_timer = self._held, None, None
-        if held is not None and self._deliver is not None:
-            text, node, stream, times, _ = held
-            await self._deliver(Incoming(NAME, text, reply_to=DeskReply(node, stream, times)))
-
-    def _transcribe(self, pcm: bytes) -> str:
-        if self._listener is None:
-            self._listener = self._listener_factory()
-        return self._listener.transcribe(pcm, 16000)
+    async def _deliver_text(self, text: str, reply_to: object) -> None:
+        if self._deliver is not None:
+            await self._deliver(Incoming(NAME, text, reply_to=reply_to))
 
     # ---- the channel interface --------------------------------------------------------------------------------
 
@@ -157,7 +110,7 @@ class DeskChannel:
             try:
                 await asyncio.wait_for(self._stop.wait(), 60)
             except asyncio.TimeoutError:
-                self._voice.tick()  # unload the voice after voice_idle_minutes without use
+                self.services.voice.tick()  # unload the voice after voice_idle_minutes without use
 
     async def stop(self) -> None:
         self._stop.set()
@@ -174,7 +127,7 @@ class DeskChannel:
             node, stream, times = reply_to.node, reply_to.stream, reply_to.times
         else:  # Falak speaks first: a stream of its own
             node, stream, times = self._node, next(self._ids), None
-        speech = DeskSpeech(node, stream, self._synthesize, self._profile, lambda f: self._send_frame(node, f), times,
+        speech = DeskSpeech(node, stream, self.services.synthesize, self.services.profile, lambda f: self._send_frame(node, f), times,
                             on_done=lambda: self._speeches.pop(stream, None))
         self._speeches[stream] = speech
         return speech
@@ -190,26 +143,14 @@ class DeskChannel:
     async def typing(self, reply_to: object):
         yield
 
-    # ---- speaking -------------------------------------------------------------------------------------------
-
-    async def _synthesize(self, sentence: str, profile: VoiceProfile) -> bytes:
-        engine = self._engine()
-        try:
-            return await asyncio.to_thread(self._voice.synthesize, engine, sentence, profile)
-        except Exception:
-            if engine == "say":
-                raise
-            log.exception("the %s voice failed; using macOS say for this sentence", engine)
-            return await asyncio.to_thread(self._voice.synthesize, "say", sentence, VoiceProfile(voice="Daniel"))
-
 
 LEGACY_MODELS = Path("~/Library/Application Support/JARVIS/models").expanduser()  # the old JARVIS's; read only
 
 
-def create(*, data_dir: Path, engine: Callable[[], str], profile: Callable[[], VoiceProfile],
-           send_frame: Callable[[str, str | bytes], bool], idle_minutes: float) -> DeskChannel:
-    """The desk with the real engines. Models are looked for in Falak's own folder first, then in the old JARVIS's
-    (read only); `jarvis voice setup` puts what is missing in Falak's."""
+def make_services(*, data_dir: Path, engine: Callable[[], str], profile: Callable[[], VoiceProfile],
+                  idle_minutes: float) -> VoiceServices:
+    """The real engines. Models are looked for in Falak's own folder first, then in the old JARVIS's (read only);
+    `jarvis voice setup` puts what is missing in Falak's."""
     from jarvis.speech import WhisperListener
     from jarvis.speech.listener import WHISPER_REPO
     from jarvis.speech.models import find
@@ -226,10 +167,10 @@ def create(*, data_dir: Path, engine: Callable[[], str], profile: Callable[[], V
     def make_voice(name: str):
         if name == "say":
             return SayVoice()
-        path = find(dirs, KOKORO_REPO if name == "kokoro" else OMNIVOICE_REPO, KOKORO_FOLDER if name == "kokoro" else "omnivoice")
+        repo, folder = (KOKORO_REPO, KOKORO_FOLDER) if name == "kokoro" else (OMNIVOICE_REPO, "omnivoice")
+        path = find(dirs, repo, folder)
         if path is None:
             raise FileNotFoundError(f"the {name} voice isn't downloaded; run `jarvis voice setup`")
         return KokoroVoice(path) if name == "kokoro" else OmniVoiceVoice(path)
 
-    return DeskChannel(listener=listener, voice=VoiceManager(make_voice, idle_minutes), engine=engine, profile=profile,
-                       send_frame=send_frame)
+    return VoiceServices(listener, VoiceManager(make_voice, idle_minutes), engine, profile)

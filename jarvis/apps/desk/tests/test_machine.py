@@ -2,7 +2,7 @@
 state, and barge-in from speaking and waiting. Pure: no audio, no clock."""
 
 from jarvis.apps.desk.machine import FOLLOW_UP, IDLE, LISTENING, SPEAKING, WAITING, DeskMachine, Timing
-from jarvis.apps.desk.tracker import SpeechTracker
+from jarvis.protocol.tracker import SpeechTracker
 
 T = Timing()
 
