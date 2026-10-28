@@ -129,6 +129,15 @@ docs/briefs/  # one brief per milestone
 - A manifest `[[sessions]]` entry (a live view) gives the model `_start`, `_look` and `_stop` tools. The host owns
   the `sessions` table; the node owns the running capture and closes it when the host link drops.
 
+- **The browser** (`runs_on = "node:browser"`) is Chromium through Playwright with a persistent profile at
+  `FALAK_NODE_DIR/browser/profile` (0700). The profile is a live login that exists only on the node: never in the repo,
+  never logged, never sent, and the terminal's secret guard denies it. Only the sites in `browser/sites.json` open with
+  it; every other site gets a fresh, empty context. Every request a page makes goes through one guard (the same checks as
+  `web`, in the browser app's own module, with a test that the two agree). What it reads is untrusted, and a turn that
+  read a page asks before it sends data (rule 10, as `web` does). `act` is `outbound`: its steps are words, and the
+  question Elijah answers is the text that runs. All Playwright calls run on one worker thread, and the browser sits
+  behind a small interface so tests use a fake.
+
 ## Apps calling apps
 
 - An app reads only its own tables (`<app>_*`). To read another app's data it calls that app's **shared**
