@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Collection
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Union
 
@@ -24,6 +25,54 @@ LOG_TEXT_MAX = 500
 class Origin:
     channel: str
     outside_content: bool = False  # the turn was driven by a web page, email, file or screen text
+    found_links: tuple[str, ...] = ()  # links that appeared in that outside content (normalized; see links_in)
+
+
+FOUND_LINKS_MAX = 400
+_URL = re.compile(r"https?://[^\s<>\"'`)\]]+", re.I)
+
+
+def normal_link(url: str) -> str:
+    """A link as compared: no fragment, no trailing slash or punctuation, scheme and host in lower case."""
+    url = url.strip().split("#", 1)[0].rstrip(".,;:!?/")
+    scheme, sep, rest = url.partition("://")
+    host, slash, path = rest.partition("/")
+    return f"{scheme.lower()}{sep}{host.lower()}{slash}{path}" if sep else url
+
+
+def links_in(text: str, data: object = None) -> set[str]:
+    """Every link in an action's text and data (a page's link list, a search result's urls)."""
+    found = {normal_link(u) for u in _URL.findall(text or "")}
+
+    def walk(value: object) -> None:
+        if isinstance(value, str):
+            if value.lower().startswith(("http://", "https://")):
+                found.add(normal_link(value))
+        elif isinstance(value, dict):
+            for v in value.values():
+                walk(v)
+        elif isinstance(value, (list, tuple)):
+            for v in value:
+                walk(v)
+
+    walk(data)
+    return found
+
+
+def with_links(origin: Origin, links: set[str]) -> Origin:
+    merged = tuple(dict.fromkeys([*origin.found_links, *sorted(links)]))[-FOUND_LINKS_MAX:]
+    return replace(origin, outside_content=True, found_links=merged)
+
+
+def follows_found_link(args: object, origin: Origin) -> bool:
+    """The call only sends links that outside content itself showed: every text argument is one of them. Following a
+    link from a page or a search result tells the site nothing the page didn't already hold; a search query or an
+    address Falak wrote could carry what it read, so those still ask."""
+    if not isinstance(args, dict):
+        return False
+    texts = [v for v in args.values() if isinstance(v, str)]
+    found = set(origin.found_links)
+    return bool(texts) and all(normal_link(t) in found for t in texts)
 
 
 @dataclass(frozen=True)
@@ -51,15 +100,17 @@ class Declined:
 Outcome = Union[Ran, Asked, Failed, Declined]
 
 
-def needs_confirmation(effect: str, origin: Origin, trusted: bool, sends_data: bool = False) -> bool:
+def needs_confirmation(effect: str, origin: Origin, trusted: bool, sends_data: bool = False,
+                       args: object = None) -> bool:
     """The only place the ask-or-run decision is made. `trusted`: a learned rule allows this tool.
     `sends_data`: the arguments leave the device, so once outside content has steered the turn it asks
-    (a page can't make Falak put what it read into a search or a URL)."""
+    (a page can't make Falak put what it read into a search or a URL), unless all it sends is a link that outside
+    content showed (following a search result or a page's link)."""
     if effect in ("irreversible", "plan"):  # a learned rule never lets either run on its own
         return True
     if effect == "outbound":
         return not trusted or origin.outside_content
-    return sends_data and origin.outside_content
+    return sends_data and origin.outside_content and not follows_found_link(args, origin)
 
 
 def _log(reg: Registry, tool: str, effect: str, status: str, args: str, text: str, undo: dict | None = None,
@@ -124,7 +175,7 @@ def run(reg: Registry, tool_name: str, args: object, origin: Origin,
     problems = validate(action.input, args)
     if problems:
         return _fail(reg, app, action, args, "Invalid input: " + "; ".join(problems))
-    if not needs_confirmation(action.effect, origin, tool_name in allowed, action.sends_data):
+    if not needs_confirmation(action.effect, origin, tool_name in allowed, action.sends_data, args):
         return _execute(reg, app, action, args)
     question = action.confirm.format_map(_plain(args))
     cur = reg.conn.execute(

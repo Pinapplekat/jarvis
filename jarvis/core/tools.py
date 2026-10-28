@@ -60,7 +60,7 @@ def _noted(reg: Registry, turn: TurnState, tool_name: str, outcome: object) -> N
     """Once an action whose output carries someone else's words has run, the rest of the turn is outside-driven."""
     found = reg.find(tool_name)
     if isinstance(outcome, actions.Ran) and found and found[1].untrusted_output:
-        turn.origin = replace(turn.origin, outside_content=True)
+        turn.origin = actions.with_links(turn.origin, actions.links_in(outcome.result.text, outcome.result.data))
 
 
 def _app_tool(reg: Registry, turn: TurnState, spec) -> Tool:

@@ -82,6 +82,13 @@ def build_channels(settings: Settings, host: Host) -> list[Channel]:
     return channels
 
 
+def _origin(incoming: Incoming) -> Origin:
+    """A message that quotes someone else's words (a forward, a read he approved) is outside content from the start,
+    and the links in it count as found."""
+    origin = Origin(incoming.channel)
+    return actions.with_links(origin, actions.links_in(incoming.text)) if incoming.untrusted else origin
+
+
 CONTINUE_MAX = 6000  # characters of a read's result handed back to Falak after he says yes
 
 
@@ -225,7 +232,7 @@ class Host:
         async with self._turn_lock:
             async with channel.typing(incoming.reply_to):
                 reply = await loop.handle_message(
-                    self.reg, self.brains.get(incoming.channel, self.brain), incoming.text, Origin(incoming.channel, incoming.untrusted),
+                    self.reg, self.brains.get(incoming.channel, self.brain), incoming.text, _origin(incoming),
                     own_channels=self.own_channels, attachments=incoming.attachments, speech=speech,
                 )
         log.info("turn channel=%s ms=%d tools=%s error=%s", incoming.channel, reply.ms,

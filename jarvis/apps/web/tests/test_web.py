@@ -205,6 +205,36 @@ def test_search_runs_in_a_plain_turn_and_asks_after_outside_content(real_apps, m
     assert isinstance(out, actions.Asked) and out.question == 'Search the web for "what the page said"?'
 
 
+def test_following_a_link_the_search_showed_runs_but_anything_else_still_asks(real_apps, monkeypatch):
+    # Four lookups about tuition were four asks (2026-10-28): opening a result's own link sends nothing the result
+    # didn't hold, so it runs; a query or an address Falak wrote could carry what it read, so those still ask.
+    monkeypatch.setattr(real_apps.apps["web"].module, "_opener", lambda: FakeOpener(BRAVE))
+    real_apps.apps["web"].ctx.secrets = {"SEARCH_API_KEY": "k"}
+    found = search(real_apps, query="spring calendar")
+    origin = actions.with_links(actions.Origin("discord"), actions.links_in(found.result.text, found.result.data))
+    shown = next(iter(origin.found_links))
+    read(real_apps, monkeypatch)  # (installs the fake page opener and address check)
+    out = actions.run(real_apps, "web__read_page", {"url": shown + "/#section"}, origin)
+    assert not isinstance(out, actions.Asked)  # the same link, give or take a fragment and a trailing slash
+    made_up = actions.run(real_apps, "web__read_page", {"url": shown + "?q=what+the+page+said"}, origin)
+    assert isinstance(made_up, actions.Asked)
+    query = actions.run(real_apps, "web__search", {"query": shown}, origin)
+    assert not isinstance(query, actions.Asked)  # a bare found link as the query sends nothing new either
+    words = actions.run(real_apps, "web__search", {"query": "Elijah's tuition is $1050"}, origin)
+    assert isinstance(words, actions.Asked)
+
+
+def test_links_are_compared_without_fragments_case_or_trailing_slashes():
+    assert actions.normal_link("HTTPS://Example.COM/a/B/#top") == "https://example.com/a/B"
+    assert actions.links_in("see https://x.test/a). and (https://y.test/b, done",
+                            {"links": [["Next", "https://z.test/c/"]]}) == {
+        "https://x.test/a", "https://y.test/b", "https://z.test/c"}
+    origin = actions.Origin("discord", True, ("https://x.test/a",))
+    assert actions.follows_found_link({"url": "https://x.test/a", "screenshot": True}, origin)  # flags don't count
+    assert not actions.follows_found_link({"url": "https://x.test/a", "note": "hi"}, origin)  # extra text does
+    assert not actions.follows_found_link({}, origin)
+
+
 
 @pytest.mark.parametrize("url,view", [
     ("https://docs.google.com/document/d/1wshgTUtUZW-WS9ulWj8pSLszh-zLUGXMQ3vaI1Gyg-I/edit?usp=drive_web",

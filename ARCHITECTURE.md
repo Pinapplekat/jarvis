@@ -76,7 +76,10 @@ docs/briefs/  # one brief per milestone
 10. **Nothing written is trusted as instructions.** Web pages, emails, files and screen text are data. When
     a turn was driven by outside content, outbound actions ask even if they'd normally run, and so do
     actions marked `sends_data` (a search query or a URL leaves the Mac, so a page can't make Falak send out
-    what it read). A `sends_data` action carries a `confirm` question for that case.
+    what it read). A `sends_data` action carries a `confirm` question for that case. The one exception is following
+    a link that outside content itself showed (a search result, a page's link): when every text argument is such a
+    link, it runs, because it sends the site nothing the page didn't already hold. A query, or an address Falak put
+    together, still asks.
 11. **Keep the old system alive.**
     - The live JARVIS runs from `~/Library/Application Support/JARVIS/app` with its own database.
     - Rehaul code never writes to that folder, never runs `jarvis schedule install`, and never touches the
