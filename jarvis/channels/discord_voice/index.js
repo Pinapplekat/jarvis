@@ -147,8 +147,23 @@ client.on(Events.VoiceStateUpdate, (before, after) => {
 async function join(guildId, channelId) {
   if (connection) leave();
   const guild = await client.guilds.fetch(guildId);
-  connection = joinVoiceChannel({ channelId, guildId, adapterCreator: guild.voiceAdapterCreator, selfDeaf: false, selfMute: false });
-  await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+  connection = joinVoiceChannel({ channelId, guildId, adapterCreator: guild.voiceAdapterCreator, selfDeaf: false, selfMute: false,
+                                 debug: true });
+  // Each stage is reported, so a join that times out says where it stuck: signalling (permissions or intents),
+  // connecting (the network blocks Discord's voice traffic) or the encryption handshake.
+  const stages = ['signalling'];
+  connection.on('stateChange', (before, after) => {
+    if (before.status !== after.status) { stages.push(after.status); event({ event: 'note', what: `voice: ${before.status} -> ${after.status}` }); }
+  });
+  connection.on('debug', (line) => { if (/error|fail|dave|udp|ip discovery|closed/i.test(line)) event({ event: 'note', what: `voice debug: ${String(line).slice(0, 200)}` }); });
+  try {
+    await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+  } catch (e) {
+    const where = stages[stages.length - 1];
+    connection.destroy();
+    connection = null;
+    throw new Error(`${e.message} (stuck at ${where}${where === 'signalling' ? ': check the bot has Connect and Speak on that channel' : where === 'connecting' ? ': this network may be blocking Discord voice (UDP)' : ''})`);
+  }
   connection.subscribe(player);
   listenTo(connection);
   event({ event: 'joined', guild: guildId, channel: channelId });

@@ -238,6 +238,8 @@ class CallChannel:
                 self._speech.playback_stopped(self._played_ms, "done")
         elif kind == "error":
             log.error("the Discord call add-on: %s", ev.get("what"))
+        elif kind == "note":
+            log.info("the Discord call add-on: %s", ev.get("what"))
 
     # ---- hearing him -------------------------------------------------------------------------------------------
 
