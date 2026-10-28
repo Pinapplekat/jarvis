@@ -184,7 +184,7 @@ class Host:
         async with self._turn_lock:
             async with channel.typing(incoming.reply_to):
                 reply = await loop.handle_message(
-                    self.reg, self.brain, incoming.text, Origin(incoming.channel),
+                    self.reg, self.brain, incoming.text, Origin(incoming.channel, incoming.untrusted),
                     own_channels=self.own_channels, attachments=incoming.attachments,
                 )
         log.info("turn channel=%s ms=%d tools=%s error=%s", incoming.channel, reply.ms,

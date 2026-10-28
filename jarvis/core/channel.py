@@ -16,6 +16,7 @@ class Incoming:
     text: str
     attachments: tuple[Attachment, ...] = ()  # files Elijah sent, saved in the core tmp folder
     reply_to: object = None  # adapter-specific handle (e.g. the Discord DM), opaque to the core
+    untrusted: bool = False  # it quotes someone else's words (a forwarded message), so the turn is outside content
 
 
 @dataclass(frozen=True)
