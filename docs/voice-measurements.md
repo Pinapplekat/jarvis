@@ -5,8 +5,10 @@ Spotify, VS Code and `falak start` running as usual. Nothing touched Falak-dev, 
 engines ran from a throwaway venv, downloads and test audio went to a scratch folder, and Kokoro and the Whisper
 `base.en` weights were only read or re-downloaded.
 
-**Status: OmniVoice is not measured.** The script stopped before downloading it (3.04 GiB needed, 4.76 GiB free, which
-would leave 1.7 GiB; the rule is 2 GiB). The decision rule can't be applied until it runs. See "What's needed".
+**Status: OmniVoice did not load.** After disk was freed it downloaded (3.04 GiB) and then sat at "Loading weights
+0/313" for 20 minutes on MPS/fp16 with swap climbing from 3.5 to 5.1 GB. It never produced a sentence and I killed it.
+The load alone fails the decision rule on this Mac as it is used. A retry with Chrome, Discord and the rest closed
+would show whether it's only memory pressure; it can't be the engine for a Mac that's running everything else.
 
 ## The machine while measuring
 
@@ -58,32 +60,20 @@ fallback of our own).
 
 ## OmniVoice (`k2-fsa/OmniVoice`, MPS, fp16, `"male, low pitch, british accent"`)
 
-Not measured (disk guard). What is known without running it:
+No timings: loading never finished (20 min, process footprint 2.6 GB while CPU stayed at ~190%, swap +1.6 GB).
 
-- The repo is 3.27 GB (2.45 GB for the model, 0.81 GB for the audio tokenizer), so a download plus the swap it
-  provokes won't leave 2 GiB free on this disk.
+- The repo is 3.27 GB (2.45 GB model, 0.81 GB audio tokenizer, which loads in fp32 unless told otherwise).
 - The code is Apache-2.0, but the README says **the pre-trained weights are CC-BY-NC** (non-commercial). The brief says
-  Apache-2.0. Fine for Elijah's personal use; worth knowing if Falak is ever shared.
-- Installing it with `--no-deps` plus torch, torchaudio, transformers>=5.3 and librosa works; Gradio isn't needed.
-- It needs `torch>=2.4`. The scratch venv with all engines is 1.4 GB.
+  Apache-2.0. Fine for personal use; worth knowing if Falak is ever shared.
+- Installing with `--no-deps` plus torch, torchaudio, transformers>=5.3 and librosa works; Gradio isn't needed.
 
 ## Against the decision rule
 
 | Rule | OmniVoice | Kokoro |
 |---|---|---|
-| warm sentence ≤ 1 s | not measured | 0.75 s (MPS), 0.99 s (CPU): passes |
-| resident RAM ≤ 2.5 GB | not measured | 1.4 GB (CPU), 2.2 GB (MPS): passes |
-| no swap with everything open | already swapping 3.6 GB at rest, so this is unlikely | CPU adds none; MPS adds ~0.4 GB |
+| warm sentence ≤ 1 s | did not load | 0.75 s (MPS), 0.99 s (CPU): passes |
+| resident RAM ≤ 2.5 GB | 2.6 GB charged and still loading | 1.4 GB (CPU), 2.2 GB (MPS): passes |
+| no swap with everything open | swap rose from 3.5 to 5.1 GB: fails | CPU adds none; MPS adds ~0.4 GB |
 
-Kokoro on CPU meets all three. OmniVoice would need to beat 1 s warm in about 2.5 GB on a Mac that is already
-swapping, and it would be sharing the machine with Whisper (0.6–1.4 GB) at the same time.
-
-## What's needed to finish section 0
-
-Pick one:
-
-1. **Free about 1 GiB of disk** (the uv cache is 4.2 GB: `uv cache clean`), then rerun
-   `scripts/voice_bench.py omnivoice --scratch <scratch>`, and I'll record the numbers and apply the rule.
-2. **Choose Kokoro now** (CPU, `bm_george`; OmniVoice stays a setting for the Mac mini) and skip the OmniVoice run.
-
-Not yet measured: whether echo cancellation holds on speakers and AirPods (needs the Swift helper from section 3).
+Kokoro on CPU meets all three. OmniVoice fails the rule on this Mac, so Kokoro (CPU, `bm_george`) is the engine,
+with OmniVoice as a setting for the Mac mini.
