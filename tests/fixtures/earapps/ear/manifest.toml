@@ -1,0 +1,25 @@
+[app]
+name = "ear"
+description = "Test device app that speaks the voice protocol: sends frames to the host and records what the host sends."
+runs_on = "node:ear"
+start = "start"
+
+[[actions]]
+name = "send"
+description = "Send a frame to the host."
+effect = "read"
+[actions.input]
+type = "object"
+required = ["kind"]
+additionalProperties = false
+[actions.input.properties.kind]
+type = "string"
+enum = ["json", "audio"]
+
+[[actions]]
+name = "heard"
+description = "How many frames from the host arrived."
+effect = "read"
+[actions.input]
+type = "object"
+additionalProperties = false

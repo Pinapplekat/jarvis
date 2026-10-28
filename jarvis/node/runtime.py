@@ -38,6 +38,7 @@ class NodeRuntime:
         self._outbox = node_dir / "outbox"  # events not yet acked by the host, one json file each
         self._outbox_lock = threading.Lock()
         self.on_event: Callable[[], None] = lambda: None  # set by the client: "there is something to send"
+        self.send_frame: Callable[[str | bytes], None] = lambda frame: None  # set by the client: a frame to the host
         self._started: set[str] = set()
         self._clear_tmp()
         self._apps: dict[str, _App] = {}
@@ -88,6 +89,7 @@ class NodeRuntime:
                     app.ctx = AppContext(name, settings[name], secrets, None, self._tmp,
                                          data_dir=self._node_dir / name)
                     app.ctx.notify_hook = self.notify
+                    app.ctx.link_hook = lambda frame: self.send_frame(frame)
                 if app.manifest.start and name not in self._started:
                     self._started.add(name)
                     getattr(app.module, app.manifest.start)(app.ctx)
@@ -104,6 +106,16 @@ class NodeRuntime:
                 except Exception:
                     log.exception("stopping %s failed", name)
         self._started.clear()
+
+    def host_frame(self, frame: str | bytes) -> None:
+        """A voice frame from the host: every started app that listens gets it (only the desk does)."""
+        for app in self._apps.values():
+            listener = app.ctx._frame_listener if app.ctx is not None else None
+            if listener is not None:
+                try:
+                    listener(frame)
+                except Exception:
+                    log.exception("%s failed to take a frame from the host", app.manifest.name)
 
     # ---- events: what apps say first ------------------------------------------------------------------
 

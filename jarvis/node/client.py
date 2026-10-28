@@ -32,6 +32,8 @@ class NodeClient:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._kick: asyncio.Event | None = None
         runtime.on_event = self._poke
+        runtime.send_frame = self._send_frame
+        self._frames: asyncio.Queue | None = None  # voice frames for the host, in order, from any thread
         self.connected = threading.Event()  # set while welcomed; tests and --with-node wait on it
 
     def _note(self, state: str, message: str, *args: object) -> None:
@@ -45,9 +47,15 @@ class NodeClient:
         if self._loop is not None and self._kick is not None:
             self._loop.call_soon_threadsafe(self._kick.set)
 
+    def _send_frame(self, frame: str | bytes) -> None:
+        """A voice frame from an app thread. Live audio is never queued for later: dropped when not connected."""
+        if self._loop is not None and self._frames is not None and self.connected.is_set():
+            self._loop.call_soon_threadsafe(self._frames.put_nowait, frame)
+
     async def run(self) -> None:
         self._stop = asyncio.Event()
         self._loop, self._kick = asyncio.get_running_loop(), asyncio.Event()
+        self._frames = asyncio.Queue()
         attempt = 0
         while not self._stop.is_set():
             try:
@@ -94,8 +102,12 @@ class NodeClient:
             self.connected.set()
             tasks: set[asyncio.Task] = set()
             pump = asyncio.create_task(self._pump(ws))
+            voice = asyncio.create_task(self._voice_pump(ws))
             try:
                 async for frame in ws:
+                    if m.is_audio(frame):
+                        self._runtime.host_frame(frame)
+                        continue
                     msg = m.parse(frame)
                     if isinstance(msg, m.EventAck):
                         self._runtime.ack(msg.id)
@@ -105,12 +117,17 @@ class NodeClient:
                         task.add_done_callback(tasks.discard)
                     elif isinstance(msg, m.Ping):
                         await ws.send(m.Pong(msg.t).to_json())
+                    elif isinstance(msg, (m.SpeakStart, m.SpeakEnd, m.SpeakStop)):
+                        self._runtime.host_frame(frame)
                     elif msg is not None and not isinstance(msg, m.Pong):
                         log.warning("the host sent an unexpected %s; dropped", msg.type)
             except ConnectionClosed:
                 pass
             finally:
                 pump.cancel()
+                voice.cancel()
+                while not self._frames.empty():  # audio from before the drop is stale
+                    self._frames.get_nowait()
                 for task in tasks:
                     task.cancel()
                 self._ws = None
@@ -131,6 +148,13 @@ class NodeClient:
                         sent.add(event.id)
                         await ws.send(event.to_json())
                 await self._kick.wait()
+        except ConnectionClosed:
+            return
+
+    async def _voice_pump(self, ws: ClientConnection) -> None:
+        try:
+            while True:
+                await ws.send(await self._frames.get())
         except ConnectionClosed:
             return
 

@@ -46,6 +46,8 @@ class _Conn:
     apps: tuple[str, ...]
     last_heard: float = field(default_factory=time.monotonic)
     pending: dict[int, asyncio.Future] = field(default_factory=dict)
+    v: int = 1  # the protocol version the node said hello with; voice frames only go to version 2
+    voice: asyncio.Queue = field(default_factory=asyncio.Queue)  # frames for the node, in order
 
     @property
     def target(self) -> Target:
@@ -70,6 +72,7 @@ class NodeHub:
         self._db = None
         self._error: BaseException | None = None
         self.port = self._port
+        self.voice_sink: Callable[[str, str | bytes], None] | None = None  # (node name, frame); called in the hub's thread
 
     # ---- lifecycle -------------------------------------------------------------------------------------
 
@@ -165,8 +168,8 @@ class NodeHub:
 
     def _authenticate(self, hello: m.Hello) -> tuple[int | None, str]:
         """(node id, '') for a good hello, else (None, why)."""
-        if hello.v != m.VERSION:
-            return None, f"This host speaks protocol version {m.VERSION}, not {hello.v}."
+        if hello.v not in m.SUPPORTED_VERSIONS:
+            return None, f"This host speaks protocol versions {' and '.join(map(str, m.SUPPORTED_VERSIONS))}, not {hello.v}."
         row = self._db.execute(
             "SELECT * FROM nodes WHERE name = ? ORDER BY revoked_at IS NULL DESC, id DESC", (hello.node,)).fetchone()
         if row is None or not hmac.compare_digest(row["key_hash"], hash_key(hello.key)):
@@ -194,7 +197,7 @@ class NodeHub:
             await self._reject(ws, why)
             return
         conn = _Conn(ws, node_id, hello.node, next(self._serials),
-                     tuple(str(c) for c in hello.capabilities), tuple(str(a) for a in hello.apps))
+                     tuple(str(c) for c in hello.capabilities), tuple(str(a) for a in hello.apps), v=hello.v)
         for old in [c for c in self._conns if c.name == conn.name]:  # one connection per name: the new one wins
             await old.ws.close(4000, "replaced by a newer connection")
         settings = {a: v for a, v in self._node_settings().items() if a in conn.apps}
@@ -204,16 +207,21 @@ class NodeHub:
                          (stamp(), stamp(), json.dumps(list(conn.capabilities)), node_id))
         log.info("node %s connected (capabilities: %s)", conn.name, ", ".join(conn.capabilities) or "none")
         pinger = asyncio.create_task(self._ping(conn))
+        writer = asyncio.create_task(self._voice_writer(conn))
         try:
             await self._read(conn)
         finally:
             pinger.cancel()
+            writer.cancel()
             self._left(conn)
 
     async def _read(self, conn: _Conn) -> None:
         try:
             async for frame in conn.ws:
                 conn.last_heard = time.monotonic()
+                if m.is_audio(frame):
+                    self._voice_in(conn, frame)
+                    continue
                 msg = m.parse(frame)
                 if isinstance(msg, m.CallResult):
                     waiting = conn.pending.get(msg.id)
@@ -225,10 +233,37 @@ class NodeHub:
                     await self._event(conn, msg)
                 elif isinstance(msg, m.Ping):
                     await conn.ws.send(m.Pong(msg.t).to_json())
+                elif isinstance(msg, (m.VoiceStart, m.VoiceEnd, m.PlaybackStopped, m.Presence)):
+                    self._voice_in(conn, frame)
                 elif msg is not None and not isinstance(msg, m.Pong):
                     log.warning("node %s sent an unexpected %s; dropped", conn.name, msg.type)
         except ConnectionClosed:
             pass
+
+    def _voice_in(self, conn: _Conn, frame: str | bytes) -> None:
+        if conn.v < 2 or self.voice_sink is None:
+            return
+        try:
+            self.voice_sink(conn.name, frame)
+        except Exception:
+            log.exception("handling a voice frame from %s failed", conn.name)
+
+    async def _voice_writer(self, conn: _Conn) -> None:
+        """One writer per connection, so audio reaches the node in the order it was queued."""
+        try:
+            while True:
+                await conn.ws.send(await conn.voice.get())
+        except ConnectionClosed:
+            return
+
+    def send_voice(self, node: str, frame: str | bytes) -> bool:
+        """Queue a voice frame for the named node, from any thread. False when it is not connected or too old for
+        voice; the frame is then dropped (live audio is never held for later)."""
+        conn = next((c for c in reversed(self._conns) if c.name == node and c.v >= 2), None)
+        if conn is None or self._stopped.is_set():
+            return False
+        self._loop.call_soon_threadsafe(conn.voice.put_nowait, frame)
+        return True
 
     async def _event(self, conn: _Conn, msg: m.Event) -> None:
         """An app on the node speaks first: one outbox row (deduped on the event id), then the ack. An event from an

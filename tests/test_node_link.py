@@ -186,7 +186,7 @@ def test_only_the_hash_of_the_key_is_stored(link):
 @pytest.mark.parametrize("name,key_ok,v,reason", [
     ("mac", False, 1, "Unknown node or wrong key"),
     ("stranger", True, 1, "Unknown node or wrong key"),
-    ("mac", True, 2, "protocol version 1"),
+    ("mac", True, 3, "protocol versions 1 and 2"),
 ])
 def test_bad_hellos_are_rejected(link, name, key_ok, v, reason):
     ws, reply = fake_node(link.hub.port, link.key if key_ok else "wrong", name=name, v=v)

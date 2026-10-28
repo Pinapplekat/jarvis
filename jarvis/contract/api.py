@@ -97,6 +97,8 @@ class AppContext:
         self.call_hook: CallHook | None = None  # set by the core when the apps are loaded on the host
         self.notify_hook: Callable[[str, str], None] | None = None  # (app, text); set by the host or the node runtime
         self._data_dir = data_dir  # a private folder for the app's own files (only on a node for now)
+        self.link_hook: Callable[[str | bytes], None] | None = None  # set by the node runtime: frames to the host
+        self._frame_listener: Callable[[str | bytes], None] | None = None  # the app's: frames from the host
 
     def now(self) -> datetime:
         return datetime.now(self.tz)
@@ -110,7 +112,19 @@ class AppContext:
         """The same context on another connection. Each job run gets its own (SQLite connections are per thread)."""
         other = AppContext(self.name, self.settings, self.secrets, db, self._tmp_dir, self.tz, self._data_dir)
         other.wake_hook, other.call_hook, other.notify_hook = self.wake_hook, self.call_hook, self.notify_hook
+        other.link_hook, other._frame_listener = self.link_hook, self._frame_listener
         return other
+
+    def send_to_host(self, frame: str | bytes) -> None:
+        """Send one protocol frame (a JSON text frame or a binary audio frame) to the host, from any thread. Dropped
+        while the node is not connected: live audio is never queued up."""
+        if self.link_hook is not None:
+            self.link_hook(frame)
+
+    def on_host_frame(self, listener: Callable[[str | bytes], None]) -> None:
+        """Receive the frames the host sends that no call answers (voice). The listener runs on the node's network
+        thread, so it must only hand the frame over, never block."""
+        self._frame_listener = listener
 
     def notify(self, text: str) -> None:
         """Tell Elijah something on the app's own initiative (a job finished, a task is done). It goes through the
