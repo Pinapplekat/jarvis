@@ -12,3 +12,5 @@ token_cache.json
 browser-profile/
 browser-sites.json
 models/
+
+node_modules/

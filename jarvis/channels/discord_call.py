@@ -16,6 +16,7 @@ import re
 import shutil
 import struct
 import subprocess
+import tempfile
 import time
 from collections import deque
 from collections.abc import Callable
@@ -126,7 +127,10 @@ class CallChannel:
         self._check()
         self._deliver = deliver
         self._run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        path = self._run_dir / "voice.sock"
+        path, short_dir = self._run_dir / "voice.sock", None
+        if len(str(path)) > 100:  # a unix socket path is limited to about 104 bytes
+            short_dir = Path(tempfile.mkdtemp(prefix="falak-"))  # 0700
+            path = short_dir / "voice.sock"
         path.unlink(missing_ok=True)
         server = await asyncio.start_unix_server(self._on_connection, path=str(path))
         try:
@@ -143,6 +147,8 @@ class CallChannel:
             server.close()
             self._kill()
             path.unlink(missing_ok=True)
+            if short_dir is not None:
+                shutil.rmtree(short_dir, ignore_errors=True)
 
     async def _sleep_or_stop(self, seconds: float) -> None:
         try:
