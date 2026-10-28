@@ -1,0 +1,178 @@
+[app]
+name = "browser"
+description = "Falak's own web browser on this Mac: reads pages that need JavaScript, reads sites Elijah signed in to, shows him a page, and fills in forms only with his yes."
+runs_on = "node:browser"
+stop = "stop"
+
+[settings.idle_minutes]
+type = "integer"
+minimum = 1
+maximum = 60
+default = 5
+description = "The browser closes after this many minutes without use."
+
+[settings.load_seconds]
+type = "integer"
+minimum = 5
+maximum = 60
+default = 15
+description = "How long a page may take to load and settle before what has loaded is used."
+
+[settings.blocklist]
+type = "string"
+default = ""
+description = "Extra domains (comma-separated) that are never opened, on top of the banking and payment sites."
+
+[[actions]]
+name = "read"
+description = "Open a page in Falak's browser and read it, JavaScript included: its title, text and links. web__read_page is faster for plain pages; use this when that says the page needs a browser. Sites Elijah signed in to open signed in. Set screenshot to also get a picture of the page. Never banking or payment sites, or addresses on this Mac or its network."
+effect = "read"
+untrusted_output = true
+sends_data = true
+confirm = "Open {url} in the browser?"
+timeout_s = 90
+[actions.input]
+type = "object"
+required = ["url"]
+additionalProperties = false
+[actions.input.properties.url]
+type = "string"
+minLength = 1
+[actions.input.properties.screenshot]
+type = "boolean"
+default = false
+
+[[actions]]
+name = "sign_in"
+description = "Open a visible window at a site so Elijah can sign in himself (college single sign-on and two-step codes included). I never see or type the password. The site joins the list of sites opened signed in. He closes the window when he is done, or tells you he is."
+effect = "local"
+undo = "undo_sign_in"
+sends_data = true
+confirm = "Open a window at {site} so you can sign in?"
+timeout_s = 90
+[actions.input]
+type = "object"
+required = ["site"]
+additionalProperties = false
+[actions.input.properties.site]
+type = "string"
+minLength = 1
+description = "The site's address, like canvas.seattlecolleges.edu."
+
+[[actions]]
+name = "sites"
+description = "The sites Elijah has signed in to in Falak's browser."
+effect = "read"
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[actions]]
+name = "forget_site"
+description = "Take a site off the signed-in list, so it opens without his login again. (Its cookies stay in the profile until he runs `falak browser reset`.)"
+effect = "local"
+undo = "undo_forget_site"
+[actions.input]
+type = "object"
+required = ["site"]
+additionalProperties = false
+[actions.input.properties.site]
+type = "string"
+minLength = 1
+
+[[actions]]
+name = "show"
+description = "Show Elijah a page in a visible window on his Mac, where he can read it, scroll or take over. Leave url out for the page we were just on."
+effect = "local"
+sends_data = true
+confirm = "Show {url} in a window on the Mac?"
+timeout_s = 90
+[actions.input]
+type = "object"
+additionalProperties = false
+[actions.input.properties.url]
+type = "string"
+default = ""
+
+[[actions]]
+name = "close_window"
+description = "Close the visible browser window (when Elijah says he is done signing in or looking)."
+effect = "local"
+[actions.input]
+type = "object"
+additionalProperties = false
+
+[[actions]]
+name = "act"
+description = "Fill in and press things on a page, for Elijah. He is asked first, with exactly these steps, so write them plainly. Each step is a string, one of: fill \"Field\" with \"text\"; select \"Field\" as \"Option\"; check \"Box\"; press \"Button\" (a press must be the last step). Fields and buttons are found by the label or text visible on the page. Nothing runs if one doesn't match. Never passwords, codes or card details: those are always his."
+effect = "outbound"
+log_args = false
+untrusted_output = true
+confirm = "On {url}: {steps}. It's to {why}. Go?"
+timeout_s = 90
+[actions.input]
+type = "object"
+required = ["url", "steps", "why"]
+additionalProperties = false
+[actions.input.properties.url]
+type = "string"
+minLength = 1
+[actions.input.properties.steps]
+type = "array"
+[actions.input.properties.steps.items]
+type = "string"
+minLength = 1
+[actions.input.properties.why]
+type = "string"
+minLength = 1
+description = "What this is for, in a few words."
+
+[[actions]]
+name = "follow"
+description = "In the open browse session, follow a link by its text on the page. A link is only a read."
+effect = "read"
+untrusted_output = true
+sends_data = true
+confirm = "Follow the link \"{link_text}\"?"
+timeout_s = 90
+[actions.input]
+type = "object"
+required = ["link_text"]
+additionalProperties = false
+[actions.input.properties.link_text]
+type = "string"
+minLength = 1
+
+[[actions]]
+name = "fetch_json"
+description = "For other apps: a GET of a JSON address with the signed-in profile."
+effect = "read"
+share = true
+tool = false
+untrusted_output = true
+timeout_s = 90
+[actions.input]
+type = "object"
+required = ["url"]
+additionalProperties = false
+[actions.input.properties.url]
+type = "string"
+minLength = 1
+
+[[sessions]]
+name = "browse"
+description = "Open a page to look around in: read it, follow its links, look again, until closed. Buttons and forms are never touched here; those go through act."
+effect = "read"
+untrusted_output = true
+idle_minutes = 10
+start = "start_browse"
+sample = "sample_browse"
+stop = "stop_browse"
+timeout_s = 90
+[sessions.input]
+type = "object"
+required = ["url"]
+additionalProperties = false
+[sessions.input.properties.url]
+type = "string"
+minLength = 1
