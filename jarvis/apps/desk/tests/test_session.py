@@ -197,10 +197,8 @@ def test_with_no_wake_word_the_microphone_is_on_only_for_a_conversation_he_start
     rig.host(m.SpeakStart(1))
     rig.host(m.SpeakEnd(1))
     rig.session.handle("helper", {"event": "idle", "ms": 900})
-    assert rig.session.state == FOLLOW_UP and mic_commands(rig) == [True]  # still on for his follow-up
-    rig.now += 16
-    rig.session.handle("tick")
-    assert rig.session.state == IDLE and mic_commands(rig) == [True, False]  # the window closed: off again
+    # No follow-up window by voice without the wake word: in class, whoever spoke next became his question.
+    assert rig.session.state == IDLE and mic_commands(rig) == [True, False]
     rig.host(m.SpeakStart(2**31))  # Falak speaks first (a reminder)
     rig.host(m.SpeakEnd(2**31))
     rig.session.handle("helper", {"event": "idle", "ms": 900})

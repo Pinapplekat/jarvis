@@ -41,6 +41,7 @@ class DeskSession:
         # the key (Falak Ears starts with it off); with one, it has to stay on to hear the word.
         self.mic_on_demand, self._mic_open = wake is None, wake is not None
         self.machine, self.tracker = DeskMachine(timing), SpeechTracker()
+        self.machine.hands_free = wake is not None
         self.chimes, self.clock, self.idle_seconds, self.on_error = chimes, clock, idle_seconds, on_error
         self._pre_roll: deque[bytes] = deque(maxlen=PRE_ROLL_MS // FRAME_MS)
         self._wake_buf = bytearray()

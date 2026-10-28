@@ -190,3 +190,35 @@ def test_without_echo_cancellation_its_own_voice_never_cuts_it_off_but_the_key_s
     speaking(m, now=2.0)
     assert m.vad(3.0, 900, 0) == [] and m.state == SPEAKING  # that's Falak, heard through the speakers
     assert ("stop_playback", "barge_in") in m.push_down(3.1)
+
+
+def hands_on():
+    m = DeskMachine()
+    m.hands_free = False
+    return m
+
+
+def test_without_the_wake_word_a_tap_starts_and_the_next_tap_sends_whatever_the_room_does():
+    m = hands_on()
+    m.push_down(0.0)
+    m.push_up(0.1)  # a tap
+    assert m.state == LISTENING
+    assert m.vad(5.0, 600, 0) == [] and m.vad(6.0, 0, 2000) == [] and m.state == LISTENING  # silence doesn't end it
+    assert m.vad(9.0, 0, 9000) == [] and m.state == LISTENING  # nor does nobody talking
+    out = m.push_down(10.0)
+    assert ("voice_end", 1) in out and m.state == WAITING
+
+
+def test_without_the_wake_word_voices_never_cut_in_or_follow_up_but_the_key_does():
+    m = hands_on()
+    m.push_down(0.0)
+    m.push_up(1.0)  # hold to talk
+    assert m.state == WAITING
+    assert m.vad(1.5, 900, 0) == [] and m.state == WAITING  # someone talking nearby doesn't cancel the turn
+    m.host_speak_start(2.0, 1)
+    assert m.vad(3.0, 900, 0) == [] and m.state == SPEAKING  # nor cut Falak off
+    m.host_speak_end(3.5, 1)
+    m.playback_idle(4.0)
+    assert m.state == IDLE and m.vad(5.0, 900, 0) == [] and m.state == IDLE  # and nothing follows up
+    m.host_speak_start(6.0, 2)
+    assert ("stop_playback", "barge_in") in m.push_down(6.5)  # the key still cuts in

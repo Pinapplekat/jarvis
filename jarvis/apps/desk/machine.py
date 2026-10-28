@@ -50,7 +50,11 @@ class DeskMachine:
         self._audio_ended = False  # speaking: the host sent SpeakEnd
         self._idle = True  # speaking: the speakers have played everything sent so far
         self.voice_barge_in = True
-        self._spoke_first = False  # speaking: Falak started this, not him (see host_speak_start)  # off when macOS gave no echo cancellation: the mic then hears Falak's own voice
+        self._spoke_first = False  # speaking: Falak started this, not him (see host_speak_start)
+        # Hands-free (the wake word is on): his voice alone opens follow-ups, cuts in and ends a turn on silence.
+        # Off, only the key does, so people talking nearby (in class) can never start, end or cut a turn.
+        self.hands_free = True
+        self._tapped = False  # listening, started by a tap: with hands_free off, the next tap sends it  # off when macOS gave no echo cancellation: the mic then hears Falak's own voice
 
     @property
     def hearing(self) -> bool:
@@ -67,6 +71,8 @@ class DeskMachine:
     def push_down(self, now: float) -> list[Effect]:
         """The push-to-talk key went down: works from any state, and cuts Falak off if it is speaking."""
         if self.state == LISTENING:
+            if self._tapped and not self.hands_free:
+                return self._end_turn(now)  # tap to start, tap to send
             self._push_at = now
             return []
         out: list[Effect] = []
@@ -82,6 +88,8 @@ class DeskMachine:
         held, self._push_at = self._push_at, None
         if self.state == LISTENING and held is not None and (now - held) * 1000 >= self.timing.tap_ms:
             return self._end_turn(now)
+        if self.state == LISTENING and held is not None:
+            self._tapped = True
         return []
 
     def vad(self, now: float, speech_ms: int, silence_ms: int) -> list[Effect]:
@@ -91,17 +99,18 @@ class DeskMachine:
         if self.state == LISTENING:
             self._heard = self._heard or speech_ms > 0
             held = self._push_at is not None
-            if self._heard and silence_ms >= t.end_silence_ms and not held:
+            if self._heard and silence_ms >= t.end_silence_ms and not held and self.hands_free:
                 return self._end_turn(now)
             if now - self._since >= t.max_utterance_s:
                 return self._end_turn(now)
-            if not self._heard and not held and now - self._since >= t.start_timeout_s:
+            if not self._heard and not held and self.hands_free and now - self._since >= t.start_timeout_s:
                 return self._give_up(now)
         elif self.state == FOLLOW_UP and speech_ms >= t.follow_up_start_ms:
             return self._listen(now, "follow_up", chime=False)
-        elif self.state == WAITING and speech_ms >= t.barge_in_ms:
+        elif self.state == WAITING and self.hands_free and speech_ms >= t.barge_in_ms:
             return self._barge_in(now)
-        elif (self.state == SPEAKING and self.voice_barge_in and not self._spoke_first and speech_ms >= t.barge_in_ms
+        elif (self.state == SPEAKING and self.hands_free and self.voice_barge_in and not self._spoke_first
+              and speech_ms >= t.barge_in_ms
               and (now - self._since) * 1000 >= t.echo_warmup_ms):
             return self._barge_in(now)
         return []
@@ -155,7 +164,7 @@ class DeskMachine:
     # ---- inside -----------------------------------------------------------------------------------------------
 
     def _listen(self, now: float, source: str, chime: bool) -> list[Effect]:
-        self.state, self._since, self._heard = LISTENING, now, False
+        self.state, self._since, self._heard, self._tapped = LISTENING, now, False, False
         self.stream += 1
         out: list[Effect] = [("chime", "start")] if chime else []
         return out + [("voice_start", self.stream, source), ("stream_mic", True)]
@@ -171,7 +180,7 @@ class DeskMachine:
         return [("stream_mic", False), ("voice_end", self.stream), ("chime", "end")]
 
     def _follow_up(self, now: float) -> list[Effect]:
-        self.state, self._since = FOLLOW_UP, now
+        self.state, self._since = (FOLLOW_UP if self.hands_free else IDLE), now
         return []
 
     def _cut(self, now: float, reason: str) -> list[Effect]:
