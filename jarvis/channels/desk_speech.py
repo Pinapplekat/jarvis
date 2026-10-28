@@ -14,6 +14,7 @@ from jarvis.speech import SAMPLE_RATE, SentenceBuffer, VoiceProfile
 
 log = logging.getLogger("jarvis.channels.desk")
 
+FILLER = "One sec."  # said when a lookup starts before Falak has said anything
 CHUNK = 1920  # bytes of PCM16 per frame: 40 ms at 24 kHz
 PLAYBACK_GRACE = 5.0  # seconds past the audio's length to wait for the node to say it has finished
 
@@ -88,6 +89,7 @@ class DeskSpeech:
         self.sentences: list[str] = []  # what was sent to the node, in order
         self.durations_ms: list[int] = []
         self._seq, self._started = 0, False
+        self._filled = False  # "One sec." was said this turn
         self._stopped = asyncio.get_running_loop().create_future()  # (played_ms, reason) from the node
         self._stopped_with: tuple[int, str] | None = None
 
@@ -101,6 +103,14 @@ class DeskSpeech:
         self._fed += delta
         for sentence in self._buf.feed(delta):
             self._queue.put_nowait((sentence, self.profile()))  # the profile is read now, on the loop thread
+
+    def on_tool(self) -> None:
+        """A lookup is starting. If nothing has been said yet, say "One sec." so he isn't left in silence while it
+        runs; the model's own words follow. Said at most once a turn, and never after it has started talking."""
+        if self.muted or self.cancelled.is_set() or self._fed.strip() or self._filled:
+            return
+        self._filled = True
+        self._queue.put_nowait((FILLER, self.profile()))
 
     def mute(self) -> None:
         self.muted = True

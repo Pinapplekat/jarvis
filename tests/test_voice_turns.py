@@ -27,6 +27,9 @@ class FakeSpeech:
     def on_text(self, delta):
         self.text.append(delta)
 
+    def on_tool(self):
+        self.text.append("<tool>")
+
     def mute(self):
         self.muted = True
 
@@ -216,3 +219,10 @@ def test_the_outbox_picks_a_channel_for_each_message(echo):
     outbox.add(echo.conn, "the full error", "send_text")
     assert asyncio.run(sender.flush()) == 2
     assert [s[0] for s in a.sent] == ["Call Emily"] and [s[0] for s in b.sent] == ["the full error"]
+
+
+def test_a_spoken_turn_hears_when_an_app_action_starts(echo):
+    speech = FakeSpeech()
+    brain = StreamingBrain(pieces=("", "Done."), tool=("echo__note", {"text": "x"}))
+    handle(echo, brain, speech)
+    assert speech.text[:2] == ["", "<tool>"]  # before the model said anything, the speech knew a lookup began

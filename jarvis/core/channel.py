@@ -50,6 +50,8 @@ class Speech(Protocol):
 
     def on_text(self, delta: str) -> None: ...  # a piece of text; sentences are said as they complete
 
+    def on_tool(self) -> None: ...  # an app action is starting: if nothing has been said yet, fill the silence
+
     def mute(self) -> None: ...  # stop saying anything: Elijah interrupted after a tool had already run
 
     async def finish(self, reply: str) -> str | None:

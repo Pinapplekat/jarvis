@@ -116,7 +116,8 @@ async def handle_message(reg: Registry, brain: Brain, text: str, origin: Origin,
     try:
         await asyncio.to_thread(sessions.sweep, reg, now)  # a view whose device left or sat idle closes before this turn
         message_id = conversation.add(reg.conn, "user", text, now)
-        turn = TurnState(origin, latest_ask_id(reg), own_channels, attachments, spoken=speech is not None)
+        turn = TurnState(origin, latest_ask_id(reg), own_channels, attachments, spoken=speech is not None,
+                         on_action=speech.on_tool if speech is not None else None)
         images = sum(a.kind == "image" for a in attachments)
         prompt = context.build_prompt(reg, text, origin.channel, message_id, now, images)
         system = context.system_prompt(reg.settings.assistant_name, spoken=speech is not None)

@@ -340,3 +340,46 @@ def test_the_profile_is_read_for_each_sentence_so_a_change_applies_to_the_next_o
 
     run(echo, StreamingBrain(("One. ", "Two.")), desk, scenario)
     assert used[:2] == [1.0, 0.8]  # "undo that" or "deeper" between sentences changes the second
+
+
+def _speech():
+    from jarvis.channels.desk_speech import DeskSpeech
+
+    said, sent = [], []
+
+    async def synth(sentence, profile):
+        said.append(sentence)
+        return b"\x02\x00" * 240
+
+    speech = DeskSpeech("mac", 1, synth, VoiceProfile, sent.append)
+    return speech, said
+
+
+def test_a_lookup_before_any_words_says_one_sec_once():
+    async def go():
+        speech, said = _speech()
+        speech.on_tool()
+        speech.on_tool()  # a second lookup: still only once
+        speech.on_text("You have one thing due. ")
+        speech.on_tool()
+        speech.playback_stopped(0, "done")
+        await speech.finish("You have one thing due.")
+        return said
+
+    assert asyncio.run(go()) == ["One sec.", "You have one thing due."]
+
+
+def test_no_filler_once_falak_has_started_talking_or_was_cut_off():
+    async def go():
+        speech, said = _speech()
+        speech.on_text("Checking your calendar. ")
+        speech.on_tool()
+        speech.playback_stopped(0, "done")
+        await speech.finish("Checking your calendar.")
+        cut, cut_said = _speech()
+        cut.cancelled.set()
+        cut.on_tool()
+        await cut.finish("")
+        return said, cut_said
+
+    assert asyncio.run(go()) == (["Checking your calendar."], [])

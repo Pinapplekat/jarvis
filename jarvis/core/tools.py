@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
 from jarvis.core import actions, outbox
@@ -25,6 +26,7 @@ class TurnState:
     tools_used: list[str] = field(default_factory=list)
     images: list[Image] = field(default_factory=list)  # every image a tool returned this turn, in order (memory only)
     shared: list[int] = field(default_factory=list)  # indexes into images that go out with the reply
+    on_action: Callable[[], None] | None = None  # a spoken turn: an app action is starting (see Speech.on_tool)
 
 
 def latest_ask_id(reg: Registry) -> int:
@@ -64,6 +66,8 @@ def _noted(reg: Registry, turn: TurnState, tool_name: str, outcome: object) -> N
 def _app_tool(reg: Registry, turn: TurnState, spec) -> Tool:
     async def call(args: dict) -> ToolReply:
         turn.tools_used.append(spec.name)
+        if turn.on_action is not None:
+            turn.on_action()
         outcome = await asyncio.to_thread(actions.run, reg, spec.name, args, turn.origin)  # a device may take a while
         _noted(reg, turn, spec.name, outcome)
         return _reply(outcome, turn)
