@@ -24,6 +24,7 @@ from jarvis.contract.api import ActionError
 
 WINDOW_MINUTES = 10
 SWEEP_SECONDS = 10
+PUMP_MS = 100  # how long each wait inside the browser is while a window is open
 
 
 @dataclass
@@ -73,6 +74,7 @@ class Manager:
         self.guard = Guard(blocklist, resolve)
         self._pool = ThreadPoolExecutor(1, thread_name_prefix="falak-browser")
         self._autosweep, self._stopped = autosweep, threading.Event()
+        self._yield = threading.Event()  # set when a call wants the browser's thread back from the pump
         self._monitor: threading.Thread | None = None
         # touched only on the worker thread
         self._session: Session | None = None
@@ -86,7 +88,27 @@ class Manager:
         self.idle_minutes, self.load_seconds, self.guard.extra = idle_minutes, load_seconds, blocklist
 
     def run(self, fn, *args):
-        return self._pool.submit(fn, *args).result()
+        """Run `fn` on the browser's one thread. A pump keeping an open window responsive gives way first, and
+        starts again after."""
+        self._yield.set()
+        try:
+            return self._pool.submit(fn, *args).result()
+        finally:
+            self._resume_pump()
+
+    def _resume_pump(self) -> None:
+        if self._session is not None and self._kind[1] and not self._stopped.is_set():
+            self._yield.clear()
+            self._pool.submit(self._pump)
+
+    def _pump(self) -> None:
+        """While a window is open, keep the browser's events running so each request's check (and so the page) never
+        waits on Falak's next call. Without this the sign-in window hung on every click."""
+        while not self._yield.is_set() and self._session is not None and self._kind[1]:
+            try:
+                self._session.pump(PUMP_MS)
+            except Exception:
+                return
 
     # ---- the browser itself ---------------------------------------------------------------------------------
 

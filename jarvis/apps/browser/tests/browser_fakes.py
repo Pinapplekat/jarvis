@@ -85,6 +85,11 @@ class FakeSession:
     def alive(self):
         return self.open
 
+    def pump(self, ms):
+        import time
+        self.pumped = getattr(self, "pumped", 0) + 1
+        time.sleep(ms / 1000)
+
     def get_json(self, url, check):
         if (why := check(url)):
             raise PageFailed(why)

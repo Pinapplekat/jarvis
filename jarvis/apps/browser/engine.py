@@ -9,6 +9,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Protocol
 
 from jarvis.apps.browser.steps import Control, Step
@@ -52,6 +53,7 @@ class Session(Protocol):
 
     def new_page(self) -> PageDriver: ...
     def alive(self) -> bool: ...
+    def pump(self, ms: int) -> None: ...  # let the browser's events run (request checks happen in them)
     def get_json(self, url: str, check: Check) -> tuple[int, dict | list | None, str | None, str]: ...
     def close(self) -> None: ...
 
@@ -223,6 +225,17 @@ class _PwSession:
             return bool(self._context.pages) or not self.headed
         except Exception:
             return False
+
+    def pump(self, ms: int) -> None:
+        """Playwright's sync API only runs its callbacks, the request check among them, while this thread is inside
+        one of its calls. A window Elijah is clicking around in needs them all the time, so the manager calls this in
+        a loop while one is open; waiting on any page lets them run."""
+        pages = list(self._context.pages) if self._browser is None else [
+            p for c in self._browser.contexts for p in c.pages]
+        if pages:
+            pages[0].wait_for_timeout(ms)
+        else:
+            time.sleep(ms / 1000)
 
     def get_json(self, url: str, check: Check) -> tuple[int, dict | list | None, str | None, str]:
         """A GET with the profile's cookies. Redirects are followed by hand so each hop is checked. Returns

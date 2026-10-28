@@ -139,3 +139,20 @@ def test_stop_closes_everything(mgr, driver):
 
 def test_controls_helper_builds_what_steps_match():
     assert ctl(0, "text", "Email").label == "Email"
+
+
+def test_an_open_window_keeps_the_browser_running_between_calls(mgr, driver):
+    # Playwright only runs its request checks while its thread is inside one of its calls. The sign-in window hung on
+    # every click until something else used the browser (2026-10-28), so an open window is pumped until the next call.
+    import time
+
+    mgr.sign_in("example.com")
+    session = mgr._session
+    deadline = time.monotonic() + 2
+    while getattr(session, "pumped", 0) < 3 and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert getattr(session, "pumped", 0) >= 3  # it kept going with nothing else asking
+    assert mgr.close_window()  # a real call gets the thread back (it would hang here if the pump never gave way)
+    before = getattr(session, "pumped", 0)
+    time.sleep(0.3)
+    assert getattr(session, "pumped", 0) == before  # no window, no pump
