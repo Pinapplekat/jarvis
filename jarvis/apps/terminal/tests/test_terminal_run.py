@@ -156,6 +156,9 @@ def test_repo_state_and_find_repos(ctx, project):
     assert state.data["branch"] in ("main", "master") and state.data["subject"] == "first" and state.data["changed"] == 0
     (project / "new.txt").write_text("x")
     assert terminal.repo_state(ctx, str(project)).data["changed"] == 1
+    assert terminal.repo_state(ctx, "proj").data["changed"] == 1  # a project name, as run's cwd takes it
+    with pytest.raises(ActionError, match="isn't a folder"):
+        terminal.repo_state(ctx, "no-such-project")
     assert terminal.find_repos(ctx).data == {"repos": [str(project)]}
     with pytest.raises(ActionError, match="isn't a git repo"):
         terminal.repo_state(ctx, str(project.parent))

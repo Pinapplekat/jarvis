@@ -210,8 +210,11 @@ def find_repos(ctx: AppContext) -> Result:
 
 
 def repo_state(ctx: AppContext, path: str) -> Result:
-    folder = Path(os.path.expanduser(path)).resolve()
-    if not folder.is_dir() or is_secret_path(folder):
+    try:
+        folder = _folder(path, Folders.from_settings(ctx.settings))  # a path, or a project name as `run` takes it
+    except ActionError:
+        folder = None
+    if folder is None or is_secret_path(folder):
         raise ActionError(f"{path} isn't a folder I can look at.")
     state = repos.repo_state(folder)
     if state is None:
