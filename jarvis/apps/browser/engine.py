@@ -5,6 +5,7 @@ Playwright's sync API belongs to the thread that started it. The manager runs ev
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -196,9 +197,40 @@ class _PwPage:
                 pass
 
 
+SESSION_COOKIES = "falak-session-cookies.json"  # in the profile folder (0700), so a reset removes it too
+SAVE_EVERY = 2.0  # seconds, while a window is open: he may close it himself, and then it's too late to save
+
+
 class _PwSession:
-    def __init__(self, pw, context, browser, check: Check, headed: bool) -> None:
+    def __init__(self, pw, context, browser, check: Check, headed: bool, profile: Path | None = None) -> None:
         self._pw, self._context, self._browser, self._check, self.headed = pw, context, browser, check, headed
+        self._profile, self._saved_at = profile, 0.0
+
+    # Chromium drops session cookies when it closes, and a site's login usually is one (Canvas's is, and so is the
+    # college SSO's). Falak closes the visible sign-in window and reopens the profile headless to read, so without
+    # this every sign-in was lost at once. They're kept beside the profile and put back when it opens.
+    def save_cookies(self) -> None:
+        if self._profile is None or self._context is None:
+            return
+        try:
+            cookies = [c for c in self._context.cookies() if c.get("expires", -1) in (-1, None)]
+        except Exception:
+            return  # the window was already closed: keep what the last save had
+        path = self._profile / SESSION_COOKIES
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cookies))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+        self._saved_at = time.monotonic()
+
+    def restore_cookies(self) -> None:
+        path = self._profile / SESSION_COOKIES if self._profile else None
+        if path is None or not path.exists():
+            return
+        try:
+            self._context.add_cookies(json.loads(path.read_text()))
+        except Exception:
+            pass  # a stale or unreadable file only means he signs in again
 
     def _guarded(self, context):
         def route(r) -> None:
@@ -229,7 +261,9 @@ class _PwSession:
     def pump(self, ms: int) -> None:
         """Playwright's sync API only runs its callbacks, the request check among them, while this thread is inside
         one of its calls. A window Elijah is clicking around in needs them all the time, so the manager calls this in
-        a loop while one is open; waiting on any page lets them run."""
+        a loop while one is open; waiting on any page lets them run. Session cookies are saved every few seconds."""
+        if self.headed and time.monotonic() - self._saved_at >= SAVE_EVERY:
+            self.save_cookies()
         pages = list(self._context.pages) if self._browser is None else [
             p for c in self._browser.contexts for p in c.pages]
         if pages:
@@ -269,6 +303,7 @@ class _PwSession:
         return looks_like_sign_in(url)
 
     def close(self) -> None:
+        self.save_cookies()
         for thing in (self._context if self._browser is None else None, self._browser):
             try:
                 if thing is not None:
@@ -296,7 +331,8 @@ class PlaywrightDriver:
                 window = {"no_viewport": True} if headed else {"viewport": SCREEN}  # a window fills itself
                 context = pw.chromium.launch_persistent_context(
                     str(profile), headless=not headed, accept_downloads=False, service_workers="block", **window)
-                session = _PwSession(pw, context, None, check, headed)
+                session = _PwSession(pw, context, None, check, headed, profile)
+                session.restore_cookies()
                 session._guarded(context)
             else:
                 browser = pw.chromium.launch(headless=not headed)

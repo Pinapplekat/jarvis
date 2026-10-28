@@ -86,3 +86,20 @@ def test_fetch_json_is_a_real_get_with_the_next_page_and_a_signed_out_answer(liv
     assert got["signed_out"] is False and len(got["json"]) == 1 and "rel" not in str(got["next"]) and got["next"]
     assert live.fetch_json("https://api.github.com/user")["signed_out"] is True  # a 401: no login
     assert live.fetch_json("https://example.com/")["listed"] is False
+
+
+def test_a_session_cookie_survives_closing_and_reopening_the_profile(tmp_path):
+    # Canvas's login is a session cookie, which Chromium drops on close; Falak closes the sign-in window and reopens
+    # the profile headless, so without saving them every sign-in was lost at once (2026-10-28).
+    browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    profile = tmp_path / "profile"
+    profile.mkdir(mode=0o700)
+    first = PlaywrightDriver().launch(profile, False, lambda url: None, Path(browsers) if browsers else None)
+    first._context.add_cookies([{"name": "canvas_session", "value": "x", "domain": "pages.test", "path": "/"}])
+    first.close()
+    again = PlaywrightDriver().launch(profile, False, lambda url: None, Path(browsers) if browsers else None)
+    try:
+        assert [c["name"] for c in again._context.cookies()] == ["canvas_session"]
+    finally:
+        again.close()
+    assert ((profile / "falak-session-cookies.json").stat().st_mode & 0o777) == 0o600
