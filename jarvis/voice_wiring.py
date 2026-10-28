@@ -67,7 +67,7 @@ def call_channel(host: "Host") -> Channel | None:
     model = settings.data_dir / "models" / "silero_vad.onnx"
 
     def check() -> None:
-        discord_call.check_node(discord_call.node_version())
+        discord_call.check_node(discord_call.find_node()[1])
         if not model.exists():
             raise ChannelUnavailable("the speech detector is missing; run `jarvis voice setup`")
 

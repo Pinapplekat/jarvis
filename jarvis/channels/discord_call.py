@@ -44,17 +44,34 @@ RESTART_AFTER = 30.0  # seconds before a crashed add-on is started again
 NEEDS_NODE = "Discord calls need Node 22.12 or newer ({found}); install it with `brew install node`."
 
 
-def node_version(run=subprocess.run) -> tuple[int, ...] | None:
+NODE_PLACES = ("/opt/homebrew/bin/node", "/usr/local/bin/node")  # Homebrew's, after whatever is first on PATH
+NEEDED = (22, 12)
+
+
+def node_version(run=subprocess.run, node: str = "node") -> tuple[int, ...] | None:
     try:
-        out = run(["node", "--version"], capture_output=True, text=True, timeout=10).stdout
+        out = run([node, "--version"], capture_output=True, text=True, timeout=10).stdout
     except (OSError, subprocess.TimeoutExpired):
         return None
     found = re.match(r"v(\d+)\.(\d+)", out.strip())
     return (int(found[1]), int(found[2])) if found else None
 
 
+def find_node(run=subprocess.run, which=shutil.which) -> tuple[str | None, tuple[int, ...] | None]:
+    """The first Node new enough for the add-on: the one on PATH, then Homebrew's. A version manager (fnm, nvm) often
+    puts an older Node first while a newer one sits in Homebrew. Returns (path, version), or (None, the newest seen)."""
+    newest = None
+    for path in dict.fromkeys(p for p in (which("node"), *NODE_PLACES) if p):
+        version = node_version(run, path)
+        if version is not None and version >= NEEDED:
+            return path, version
+        if version is not None:
+            newest = max(newest or version, version)
+    return None, newest
+
+
 def check_node(version: tuple[int, ...] | None) -> None:
-    if version is None or version < (22, 12):
+    if version is None or version < NEEDED:
         found = "not installed" if version is None else f"this Mac has {version[0]}.{version[1]}"
         raise ChannelUnavailable(NEEDS_NODE.format(found=found))
 
@@ -308,4 +325,7 @@ def _spawn_node(token: str, owner: str, socket: str):
     env = {**os.environ, "DISCORD_BOT_TOKEN": token, "FALAK_OWNER_ID": owner, "FALAK_VOICE_SOCKET": socket}
     if not (ADDON / "node_modules").is_dir():
         raise ChannelUnavailable(f"run `npm install` in {ADDON} first (Node 22.12 or newer)")
-    return subprocess.Popen(["node", str(ADDON / "index.js")], env=env, stdin=subprocess.DEVNULL)
+    node, version = find_node()
+    if node is None:
+        check_node(version)  # raises with the steps
+    return subprocess.Popen([node, str(ADDON / "index.js")], env=env, stdin=subprocess.DEVNULL)

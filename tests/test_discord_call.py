@@ -261,3 +261,17 @@ def test_a_missing_node_keeps_the_channel_off_with_a_plain_line(echo, tmp_path, 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs Node")
 def test_the_add_on_is_valid_javascript():
     assert subprocess.run(["node", "--check", str(Path(discord_call.ADDON / "index.js"))], capture_output=True).returncode == 0
+
+
+
+def test_a_new_enough_node_is_found_even_when_an_older_one_is_first_on_path():
+    class Out:
+        def __init__(self, v):
+            self.stdout = v
+
+    versions = {"/fnm/node": "v20.20.2\n", "/opt/homebrew/bin/node": "v26.8.2\n"}
+    run = lambda argv, **kw: Out(versions.get(argv[0], ""))  # noqa: E731
+    assert discord_call.find_node(run, lambda name: "/fnm/node") == ("/opt/homebrew/bin/node", (26, 8))
+    versions["/opt/homebrew/bin/node"] = "v21.0.0\n"
+    assert discord_call.find_node(run, lambda name: "/fnm/node") == (None, (21, 0))  # the newest seen, for the message
+    assert discord_call.find_node(lambda argv, **kw: Out(""), lambda name: None) == (None, None)
