@@ -250,7 +250,8 @@ Each milestone becomes one brief for Sonnet, with goal, files, interfaces, tests
 | M7 | **Apps that share, everyday Mac apps:** `ctx.call` between apps, check-in retry, school `deadline import`, web, music, messages, timers | Check-ins read through `ctx.call`; search, music, texts and timers work on Discord |
 | M8 | **Work apps:** terminal (sandboxed), background jobs, tasks (Claude Code sessions), projects and repos | Parity checklist for everyday use passes |
 | M9 | **Voice:** "Hey Falak" wake word, Whisper, Kokoro at the desk; Discord voice calls | Talk at the desk and on a Discord call |
-| M10 | **Cutover:** data migration check, old UI (HUD, Panel, Inbox) reading from the new host, launchd jobs switched, old code retired | You use only Falak for a week without falling back |
+| M10 | **Falak's browser:** a real browser on the Mac node with its own signed-in profile; reads pages that need JavaScript, Canvas through Elijah's own session, screenshots, a visible window when Falak needs to show or he needs to sign in | "Pull up the week 5 checklist" and "what's due in ECON?" work from Canvas and the class wiki |
+| M11 | **Cutover:** data migration check, old UI (HUD, Panel, Inbox) reading from the new host, launchd jobs switched, old code retired | You use only Falak for a week without falling back |
 
 Mail (read, draft, send, mail watch) isn't scheduled yet. It needs the Mac node, since Graph is closed for
 Seattle Colleges and the old JARVIS reads Mail.app.
@@ -263,9 +264,7 @@ Seattle Colleges and the old JARVIS reads Mail.app.
 3. Mac mini: move the host, add local models. The MacBook becomes a node.
 4. UI overhaul: HUD, panel, live-view display ("homework view"), app views, phone and watch screens.
 5. Glasses: another node.
-6. Canvas through Falak's own signed-in browser, since personal tokens are off and the feed misses ECON and
-   ENGL work: [docs/ideas/canvas-browser.md](docs/ideas/canvas-browser.md).
-7. Self-edit and prod mode come back together. Prod mode (the old nightly log review that built tested fixes
+6. Self-edit and prod mode come back together. Prod mode (the old nightly log review that built tested fixes
    on branches for Elijah to deploy, plus weekly feature proposals) stopped with the old JARVIS on 2026-10-27.
    It waits until there are several nodes, since logs, code and builds may then live on different machines
    (decided 2026-10-27).

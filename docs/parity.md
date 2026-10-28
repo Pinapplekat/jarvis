@@ -4,7 +4,7 @@ What Elijah used the old JARVIS for day to day, one row each, and where Falak st
 `legacy/`, the old database (read-only: 1,101 messages from him, 186 command approvals, 39 tasks, 65 self-edits,
 6 reminders, 12 journal entries, 13 projects) and `~/Library/Application Support/JARVIS/commands.jsonl`.
 
-**Status:** **works** (built; Elijah ticks the check on Discord), **M9**, **M10**, **iPhone app**, **unscheduled**
+**Status:** **works** (built; Elijah ticks the check on Discord), **M9**, **M10**, **M11**, **iPhone app**, **unscheduled**
 (no milestone yet), **later** (see `PLAN.md`, "After the rehaul") or **dropped** (with the reason).
 
 A row is done when its Discord check works. Elijah ticks the "works" rows by sending the check on Discord and
@@ -48,7 +48,7 @@ changing `[ ]` to `[x]` here.
 | Use | How the old one did it | Falak | Discord check |
 |---|---|---|---|
 | Desk voice | `voice.py`, `ears.py`, `warm.py`, "Hey JARVIS" | **M9**: wake word, Whisper, Kokoro, Discord voice calls | none yet |
-| HUD, panel, menubar | `hud.py`, `panel.py`, `menubar.py` | **M10**: old UI reading from the new host. UI overhaul is **later** | none yet |
+| HUD, panel, menubar | `hud.py`, `panel.py`, `menubar.py` | **M11**: old UI reading from the new host. UI overhaul is **later** | none yet |
 | Location | Telegram location intake, `location.py`, 8 places | **iPhone app**: location arrives with the app, not through Telegram | none yet |
 | Terminal sense | a zsh hook logged every command (86 observations) | **later**: nothing in Falak reads a timeline yet | none yet |
 | Git sense | `repos.py` noticed commits and branch switches (31 observations) | **later**: same, no timeline yet. `find_repos` and `repo_state` exist for projects | none yet |
@@ -60,7 +60,7 @@ changing `[ ]` to `[x]` here.
 ## What has to be true before the old JARVIS can retire
 
 1. Every **works** row above is ticked on Discord.
-2. Every other row is either a named milestone (M9, M10, iPhone app), **unscheduled** with Elijah knowing it, or
+2. Every other row is either a named milestone (M9, M10, M11, iPhone app), **unscheduled** with Elijah knowing it, or
    **later** or **dropped** for a reason written here.
-3. Mail is the one everyday thing with no milestone. Decide before M10 whether the old JARVIS keeps the mail
+3. Mail is the one everyday thing with no milestone. Decide before M11 whether the old JARVIS keeps the mail
    watch until it has one.

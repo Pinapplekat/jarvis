@@ -1,7 +1,7 @@
 # Idea: a Canvas browser for the school app
 
-**Status:** set aside on 2026-10-26. Not part of any milestone yet. Pick it up after the rehaul, or sooner if
-the calendar feed plus `/weekly` turns out to be too thin.
+**Status:** moved into M10, Falak's browser (decided 2026-10-28); see `docs/briefs/M10.md`. Kept for the
+background and the options that were rejected.
 
 ## The problem
 
