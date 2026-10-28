@@ -94,3 +94,15 @@ def test_channel_sections_for_the_voice_channels_are_validated(section, problem)
     else:
         with pytest.raises(SettingsError, match=problem):
             check_channel_sections(settings)
+
+
+def test_a_call_section_without_enabled_says_how_to_turn_it_on(data_dir, caplog):
+    from jarvis.core.apps import load_apps
+
+    data_dir.mkdir(parents=True)
+    (data_dir / "settings.toml").write_text('[channels.discord_call]\nguild_id = 7\nvoice_channel_id = 555\n')
+    reg = load_apps(load_settings())
+    try:
+        assert call_channel(host_for(reg)) is None and "enabled = true" in caplog.text
+    finally:
+        reg.close()

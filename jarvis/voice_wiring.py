@@ -48,6 +48,8 @@ def call_channel(host: "Host") -> Channel | None:
     settings = host.reg.settings
     section = settings.channels.get("discord_call", {})
     if section.get("enabled") is not True:
+        if section and "enabled" not in section:  # filled in, never switched on: say so instead of staying silent
+            log.warning("Discord calls are off: add `enabled = true` under [channels.discord_call] to turn them on")
         return None
     owner = settings.channels.get("discord", {}).get("owner_id")
     token = load_secrets(settings.data_dir).get("DISCORD_BOT_TOKEN")
