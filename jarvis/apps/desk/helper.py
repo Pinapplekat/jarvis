@@ -1,18 +1,22 @@
 """The link to 'Falak Ears.app', the small Swift program that owns the microphone and the speakers.
 
-It speaks length-prefixed frames over its stdin and stdout: one type byte, a 4-byte big-endian length, the payload.
-Type 1 is audio (16 kHz PCM16 from the microphone going out, 24 kHz PCM16 for the speakers going in); type 2 is one
-line of JSON (commands in, events out). The app is started through LaunchServices (`open`), which is what makes macOS
-ask for the Microphone permission for Falak Ears and not for whatever Python runs under; `open --stdin/--stdout` can
-point its standard streams at named pipes in a private folder, so the audio never touches a disk."""
+It speaks length-prefixed frames over a Unix socket: one type byte, a 4-byte big-endian length, the payload. Type 1
+is audio (16 kHz PCM16 from the microphone going out, 24 kHz PCM16 for the speakers going in); type 2 is one line of
+JSON (commands in, events out). The app is started through LaunchServices (`open`), which is what makes macOS ask for
+the Microphone permission for Falak Ears and not for whatever Python runs under. The node listens on a socket in a
+private folder and the app connects to it, so the audio never touches a disk. (Pointing `open --stdin/--stdout` at
+named pipes hung LaunchServices, since opening a pipe waits for its other end, and no other app could open.)"""
 
 from __future__ import annotations
 
 import json
 import logging
 import os
+import socket
 import struct
+import shutil
 import subprocess
+import tempfile
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -80,35 +84,53 @@ class PipeHelper:
         self._close()
 
 
-def launch(app: Path, run_dir: Path, on_audio: Callable[[bytes], None], on_event: Callable[[dict], None]) -> PipeHelper:
-    """Open Falak Ears.app with its standard streams on two named pipes under `run_dir` (0700) and start reading."""
-    run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    to_app, from_app = run_dir / "to-app.pipe", run_dir / "from-app.pipe"
-    for pipe in (to_app, from_app):
-        pipe.unlink(missing_ok=True)
-        os.mkfifo(pipe, 0o600)
-    result = subprocess.run(["/usr/bin/open", "-g", "-n", "-a", str(app), "--stdin", str(to_app), "--stdout",
-                             str(from_app), "--stderr", str(run_dir / "app.log")], capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"couldn't open Falak Ears ({result.stderr.strip()[:120] or result.returncode})")
-    reader = os.open(from_app, os.O_RDONLY)  # blocks until the app opens its end
-    writer = os.open(to_app, os.O_WRONLY)
+OPEN_TIMEOUT = 15  # seconds for `open` itself; it returns as soon as the app is launched
+CONNECT_TIMEOUT = 30  # seconds for the app to connect back
+
+
+def launch(app: Path, run_dir: Path, on_audio: Callable[[bytes], None], on_event: Callable[[dict], None],
+           connect_timeout: float = CONNECT_TIMEOUT) -> PipeHelper:
+    """Open Falak Ears.app in the background and wait for it to connect to a socket in a private temp folder (a
+    socket path is capped at 104 bytes, which deeper folders can pass). The socket is gone once the app joins."""
+    for old in ("to-app.pipe", "from-app.pipe"):  # left in `run_dir` by the named-pipe version
+        (run_dir / old).unlink(missing_ok=True)
+    private = Path(tempfile.mkdtemp(prefix="falak-ears-"))  # 0700
+    path = private / "s"
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        server.bind(str(path))
+        os.chmod(path, 0o600)
+        server.listen(1)
+        server.settimeout(connect_timeout)
+        try:
+            result = subprocess.run(["/usr/bin/open", "-g", "-n", "-a", str(app), "--args", "--socket", str(path)],
+                                    capture_output=True, text=True, timeout=OPEN_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("couldn't open Falak Ears (macOS didn't launch it in time)") from None
+        if result.returncode != 0:
+            raise RuntimeError(f"couldn't open Falak Ears ({result.stderr.strip()[:120] or result.returncode})")
+        try:
+            conn, _ = server.accept()
+        except socket.timeout:
+            raise RuntimeError("Falak Ears opened but didn't connect") from None
+    finally:
+        server.close()
+        shutil.rmtree(private, ignore_errors=True)
+    conn.settimeout(None)
 
     def close() -> None:
-        for fd in (writer, reader):
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-        for pipe in (to_app, from_app):
-            pipe.unlink(missing_ok=True)
+        try:
+            conn.close()
+        except OSError:
+            pass
 
-    threading.Thread(target=read_frames, args=(lambda n: os.read(reader, n), on_audio, on_event),
+    threading.Thread(target=read_frames, args=(lambda n: _recv(conn, n), on_audio, on_event),
                      name="desk-helper", daemon=True).start()
-    return PipeHelper(lambda data: _write_all(writer, data), close)
+    return PipeHelper(conn.sendall, close)
 
 
-def _write_all(fd: int, data: bytes) -> None:
-    view = memoryview(data)
-    while view:
-        view = view[os.write(fd, view):]
+def _recv(conn: socket.socket, n: int) -> bytes:
+    try:
+        return conn.recv(n)
+    except OSError:
+        return b""

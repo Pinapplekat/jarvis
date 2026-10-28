@@ -1,5 +1,6 @@
 // Falak Ears: the desk's microphone, speakers and push-to-talk key, in one small app that holds the Microphone
-// permission. Nothing is recorded: the microphone goes out as frames on stdout, playback comes in as frames on stdin.
+// permission. Nothing is recorded: the microphone goes out as frames, and playback comes in as frames, over a Unix
+// socket the node listens on (`--socket <path>`; stdin and stdout when there's none, for the self-test).
 //
 // Frames, both ways: one type byte (1 audio, 2 JSON line), a 4-byte big-endian length, the payload.
 //   out: audio = 16 kHz mono Int16 from the microphone, 480 samples (30 ms) at a time, after macOS's echo
@@ -14,13 +15,39 @@ let frameSamples = 480
 
 // ---- framing -----------------------------------------------------------------------------------------------
 
+// The node's socket. `open --stdin/--stdout` with named pipes hung LaunchServices (opening a pipe waits for the
+// other end), which stopped every other app from launching, so the app connects to the node instead.
+func connectSocket(_ path: String) -> FileHandle? {
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { return nil }
+    var addr = sockaddr_un()
+    addr.sun_family = sa_family_t(AF_UNIX)
+    let bytes = Array(path.utf8)
+    guard bytes.count < MemoryLayout.size(ofValue: addr.sun_path) else { close(fd); return nil }
+    withUnsafeMutableBytes(of: &addr.sun_path) { raw in
+        for (i, b) in bytes.enumerated() { raw[i] = b }
+        raw[bytes.count] = 0
+    }
+    let ok = withUnsafePointer(to: &addr) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+    }
+    guard ok == 0 else { close(fd); return nil }
+    return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+}
+
+var link: (input: FileHandle, output: FileHandle) = (FileHandle.standardInput, FileHandle.standardOutput)
+if let i = CommandLine.arguments.firstIndex(of: "--socket"), i + 1 < CommandLine.arguments.count {
+    guard let handle = connectSocket(CommandLine.arguments[i + 1]) else { exit(1) }  // the node isn't listening
+    link = (handle, handle)
+}
+
 let outLock = NSLock()
 func emit(_ kind: UInt8, _ payload: Data) {
     var head = Data([kind])
     var n = UInt32(payload.count).bigEndian
     head.append(Data(bytes: &n, count: 4))
     outLock.lock(); defer { outLock.unlock() }
-    FileHandle.standardOutput.write(head + payload)
+    link.output.write(head + payload)
 }
 func event(_ fields: [String: Any]) {
     if let data = try? JSONSerialization.data(withJSONObject: fields) { emit(2, data + Data("\n".utf8)) }
@@ -155,7 +182,7 @@ func handle(_ command: [String: Any]) {
 }
 
 func readInput() {
-    let input = FileHandle.standardInput
+    let input = link.input
     func exactly(_ n: Int) -> Data? {
         var data = Data()
         while data.count < n {
@@ -172,7 +199,7 @@ func readInput() {
         if kind == 1 { play(payload) }
         else if let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] { handle(object) }
     }
-    exit(0)  // the node closed our stdin: it is gone
+    exit(0)  // the node closed its end: it is gone
 }
 
 // ---- go --------------------------------------------------------------------------------------------------------

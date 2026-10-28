@@ -3,6 +3,8 @@
 import io
 import shutil
 import struct
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -78,3 +80,54 @@ def test_the_manifest_is_a_node_app_that_uses_the_voice_profile():
 
 def test_status_before_the_desk_starts(make_ctx):
     assert actions.status(make_ctx("desk")).data == {"state": "off"}
+
+
+def _fake_open(monkeypatch, connect=True, returncode=0):
+    """Stands in for `/usr/bin/open`: returns at once, then the 'app' connects to the socket it was given."""
+    import socket
+    import subprocess
+    import threading
+    calls = []
+
+    def run(argv, **kw):
+        calls.append((argv, kw))
+        path = argv[argv.index("--socket") + 1]
+
+        def app():
+            c = socket.socket(socket.AF_UNIX)
+            c.connect(path)
+            c.sendall(helper.encode(helper.JSON, b'{"event": "ready"}\n'))
+            calls.append(c)
+        if connect:
+            threading.Thread(target=app).start()
+        return subprocess.CompletedProcess(argv, returncode, "", "")
+
+    monkeypatch.setattr(helper.subprocess, "run", run)
+    return calls
+
+
+def test_the_app_is_opened_with_a_socket_never_with_pipes(monkeypatch, tmp_path):
+    # `open --stdin/--stdout` on named pipes hung LaunchServices and no other app could open (2026-10-28).
+    calls = _fake_open(monkeypatch)
+    events = []
+    run_dir = tmp_path / "run"
+    link = helper.launch(tmp_path / "Falak Ears.app", run_dir, lambda pcm: None, events.append)
+    argv, kw = calls[0]
+    assert "--stdin" not in argv and "--stdout" not in argv and argv[argv.index("--args") + 1] == "--socket"
+    assert kw["timeout"] == helper.OPEN_TIMEOUT  # `open` itself can never hang Falak
+    socket_dir = Path(argv[argv.index("--socket") + 1]).parent
+    assert not socket_dir.exists()  # a private folder, removed once the app joined
+    import time
+    for _ in range(100):
+        if events:
+            break
+        time.sleep(0.01)
+    assert events == [{"event": "ready"}]
+    link.close()
+
+
+def test_an_app_that_never_connects_fails_plainly(monkeypatch, tmp_path):
+    _fake_open(monkeypatch, connect=False)
+    with pytest.raises(RuntimeError, match="didn't connect"):
+        helper.launch(tmp_path / "Falak Ears.app", tmp_path / "run", lambda pcm: None, lambda ev: None, connect_timeout=0.2)
+    assert not list(Path(tempfile.gettempdir()).glob("falak-ears-*"))
