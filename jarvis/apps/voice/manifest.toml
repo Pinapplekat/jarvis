@@ -1,0 +1,64 @@
+[app]
+name = "voice"
+description = "How Falak sounds when it speaks (at the desk and on calls): change the voice, undo it, read the current one."
+runs_on = "host"
+
+[settings.engine]
+type = "string"
+enum = ["kokoro", "omnivoice", "say"]
+default = "kokoro"
+description = "The voice engine. kokoro (British male, on this Mac), omnivoice (designs a voice from attributes; needs a faster Mac), say (macOS, the last resort)."
+
+[settings.idle_minutes]
+type = "integer"
+default = 30
+minimum = 1
+description = "Minutes without speaking before the voice model is unloaded to free its memory; it loads again when a conversation starts."
+
+[[actions]]
+name = "set_voice"
+description = "Change how you sound, from Elijah's own words (\"deeper and a bit older\", \"slower\", \"warmer\"). It takes effect on your next sentence. Pass only the attributes that change; the rest stay. The engine decides what is possible: kokoro changes the voice (one name, or two joined by a comma to blend them) and the speed; omnivoice changes gender, age, pitch, accent and whisper. If what he asks isn't possible on this engine the answer says what is."
+effect = "local"
+undo = "undo_set_voice"
+[actions.input]
+type = "object"
+required = ["attributes"]
+additionalProperties = false
+[actions.input.properties.attributes]
+type = "object"
+additionalProperties = false
+[actions.input.properties.attributes.properties.voice]
+type = "string"
+description = "kokoro only. British men: bm_george (deep, the default), bm_lewis, bm_daniel, bm_fable (lighter, warmer). American men: am_onyx (deepest), am_michael, am_adam, am_eric, am_liam, am_echo, am_fenrir, am_puck. British women: bf_emma, bf_isabella, bf_alice, bf_lily. American women: af_heart, af_bella, af_nicole, af_sarah, af_sky, af_nova, af_kore, af_alloy, af_aoede, af_jessica, af_river. Two joined by a comma blend equally, e.g. \"bm_george,am_onyx\" for deeper. For the say engine: Daniel, Oliver, Arthur, Kate, Serena, Samantha or Alex."
+[actions.input.properties.attributes.properties.speed]
+type = "number"
+minimum = 0.7
+maximum = 1.3
+description = "How fast, 1.0 is normal."
+[actions.input.properties.attributes.properties.gender]
+type = "string"
+enum = ["male", "female"]
+description = "omnivoice only."
+[actions.input.properties.attributes.properties.age]
+type = "string"
+enum = ["child", "teenager", "young adult", "middle-aged", "elderly"]
+description = "omnivoice only."
+[actions.input.properties.attributes.properties.pitch]
+type = "string"
+enum = ["very low pitch", "low pitch", "moderate pitch", "high pitch", "very high pitch"]
+description = "omnivoice only."
+[actions.input.properties.attributes.properties.accent]
+type = "string"
+description = "omnivoice only: an accent of the English it speaks, like \"british accent\" or \"indian accent\"."
+[actions.input.properties.attributes.properties.whisper]
+type = "boolean"
+description = "omnivoice only: speak in a whisper."
+
+[[actions]]
+name = "current_voice"
+description = "How you sound right now: the engine and the voice attributes."
+effect = "read"
+share = true
+[actions.input]
+type = "object"
+additionalProperties = false
