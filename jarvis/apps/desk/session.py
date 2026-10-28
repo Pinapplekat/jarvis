@@ -107,6 +107,13 @@ class DeskSession:
         elif kind == "hotkey":
             down = event.get("action") == "down"
             self._run(self.machine.push_down(now) if down else self.machine.push_up(now))
+        elif kind == "ready":
+            echo = event.get("echo_cancellation", True) is not False
+            self.machine.voice_barge_in = echo
+            if not echo:
+                self.on_error("no echo cancellation")
+        elif kind == "notice":
+            log.warning("the desk helper: %s", event.get("what"))
         elif kind == "error":
             log.error("the desk helper: %s", event.get("what"))
             self.on_error(str(event.get("what", "unknown")))

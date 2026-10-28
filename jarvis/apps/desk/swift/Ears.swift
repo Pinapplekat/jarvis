@@ -93,14 +93,20 @@ func stopPlayback() {
 
 var pending = [Int16]()
 
-func startMicrophone() {
+func buildAudio(echoCancellation: Bool) throws {
+    engine.stop()
     let input = engine.inputNode
-    do { try input.setVoiceProcessingEnabled(true) } catch { fail("echo cancellation unavailable: \(error)") }
+    input.removeTap(onBus: 0)
+    if player.engine != nil { engine.detach(player) }
+    _ = engine.outputNode  // both ends exist before voice processing is switched, so they're set up together
+    try input.setVoiceProcessingEnabled(echoCancellation)
     engine.attach(player)
     engine.connect(player, to: engine.mainMixerNode, format: playFormat)
     let format = input.outputFormat(forBus: 0)
     guard let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: inRate, channels: 1, interleaved: true),
-          let converter = AVAudioConverter(from: format, to: target) else { fail("no usable microphone format"); return }
+          let converter = AVAudioConverter(from: format, to: target) else {
+        throw NSError(domain: "FalakEars", code: 1, userInfo: [NSLocalizedDescriptionKey: "no usable microphone format"])
+    }
     input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * inRate / format.sampleRate) + 16
         guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
@@ -118,8 +124,23 @@ func startMicrophone() {
         }
     }
     engine.prepare()
-    do { try engine.start() } catch { fail("couldn't start audio: \(error)"); return }
-    event(["event": "ready"])
+    try engine.start()
+}
+
+func startMicrophone() {
+    // Echo cancellation first. Some setups refuse it (-10875 while setting up the output); the desk still works
+    // without it, and the node then stops treating speech during Falak's own voice as an interruption.
+    do {
+        try buildAudio(echoCancellation: true)
+        event(["event": "ready", "echo_cancellation": true])
+        return
+    } catch {
+        event(["event": "notice", "what": "echo cancellation unavailable: \(error)"])
+    }
+    do {
+        try buildAudio(echoCancellation: false)
+        event(["event": "ready", "echo_cancellation": false])
+    } catch { fail("couldn't start audio: \(error)") }
 }
 
 func requestMicrophone() {

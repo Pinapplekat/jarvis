@@ -169,3 +169,11 @@ def test_the_tracker_counts_speech_and_silence_and_forgives_a_breath():
     assert t.feed(0.1) == (0, 180)
     t.reset()
     assert t.feed(0.1) == (0, 30)
+
+
+def test_without_echo_cancellation_its_own_voice_never_cuts_it_off_but_the_key_still_does():
+    m = DeskMachine()
+    m.voice_barge_in = False
+    speaking(m, now=2.0)
+    assert m.vad(3.0, 900, 0) == [] and m.state == SPEAKING  # that's Falak, heard through the speakers
+    assert ("stop_playback", "barge_in") in m.push_down(3.1)

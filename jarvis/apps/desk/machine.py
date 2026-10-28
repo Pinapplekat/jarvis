@@ -49,6 +49,7 @@ class DeskMachine:
         self._push_at: float | None = None  # push-to-talk key is down since
         self._audio_ended = False  # speaking: the host sent SpeakEnd
         self._idle = True  # speaking: the speakers have played everything sent so far
+        self.voice_barge_in = True  # off when macOS gave no echo cancellation: the mic then hears Falak's own voice
 
     # ---- what happened ----------------------------------------------------------------------------------------
 
@@ -93,7 +94,8 @@ class DeskMachine:
             return self._listen(now, "follow_up", chime=False)
         elif self.state == WAITING and speech_ms >= t.barge_in_ms:
             return self._barge_in(now)
-        elif self.state == SPEAKING and speech_ms >= t.barge_in_ms and (now - self._since) * 1000 >= t.echo_warmup_ms:
+        elif (self.state == SPEAKING and self.voice_barge_in and speech_ms >= t.barge_in_ms
+              and (now - self._since) * 1000 >= t.echo_warmup_ms):
             return self._barge_in(now)
         return []
 

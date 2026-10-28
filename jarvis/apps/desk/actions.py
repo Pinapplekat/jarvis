@@ -65,7 +65,10 @@ class Runner:
                            idle_seconds=wake.idle_seconds, on_error=self._helper_error)
 
     def _helper_error(self, what: str) -> None:
-        if "not allowed" in what:
+        if what == "no echo cancellation":
+            self.ctx.notify("The desk is on, but macOS wouldn't give it echo cancellation, so on speakers I'd hear "
+                            "myself. Talking over me won't stop me; press ⌥Space to cut in. With headphones it's fine.")
+        elif "not allowed" in what:
             self.ctx.notify("The desk can't hear: Falak Ears needs the Microphone permission. Allow it in System "
                             "Settings > Privacy & Security > Microphone.")
 

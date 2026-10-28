@@ -168,3 +168,14 @@ def test_a_helper_error_is_passed_on_and_closing_closes_the_helper():
     assert seen == ["microphone not allowed"]
     rig.session.close()
     assert rig.helper.closed
+
+
+def test_ready_without_echo_cancellation_turns_voice_barge_in_off_and_says_so():
+    seen = []
+    rig = Rig()
+    rig.session.on_error = seen.append
+    rig.session.handle("helper", {"event": "notice", "what": "echo cancellation unavailable: -10875"})
+    rig.session.handle("helper", {"event": "ready", "echo_cancellation": False})
+    assert rig.session.machine.voice_barge_in is False and seen == ["no echo cancellation"]
+    rig.session.handle("helper", {"event": "ready", "echo_cancellation": True})
+    assert rig.session.machine.voice_barge_in is True
