@@ -7,7 +7,7 @@ from collections.abc import Iterable, Iterator
 
 # Words whose trailing period doesn't end a sentence ("Dr. Who", "e.g. this", "5 p.m. today").
 ABBREVIATIONS = {"dr", "mr", "mrs", "ms", "prof", "st", "jr", "sr", "vs", "etc", "e.g", "i.e", "a.m",
-                 "p.m", "no", "approx", "dept", "est", "fig", "inc", "ltd", "mt", "ave", "jan", "feb",
+                 "p.m", "approx", "dept", "est", "fig", "inc", "ltd", "mt", "ave", "jan", "feb",
                  "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec", "mon", "tue",
                  "wed", "thu", "fri", "sat", "sun", "u.s"}
 _BOUNDARY = re.compile(r"[.!?]+[\"”')\]]*(?=\s)|\n")
