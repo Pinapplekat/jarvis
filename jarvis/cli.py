@@ -141,6 +141,11 @@ def build_parser(name: str) -> argparse.ArgumentParser:
         dest="voice_command", required=True)
     voice.add_parser("setup", help="copy or download the listening and speaking models into Falak's folder")
     voice.add_parser("status", help="which speech models are in place")
+    browser = sub.add_parser("browser", help="Falak's own web browser (on this Mac's node)").add_subparsers(
+        dest="browser_command", required=True)
+    browser.add_parser("setup", help="install Falak's Chromium into the node's folder (needs 2 GB free)")
+    browser.add_parser("status", help="whether Chromium is installed, and which sites are signed in")
+    browser.add_parser("reset", help="delete every saved login in Falak's browser")
     sub.add_parser("nodes", help="nodes connected to the running host, with their capabilities")
     sub.add_parser("apps", help="list apps and their actions")
     run = sub.add_parser("run", help="run an action as <app>.<action>")
@@ -188,6 +193,10 @@ def main(argv: list[str] | None = None) -> int:
         from jarvis import voice_cli
 
         return voice_cli.setup(settings) if args.voice_command == "setup" else voice_cli.status(settings)
+    if args.group == "browser":
+        from jarvis import browser_cli
+
+        return browser_cli.command(args)
     if args.group in ("node", "nodes"):
         from jarvis import node_cli
 

@@ -67,9 +67,11 @@ CONTROLS_JS = """() => {
   const shown = e => { const r = e.getBoundingClientRect(), s = getComputedStyle(e);
     return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
   const words = t => (t || '').replace(/\\s+/g, ' ').trim();
+  const ownText = l => { const c = l.cloneNode(true);  // a label wrapping its control must not read out the control's options
+    c.querySelectorAll('input, select, textarea, button').forEach(x => x.remove()); return words(c.textContent); };
   const label = e => {
     const parts = [];
-    if (e.labels) for (const l of e.labels) parts.push(words(l.innerText));
+    if (e.labels) for (const l of e.labels) parts.push(ownText(l));
     parts.push(words(e.getAttribute('aria-label')));
     const by = e.getAttribute('aria-labelledby');
     if (by) for (const id of by.split(/\\s+/)) { const t = document.getElementById(id); if (t) parts.push(words(t.innerText)); }

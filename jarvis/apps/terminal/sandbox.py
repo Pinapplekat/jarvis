@@ -34,10 +34,12 @@ def secret_dirs() -> list[Path]:
     """Folders that hold keys, sessions or private messages: never read by a command, anywhere."""
     home = Path.home()
     support = home / "Library/Application Support"
+    nodes = {support / "Falak-node", Path(os.environ.get("FALAK_NODE_DIR") or support / "Falak-node").expanduser()}
     return [home / ".ssh", home / ".gnupg", home / ".aws", home / ".config/gh", home / ".docker",
             home / "Library/Keychains", home / "Library/Cookies", home / "Library/Messages",
             support / "Google/Chrome", home / "Library/Safari", support / "Firefox",
-            support / "JARVIS/browser-profile"]
+            support / "JARVIS/browser-profile",
+            *(n / "browser" / "profile" for n in sorted(nodes))]  # Falak's own browser: a live login to his sites
 
 
 def _sb(path: object) -> str:

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from jarvis.apps.terminal.grade import classify
@@ -135,3 +137,12 @@ def test_key_folders_and_env_files_are_off_limits(tmp_path):
     from pathlib import Path
     assert is_secret_path(Path.home() / ".ssh" / "id_rsa") and is_secret_path(tmp_path / "x" / ".env")
     assert not is_secret_path(tmp_path / ".env.example") and not is_secret_path(tmp_path / "README.md")
+
+
+def test_the_browser_profile_is_a_secret_path(tmp_path, monkeypatch):
+    """Falak's browser profile is a live login to Elijah's signed-in sites: no command or task may read it."""
+    node = tmp_path / "Falak-node-test"
+    monkeypatch.setenv("FALAK_NODE_DIR", str(node))
+    assert is_secret_path(node / "browser" / "profile" / "Default" / "Cookies")
+    assert is_secret_path(Path.home() / "Library/Application Support/Falak-node/browser/profile/Local State")
+    assert not is_secret_path(node / "browser" / "sites.json")

@@ -16,6 +16,7 @@ REFUSED = [
     "ftp://example.com/", "https://www.chase.com/login", "https://paypal.com/", "https://bank.example.net/",
     "https://nowhere.invalid/",
 ]
+NOT_ADDRESSES = ["https://javascript:alert(1)", "https://data:text/html,hi", "not a url", ""]
 ALLOWED = ["https://example.com/", "http://example.com:8080/x?y=1", "https://canvas.test/api/v1/courses"]
 
 
@@ -80,3 +81,8 @@ def test_the_reason_is_remembered_for_the_failed_page():
     assert g.refused == ["addresses on this Mac or the local network are blocked"]
     g.new_page()
     assert g.refused == []
+
+
+@pytest.mark.parametrize("url", NOT_ADDRESSES)
+def test_things_that_are_not_web_addresses_are_refused_not_crashed(url):
+    assert guard.Guard(resolve=resolver()).check(url)

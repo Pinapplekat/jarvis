@@ -23,6 +23,9 @@ voice = [
 # M9, the desk on the node: the wake word and speech detection (openwakeword bundles the Silero VAD model).
 desk = ["openwakeword>=0.6,<0.7 ; sys_platform == 'darwin'", "onnxruntime>=1.18", "numpy>=1.26"]
 
+# M10, Falak's browser on the node: Playwright drives Chromium (installed by `falak browser setup` into the node's folder).
+browser = ["playwright>=1.49,<2"]
+
 [project.scripts]
 jarvis = "jarvis.cli:main"
 
