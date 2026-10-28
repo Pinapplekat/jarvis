@@ -54,7 +54,8 @@ class Runner:
         wake.download_models(desk_dir) if not (wake.models_dir(desk_dir) / "silero_vad.onnx").exists() else None
         build.build(desk_dir, str(s["signing_identity"]))
         link = helper.launch(build.app_path(desk_dir), desk_dir / "run",
-                             lambda pcm: self.post("mic", pcm), lambda ev: self.post("helper", ev))
+                             lambda pcm: self.post("mic", pcm), lambda ev: self.post("helper", ev),
+                             args=() if s["wake_word"] else ("--mic-off",))  # no wake word: no microphone until the key
         self._helper = link
         link.command({"cmd": "hotkey", "key": s["push_to_talk"]})
         timing = Timing(end_silence_ms=int(s["end_silence_ms"]), barge_in_ms=int(s["barge_in_ms"]),

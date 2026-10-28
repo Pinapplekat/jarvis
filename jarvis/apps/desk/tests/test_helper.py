@@ -141,3 +141,11 @@ def test_the_no_echo_cancellation_notice_is_said_once_ever(make_ctx):
     runner._helper_error("no echo cancellation")
     runner._helper_error("no echo cancellation")  # the next start
     assert len(said) == 1 and "echo cancellation" in said[0]
+
+
+def test_with_no_wake_word_falak_ears_starts_with_the_microphone_off(monkeypatch, tmp_path):
+    calls = _fake_open(monkeypatch)
+    link = helper.launch(tmp_path / "Falak Ears.app", tmp_path / "run", lambda pcm: None, lambda ev: None,
+                         args=("--mic-off",))
+    assert calls[0][0][-1] == "--mic-off"
+    link.close()

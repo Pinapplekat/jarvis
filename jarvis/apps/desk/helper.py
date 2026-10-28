@@ -89,7 +89,7 @@ CONNECT_TIMEOUT = 30  # seconds for the app to connect back
 
 
 def launch(app: Path, run_dir: Path, on_audio: Callable[[bytes], None], on_event: Callable[[dict], None],
-           connect_timeout: float = CONNECT_TIMEOUT) -> PipeHelper:
+           connect_timeout: float = CONNECT_TIMEOUT, args: tuple[str, ...] = ()) -> PipeHelper:
     """Open Falak Ears.app in the background and wait for it to connect to a socket in a private temp folder (a
     socket path is capped at 104 bytes, which deeper folders can pass). The socket is gone once the app joins."""
     for old in ("to-app.pipe", "from-app.pipe"):  # left in `run_dir` by the named-pipe version
@@ -103,7 +103,7 @@ def launch(app: Path, run_dir: Path, on_audio: Callable[[bytes], None], on_event
         server.listen(1)
         server.settimeout(connect_timeout)
         try:
-            result = subprocess.run(["/usr/bin/open", "-g", "-n", "-a", str(app), "--args", "--socket", str(path)],
+            result = subprocess.run(["/usr/bin/open", "-g", "-n", "-a", str(app), "--args", "--socket", str(path), *args],
                                     capture_output=True, text=True, timeout=OPEN_TIMEOUT)
         except subprocess.TimeoutExpired:
             raise RuntimeError("couldn't open Falak Ears (macOS didn't launch it in time)") from None

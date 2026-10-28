@@ -52,6 +52,12 @@ class DeskMachine:
         self.voice_barge_in = True
         self._spoke_first = False  # speaking: Falak started this, not him (see host_speak_start)  # off when macOS gave no echo cancellation: the mic then hears Falak's own voice
 
+    @property
+    def hearing(self) -> bool:
+        """Whether the microphone is needed: a conversation he started is open (listening, waiting, Falak answering
+        him, or a follow-up window). Not while idle, and not while Falak speaks first."""
+        return self.state in (LISTENING, WAITING, FOLLOW_UP) or (self.state == SPEAKING and not self._spoke_first)
+
     # ---- what happened ----------------------------------------------------------------------------------------
 
     def wake(self, now: float) -> list[Effect]:

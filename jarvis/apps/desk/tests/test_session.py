@@ -179,3 +179,37 @@ def test_ready_without_echo_cancellation_turns_voice_barge_in_off_and_says_so():
     assert rig.session.machine.voice_barge_in is False and seen == ["no echo cancellation"]
     rig.session.handle("helper", {"event": "ready", "echo_cancellation": True})
     assert rig.session.machine.voice_barge_in is True
+
+
+def mic_commands(rig):
+    return [c["on"] for c in rig.helper.commands if c.get("cmd") == "mic"]
+
+
+def test_with_no_wake_word_the_microphone_is_on_only_for_a_conversation_he_started():
+    rig = Rig(wake=False)
+    rig.frames(30, loud=True)  # the room talking: the microphone isn't even on
+    assert mic_commands(rig) == [] and rig.sent == []
+    rig.session.handle("helper", {"event": "hotkey", "action": "down"})
+    assert mic_commands(rig) == [True]  # the key turns it on
+    rig.frames(5, loud=True)
+    rig.now += 0.8
+    rig.session.handle("helper", {"event": "hotkey", "action": "up"})
+    rig.host(m.SpeakStart(1))
+    rig.host(m.SpeakEnd(1))
+    rig.session.handle("helper", {"event": "idle", "ms": 900})
+    assert rig.session.state == FOLLOW_UP and mic_commands(rig) == [True]  # still on for his follow-up
+    rig.now += 16
+    rig.session.handle("tick")
+    assert rig.session.state == IDLE and mic_commands(rig) == [True, False]  # the window closed: off again
+    rig.host(m.SpeakStart(2**31))  # Falak speaks first (a reminder)
+    rig.host(m.SpeakEnd(2**31))
+    rig.session.handle("helper", {"event": "idle", "ms": 900})
+    assert mic_commands(rig) == [True, False]  # it never came on for that
+
+
+def test_with_a_wake_word_the_microphone_stays_on_to_hear_it():
+    rig = Rig(wake=True)
+    rig.session.handle("helper", {"event": "hotkey", "action": "down"})
+    rig.now += 16
+    rig.session.handle("tick")
+    assert mic_commands(rig) == []

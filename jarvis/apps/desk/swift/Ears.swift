@@ -56,7 +56,11 @@ func fail(_ what: String) { event(["event": "error", "what": what]) }
 
 // ---- speakers ---------------------------------------------------------------------------------------------
 
-let engine = AVAudioEngine()
+var engine = AVAudioEngine()  // the speakers; with echo cancellation, the microphone too (it needs both ends together)
+var micEngine: AVAudioEngine?  // the microphone alone, when there's no echo cancellation: started only when needed
+var echoCancelling = false
+var micWanted = !CommandLine.arguments.contains("--mic-off")  // the node says when; off = no microphone light at all
+var micRunning = false
 let player = AVAudioPlayerNode()
 let playFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: outRate, channels: 1, interleaved: false)!
 var scheduled = 0, finished = 0
@@ -80,6 +84,9 @@ func play(_ pcm: Data) {
         countLock.lock(); finished += 1; let drained = finished == scheduled; countLock.unlock()
         if drained { event(["event": "idle", "ms": playedMs()]) }
     }
+    if echoCancelling && !engine.isRunning {  // speaking needs the shared engine, so the microphone comes on with it
+        try? engine.start(); micRunning = true
+    }
     if !player.isPlaying { player.play() }
 }
 
@@ -93,15 +100,14 @@ func stopPlayback() {
 
 var pending = [Int16]()
 
-func buildAudio(echoCancellation: Bool) throws {
-    engine.stop()
-    let input = engine.inputNode
+func attachPlayer(_ e: AVAudioEngine) {
+    if let old = player.engine { old.detach(player) }
+    e.attach(player)
+    e.connect(player, to: e.mainMixerNode, format: playFormat)
+}
+
+func tap(_ input: AVAudioInputNode) throws {
     input.removeTap(onBus: 0)
-    if player.engine != nil { engine.detach(player) }
-    _ = engine.outputNode  // both ends exist before voice processing is switched, so they're set up together
-    try input.setVoiceProcessingEnabled(echoCancellation)
-    engine.attach(player)
-    engine.connect(player, to: engine.mainMixerNode, format: playFormat)
     let format = input.outputFormat(forBus: 0)
     guard let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: inRate, channels: 1, interleaved: true),
           let converter = AVAudioConverter(from: format, to: target) else {
@@ -123,23 +129,81 @@ func buildAudio(echoCancellation: Bool) throws {
             emit(1, frame.withUnsafeBufferPointer { Data(buffer: $0) })
         }
     }
+}
+
+func startWithEchoCancellation() throws {
+    let input = engine.inputNode
+    _ = engine.outputNode  // both ends exist before voice processing is switched, so they're set up together
+    try input.setVoiceProcessingEnabled(true)
+    attachPlayer(engine)
+    try tap(input)
     engine.prepare()
     try engine.start()
+    (echoCancelling, micRunning) = (true, true)
+    if !micWanted { micOff() }
+}
+
+func startPlain() throws {
+    engine.stop()
+    engine = AVAudioEngine()  // a fresh one: a refused echo-cancellation attempt leaves the old one half set up
+    attachPlayer(engine)  // the speakers only: the input node is never touched here, so macOS shows no microphone
+    engine.prepare()
+    try engine.start()
+    echoCancelling = false
+    if micWanted { try micOn() }
+}
+
+func micOn() throws {
+    if micRunning { return }
+    if echoCancelling {
+        try engine.start()
+    } else {
+        let e = AVAudioEngine()
+        try tap(e.inputNode)
+        e.prepare()
+        try e.start()
+        micEngine = e
+    }
+    micRunning = true
+}
+
+func micOff() {
+    guard micRunning else { return }
+    if echoCancelling {
+        if player.isPlaying { return }  // one engine: stopping it would cut Falak off; the next idle turns it off
+        engine.stop()
+    } else {
+        micEngine?.inputNode.removeTap(onBus: 0)
+        micEngine?.stop()
+        micEngine = nil
+    }
+    pending.removeAll()
+    micRunning = false
+}
+
+func setMic(_ on: Bool) {
+    micWanted = on
+    if on {
+        do { try micOn() } catch { fail("couldn't start the microphone: \(error)") }
+    } else {
+        micOff()
+    }
+    event(["event": "mic", "on": micRunning])
 }
 
 func startMicrophone() {
     // Echo cancellation first. Some setups refuse it (-10875 while setting up the output); the desk still works
     // without it, and the node then stops treating speech during Falak's own voice as an interruption.
     do {
-        try buildAudio(echoCancellation: true)
-        event(["event": "ready", "echo_cancellation": true])
+        try startWithEchoCancellation()
+        event(["event": "ready", "echo_cancellation": true, "mic": micRunning])
         return
     } catch {
         event(["event": "notice", "what": "echo cancellation unavailable: \(error)"])
     }
     do {
-        try buildAudio(echoCancellation: false)
-        event(["event": "ready", "echo_cancellation": false])
+        try startPlain()
+        event(["event": "ready", "echo_cancellation": false, "mic": micRunning])
     } catch { fail("couldn't start audio: \(error)") }
 }
 
@@ -197,6 +261,7 @@ func handle(_ command: [String: Any]) {
     case "stop": DispatchQueue.main.async { stopPlayback() }
     case "chime": DispatchQueue.main.async { chime(command["name"] as? String ?? "start") }
     case "hotkey": DispatchQueue.main.async { registerHotKey(command["key"] as? String ?? "option+space") }
+    case "mic": DispatchQueue.main.async { setMic(command["on"] as? Bool ?? true) }
     case "quit": exit(0)
     default: break
     }

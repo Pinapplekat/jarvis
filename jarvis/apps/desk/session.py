@@ -37,6 +37,9 @@ class DeskSession:
                  clock: Callable[[], float] = time.monotonic, idle_seconds: Callable[[], float | None] = lambda: None,
                  on_error: Callable[[str], None] = lambda what: None) -> None:
         self.helper, self.vad, self.wake, self.send = helper, vad, wake, send
+        # With no wake word there is nothing to listen for while idle, so the microphone itself is off until he presses
+        # the key (Falak Ears starts with it off); with one, it has to stay on to hear the word.
+        self.mic_on_demand, self._mic_open = wake is None, wake is not None
         self.machine, self.tracker = DeskMachine(timing), SpeechTracker()
         self.chimes, self.clock, self.idle_seconds, self.on_error = chimes, clock, idle_seconds, on_error
         self._pre_roll: deque[bytes] = deque(maxlen=PRE_ROLL_MS // FRAME_MS)
@@ -162,6 +165,12 @@ class DeskSession:
                 self.helper.command({"cmd": "stop"})
             elif what == "playback_stopped":
                 self.send(m.PlaybackStopped(effect[1], self._played_ms, effect[2]).to_json())
+        self._sync_mic()
+
+    def _sync_mic(self) -> None:
+        if self.mic_on_demand and self.machine.hearing != self._mic_open:
+            self._mic_open = self.machine.hearing
+            self.helper.command({"cmd": "mic", "on": self._mic_open})
 
     def close(self) -> None:
         self.helper.close()
