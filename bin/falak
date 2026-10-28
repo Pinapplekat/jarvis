@@ -2,4 +2,5 @@
 # `falak <command>` from anywhere: runs this checkout's CLI. `falak start` runs Falak and this Mac's node.
 # Linked into ~/.local/bin; the folder is found through the link, so the checkout can move.
 here=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
-exec uv run --quiet --directory "$here" jarvis "$@"
+# The voice (host) and desk (node) extras come along, so a plain `falak start` has everything it needs.
+exec uv run --quiet --directory "$here" --extra voice --extra desk jarvis "$@"
