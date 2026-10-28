@@ -63,6 +63,8 @@ def describe_state(s: dict) -> str:
     if s["state"] == "lost":
         return f"stopped without an exit code after {duration(s['runtime'])}"
     code = s["code"]
+    if s.get("stop_asked") and code != 0:
+        return f"stopped as you asked, after {duration(s['runtime'])}"
     how = "finished OK" if code == 0 else f"killed by signal {-code}" if code < 0 else f"failed (exit {code})"
     return f"{how} after {duration(s['runtime'])}"
 
@@ -175,9 +177,14 @@ class Jobs:
         s = self.status(job_id, lines=0)
         if not s or s["state"] != "running":
             return False
+        meta = self._meta(job_id)
+        meta["stop_asked"] = True  # saved first, so the end notice says it was asked for, not that it failed
+        self._save_meta(meta)
         try:
             os.killpg(s["pid"], signal.SIGTERM)  # the wrapper leads its own session: this reaches the command too
         except (ProcessLookupError, PermissionError):
+            meta["stop_asked"] = False
+            self._save_meta(meta)
             return False
         return True
 
@@ -196,11 +203,12 @@ class Jobs:
             s = self.status(job_id, lines=8, now=now)
             event, message = None, None
             if s["state"] in ("exited", "lost"):
-                event, mark = "end", "✅" if s["code"] == 0 else "❌"
-                tail = s["tail"].splitlines()[-3:]
+                asked = bool(meta.get("stop_asked")) and s["code"] != 0
+                event, mark = "end", "✅" if s["code"] == 0 else "⏹" if asked else "❌"
+                tail = [] if asked else s["tail"].splitlines()[-3:]  # a stop he asked for needs no log
                 message = (f"{mark} Background job {describe_state(s)}: $ {command_text(s['argv'])[:150]}"
                            + ("\n" + "\n".join(tail) if tail else ""))
-                if s["code"] != 0 and WANTED_INPUT.search(s["tail"]):
+                if s["code"] != 0 and not asked and WANTED_INPUT.search(s["tail"]):
                     message += ("\n(It stopped because it was waiting for typed input, which a background job can't "
                                 "give. It needs its answers as arguments, environment variables or a file instead.)")
             elif not meta["notified"].get("stall"):

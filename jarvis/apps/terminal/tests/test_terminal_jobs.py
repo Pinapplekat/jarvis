@@ -54,7 +54,8 @@ def test_a_silent_job_is_reported_once_as_stalled_then_still_reports_its_end(tmp
         assert "printed nothing for" in said[0] and "still running" in said[0]
         assert jobs.kill(job_id)
         wait_exit(jobs, job_id)
-        assert jobs.check(said.append, 20) == 1 and "killed by signal 15" in said[1]  # one message when it stops
+        assert jobs.check(said.append, 20) == 1  # one message when it stops, saying it was asked for
+        assert said[1].startswith("⏹ Background job stopped as you asked") and "signal" not in said[1]
         assert jobs.check(said.append, 20) == 0
     finally:
         jobs.kill(job_id)
