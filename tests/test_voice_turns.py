@@ -64,21 +64,21 @@ def handle(echo, brain, speech, channel="desk", text="what's on tomorrow?"):
     return asyncio.run(loop.handle_message(echo, brain, text, Origin(channel), speech=speech))
 
 
-def test_the_voice_principle_reaches_the_prompt_on_voice_channels_only(echo):
+def test_the_voice_principle_reaches_the_prompt_on_spoken_turns_only(echo):
     for channel, spoken in (("desk", True), ("discord_call", True), ("discord", False), ("cli", False)):
         brain = StreamingBrain()
-        handle(echo, brain, FakeSpeech() if spoken else None, channel)
+        handle(echo, brain, FakeSpeech() if spoken else None, channel)  # only voice channels give a turn a Speech
         assert (VOICE_PRINCIPLE in brain.systems[0]) is spoken, channel
-    assert "falak__send_text" in system_prompt("Falak", "desk") and "send_text" not in system_prompt("Falak")
+    assert "falak__send_text" in system_prompt("Falak", spoken=True) and "send_text" not in system_prompt("Falak")
 
 
-def test_send_text_exists_only_on_voice_channels_and_queues_a_discord_message(echo):
-    def names(channel):
-        turn = TurnState(Origin(channel), latest_ask_id(echo))
+def test_send_text_exists_only_on_spoken_turns_and_queues_a_discord_message(echo):
+    def names(channel, spoken=True):
+        turn = TurnState(Origin(channel), latest_ask_id(echo), spoken=spoken)
         return {t.name: t for t in build_tools(echo, turn)}
 
     assert "falak__send_text" in names("desk") and "falak__send_text" in names("discord_call")
-    assert "falak__send_text" not in names("discord") and "falak__send_text" not in names("cli")
+    assert "falak__send_text" not in names("discord", spoken=False) and "falak__send_text" not in names("cli", spoken=False)
     nudged = []
     echo.outbox_nudge = lambda: nudged.append(1)
     out = asyncio.run(names("desk")["falak__send_text"].call({"text": "pytest -k m8 failed: 2 errors"}))

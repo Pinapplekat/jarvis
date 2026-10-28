@@ -11,7 +11,6 @@ from jarvis.core.actions import Origin
 from jarvis.contract.api import Attachment
 from jarvis.core.apps import SEP, Registry
 from jarvis.core.brain import Image, Tool, ToolReply
-from jarvis.core.context import SPOKEN_CHANNELS
 
 CORE = "falak"  # core tools are falak__<name>
 
@@ -22,6 +21,7 @@ class TurnState:
     last_ask_id: int  # asks with a higher id were created during this turn
     own_channels: frozenset[str] = frozenset({"cli"})  # channels only Elijah can write into; the host decides
     attachments: tuple[Attachment, ...] = ()  # files Elijah sent with this message
+    spoken: bool = False  # the reply is said aloud on a voice channel, so anything he must read goes to Discord
     tools_used: list[str] = field(default_factory=list)
     images: list[Image] = field(default_factory=list)  # every image a tool returned this turn, in order (memory only)
     shared: list[int] = field(default_factory=list)  # indexes into images that go out with the reply
@@ -214,7 +214,7 @@ def build_tools(reg: Registry, turn: TurnState) -> list[Tool]:
     tools += [_answer_ask_tool(reg, turn), _undo_tool(reg, turn)]
     if turn.origin.channel in turn.own_channels:  # a chat reply to Elijah; job turns deliver text only
         tools.append(_send_image_tool(turn))
-    if turn.origin.channel in SPOKEN_CHANNELS:
+    if turn.spoken:
         tools.append(_send_text_tool(reg, turn))
     if any(a.kind == "image" for a in turn.attachments):
         tools.append(_view_attachment_tool(turn))

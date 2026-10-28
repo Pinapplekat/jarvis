@@ -56,10 +56,11 @@ async def _think(brain: Brain, reg: Registry, turn: TurnState, system: str, prom
         return BrainResult("", error=f"{type(e).__name__}: {e}"[:200])
 
 
-def _record_turn(reg: Registry, channel: str, ms: int, result: BrainResult, tools: list[str], error: str | None) -> int:
+def _record_turn(reg: Registry, channel: str, ms: int, result: BrainResult, tools: list[str], error: str | None,
+                 model: str | None = None) -> int:
     return reg.conn.execute(
         "INSERT INTO turns (at, channel, ms, model, num_turns, tools_json, cost_usd, error) VALUES (?,?,?,?,?,?,?,?)",
-        (datetime.now(timezone.utc).isoformat(timespec="seconds"), channel, ms, reg.settings.model,
+        (datetime.now(timezone.utc).isoformat(timespec="seconds"), channel, ms, model or reg.settings.model,
          result.num_turns, json.dumps(tools), result.cost_usd, error),
     ).lastrowid
 
@@ -113,18 +114,19 @@ async def handle_message(reg: Registry, brain: Brain, text: str, origin: Origin,
     try:
         await asyncio.to_thread(sessions.sweep, reg, now)  # a view whose device left or sat idle closes before this turn
         message_id = conversation.add(reg.conn, "user", text, now)
-        turn = TurnState(origin, latest_ask_id(reg), own_channels, attachments)
+        turn = TurnState(origin, latest_ask_id(reg), own_channels, attachments, spoken=speech is not None)
         images = sum(a.kind == "image" for a in attachments)
         prompt = context.build_prompt(reg, text, origin.channel, message_id, now, images)
-        system = context.system_prompt(reg.settings.assistant_name, origin.channel)
+        system = context.system_prompt(reg.settings.assistant_name, spoken=speech is not None)
+        model = getattr(brain, "model", None)  # a channel's own brain may use another model
         result, error = await _run_turn(reg, brain, turn, system, prompt, speech)
         ms = int((time.monotonic() - started) * 1000)
         if error == INTERRUPTED:  # cut off before it answered or did anything: there is no reply to keep
-            turn_id = _record_turn(reg, origin.channel, ms, result, turn.tools_used, error)
+            turn_id = _record_turn(reg, origin.channel, ms, result, turn.tools_used, error, model)
             return Reply("", (), error, turn_id, ms)
         reply = _fallback(error, turn.tools_used) if error else result.text.strip()
         message_id = conversation.add(reg.conn, "assistant", reply, now)
-        turn_id = _record_turn(reg, origin.channel, ms, result, turn.tools_used, error)
+        turn_id = _record_turn(reg, origin.channel, ms, result, turn.tools_used, error, model)
         return Reply(reply, tuple(turn.tools_used), error, turn_id, ms, new_pending_asks(reg, turn),
                      shared_images(turn), message_id)
     finally:

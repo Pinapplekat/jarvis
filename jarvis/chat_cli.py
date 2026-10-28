@@ -16,7 +16,7 @@ from jarvis.core.brain import Brain
 from jarvis.core.brain_sdk import SdkBrain
 from jarvis.core.channel import Incoming
 from jarvis.core.settings import Settings
-from jarvis.host import Host, build_channels
+from jarvis.host import Host, build_channels, voice_channel
 
 
 FIXTURE_APPS = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "apps"
@@ -92,6 +92,15 @@ def serve(settings: Settings, with_fixtures: bool = False, with_node: bool = Fal
     host = Host(reg, brain or _brain(settings))
     for channel in build_channels(settings, host):
         host.add_channel(channel)
+    if (desk := voice_channel(host, hub)) is not None:
+        host.add_channel(desk)
+        section = settings.channels.get("desk", {})
+        if brain is None:  # spoken turns think with a faster model and fewer steps
+            from jarvis.channels.desk import DEFAULT_VOICE_MAX_TURNS, DEFAULT_VOICE_MODEL
+
+            host.brains["desk"] = SdkBrain(section.get("voice_model", DEFAULT_VOICE_MODEL),
+                                           section.get("voice_max_turns", DEFAULT_VOICE_MAX_TURNS),
+                                           settings.data_dir / "scratch")
     if not host.channels:
         host.close()
         print("No channel is enabled, so there is nothing to serve. See docs/briefs/M4.md for the Discord setup.",

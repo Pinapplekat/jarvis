@@ -1,0 +1,53 @@
+[app]
+name = "desk"
+description = "Talk to Falak at the Mac's microphone and hear it on the speakers: the wake word, a push-to-talk key, echo cancellation and interruptions."
+runs_on = "node:desk"
+start = "start"
+stop = "stop"
+uses = ["voice"]
+
+[settings.push_to_talk]
+type = "string"
+default = "option+space"
+description = "The push-to-talk key: modifiers (option, command, control, shift) and a key (space, return, tab, f13 to f19), joined by +. Hold to talk, or tap to start a conversation. Works even with the wake word off."
+
+[settings.wake_word]
+type = "boolean"
+default = true
+description = "Listen for the wake word. Off, only the push-to-talk key starts a conversation."
+
+[settings.end_silence_ms]
+type = "integer"
+default = 700
+minimum = 200
+description = "Milliseconds of quiet that end his turn."
+
+[settings.barge_in_ms]
+type = "integer"
+default = 250
+minimum = 100
+description = "Milliseconds of him talking over Falak that stop it."
+
+[settings.follow_up_seconds]
+type = "integer"
+default = 15
+minimum = 1
+description = "Seconds after Falak finishes in which he can reply without the wake word."
+
+[settings.chimes]
+type = "boolean"
+default = true
+description = "A soft chime when Falak starts listening and when a follow-up window closes."
+
+[settings.signing_identity]
+type = "string"
+default = ""
+description = "Name of a code-signing certificate for Falak Ears, so macOS keeps the Microphone permission when it is rebuilt. Empty signs ad hoc, and macOS asks again after each rebuild."
+
+[[actions]]
+name = "status"
+description = "Is the desk listening, and in what state: idle, listening, waiting, speaking or follow-up."
+effect = "read"
+[actions.input]
+type = "object"
+additionalProperties = false

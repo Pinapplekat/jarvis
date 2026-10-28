@@ -26,7 +26,8 @@ from jarvis.core.tools import SEND_TEXT_SOURCE
 
 log = logging.getLogger("jarvis.host")
 
-CHANNEL_MODULES = {"discord": "jarvis.channels.discord"}  # channels that settings.toml and .env can switch on
+CHANNEL_MODULES = {"discord": "jarvis.channels.discord", "desk": "jarvis.channels.desk"}  # sections settings.toml accepts
+WIRED_BY_SERVE = {"desk"}  # channels that need the node hub, so `serve` builds them (see voice_channel)
 TERMINAL = "cli"
 SWEEP_EVERY = 30  # seconds
 MAX_SPOKEN_FIRST = 400  # characters; anything longer that Falak says first goes to Discord
@@ -62,6 +63,8 @@ def build_channels(settings: Settings, host: Host) -> list[Channel]:
     secrets = load_secrets(settings.data_dir)
     channels: list[Channel] = []
     for name, module_path in CHANNEL_MODULES.items():
+        if name in WIRED_BY_SERVE:
+            continue
         section = settings.channels.get(name, {})
         if section.get("enabled", True) is False:
             continue
@@ -78,6 +81,27 @@ def build_channels(settings: Settings, host: Host) -> list[Channel]:
     return channels
 
 
+def voice_channel(host: "Host", hub) -> Channel | None:
+    """The desk channel, when the voice and desk apps are on and `[channels.desk]` isn't disabled: it takes the audio
+    frames the node hub receives and sends its speech back through the hub."""
+    from jarvis.channels import desk
+    from jarvis.core import share
+    from jarvis.speech import VoiceProfile
+
+    reg = host.reg
+    if "voice" not in reg.apps or "desk" not in reg.apps or reg.settings.channels.get("desk", {}).get("enabled") is False:
+        return None
+    voice = reg.apps["voice"].ctx.settings
+
+    def profile() -> VoiceProfile:
+        return VoiceProfile.from_dict(share.call(reg, "desk", "voice", "current_voice", {}).data["profile"])
+
+    channel = desk.create(data_dir=reg.settings.data_dir, engine=lambda: voice["engine"], profile=profile,
+                          send_frame=hub.send_voice, idle_minutes=voice["idle_minutes"])
+    hub.voice_sink = channel.on_frame
+    return channel
+
+
 @dataclass(frozen=True)
 class _Stop:
     """Queue marker: no more turns."""
@@ -87,6 +111,7 @@ class Host:
     def __init__(self, reg: Registry, brain: Brain, channels: list[Channel] | None = None,
                  on_reply: Callable[[Incoming, loop.Reply], None] | None = None) -> None:
         self.reg, self.brain, self.on_reply = reg, brain, on_reply
+        self.brains: dict[str, Brain] = {}  # a channel may think with its own brain (the desk: a faster model)
         self.channels: dict[str, Channel] = {}
         for ch in channels or []:
             self.add_channel(ch)
@@ -202,7 +227,7 @@ class Host:
         async with self._turn_lock:
             async with channel.typing(incoming.reply_to):
                 reply = await loop.handle_message(
-                    self.reg, self.brain, incoming.text, Origin(incoming.channel, incoming.untrusted),
+                    self.reg, self.brains.get(incoming.channel, self.brain), incoming.text, Origin(incoming.channel, incoming.untrusted),
                     own_channels=self.own_channels, attachments=incoming.attachments, speech=speech,
                 )
         log.info("turn channel=%s ms=%d tools=%s error=%s", incoming.channel, reply.ms,

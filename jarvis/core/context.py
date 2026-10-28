@@ -18,8 +18,6 @@ RECENT_ACTIONS = 5
 MESSAGE_MAX = 600
 
 
-SPOKEN_CHANNELS = frozenset({"desk", "discord_call"})  # replies on these are said aloud, not read
-
 VOICE_PRINCIPLE = (
     "Your reply is spoken aloud, so write it the way you would say it: a sentence or two, conversational, no lists "
     "and no markup. Anything he needs to read (a command, an error, code, a link, a list, a number he will need "
@@ -28,9 +26,10 @@ VOICE_PRINCIPLE = (
 )
 
 
-def system_prompt(assistant_name: str, channel: str | None = None) -> str:
+def system_prompt(assistant_name: str, spoken: bool = False) -> str:
+    """`spoken`: the reply will be said aloud (a voice channel is on the other end), so it is written to be heard."""
     text = (Path(__file__).with_name("persona.md").read_text()).replace("{name}", assistant_name).strip()
-    return f"{text}\n\n{VOICE_PRINCIPLE}" if channel in SPOKEN_CHANNELS else text
+    return f"{text}\n\n{VOICE_PRINCIPLE}" if spoken else text
 
 
 def _clip(text: str, limit: int) -> str:
