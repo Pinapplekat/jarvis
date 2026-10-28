@@ -11,7 +11,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "numpy>=1.26"]  # numpy: the speech tests build and resample audio
+# M9, the host's voice: Kokoro on MLX (no torch), faster-whisper for listening, and misaki's English dictionary with
+# the spaCy model it needs (misaki would otherwise try to pip-install it at run time).
+voice = [
+    "mlx-audio>=0.6,<0.7 ; sys_platform == 'darwin'",
+    "misaki[en]>=0.9",
+    "faster-whisper>=1.2,<2",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+]
+# M9, the desk on the node: the wake word and speech detection (openwakeword bundles the Silero VAD model).
+desk = ["openwakeword>=0.6,<0.7 ; sys_platform == 'darwin'", "onnxruntime>=1.18", "numpy>=1.26"]
 
 [project.scripts]
 jarvis = "jarvis.cli:main"
@@ -20,8 +30,14 @@ jarvis = "jarvis.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["jarvis"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "jarvis/apps"]
+
+[tool.uv]
+environments = ["sys_platform == 'darwin'"]  # Falak is macOS only (pyobjc, MLX, the desk helper); openwakeword has no Linux wheels for 3.13

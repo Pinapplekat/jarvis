@@ -206,6 +206,35 @@ def bench_kokoro(args: argparse.Namespace, scratch: Path) -> dict:
     return out
 
 
+def bench_kokoro_mlx(args: argparse.Namespace, scratch: Path) -> dict:
+    """Kokoro through mlx-audio on the GPU, to compare with the torch version."""
+    import numpy as np
+    from misaki import espeak
+    from mlx_audio.tts.utils import load
+
+    def no_espeak(*_a, **_k):  # see bench_kokoro
+        raise RuntimeError("espeak unavailable")
+
+    espeak.EspeakFallback = no_espeak
+    download("mlx-community/Kokoro-82M-bf16", scratch, ["*.json", "*.safetensors", "voices/*"])
+    os.environ["HF_HUB_CACHE"] = str(scratch / "hf")  # mlx-audio picks the model class from the repo name
+    meter = Meter()
+    t = time.perf_counter()
+    model = load("mlx-community/Kokoro-82M-bf16")
+    out = {"device": "mlx", "load_s": round(time.perf_counter() - t, 2), "voice": "bm_george"}
+
+    def say() -> tuple[float, float]:
+        t = time.perf_counter()
+        audio = np.concatenate([np.array(r.audio) for r in model.generate(SENTENCE, voice="bm_george", lang_code="b")])
+        return time.perf_counter() - t, len(audio) / 24000
+
+    first, seconds = say()
+    out["first_s"], out["audio_s"] = round(first, 3), round(seconds, 2)
+    out["warm"] = stats([say()[0] for _ in range(args.runs)])
+    out["after_runs"] = meter.report()
+    return out
+
+
 def bench_stt(args: argparse.Namespace, scratch: Path) -> dict:
     """One engine and size per process, so the memory is that model's own. The download is removed afterwards."""
     import numpy as np
@@ -275,7 +304,7 @@ def bench_brain(args: argparse.Namespace, scratch: Path) -> dict:
     return out
 
 
-BENCHES = {"omnivoice": bench_omnivoice, "kokoro": bench_kokoro, "stt": bench_stt, "brain": bench_brain}
+BENCHES = {"omnivoice": bench_omnivoice, "kokoro": bench_kokoro, "kokoro-mlx": bench_kokoro_mlx, "stt": bench_stt, "brain": bench_brain}
 
 
 # ---- running them all ------------------------------------------------------------------------------------------
@@ -286,6 +315,7 @@ def run_all(args: argparse.Namespace, scratch: Path) -> dict:
         ("omnivoice", py, ["--device", "mps"]),
         ("kokoro", py, ["--device", "cpu"]),
         ("kokoro", py, ["--device", "mps"]),
+        ("kokoro-mlx", py, []),
         *[("stt", py, ["--engine", e, "--size", z, "--purge"])
           for e in ("faster-whisper", "mlx-whisper") for z in ("base.en", "small.en")],
         ("brain", sys.executable, ["--models", "sonnet", "haiku"]),

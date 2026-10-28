@@ -53,12 +53,12 @@ def test_contract_imports_nothing_else_from_jarvis():
 
 
 def test_core_independent_of_node_apps_channels_host_legacy():
-    banned = ["jarvis.node", "jarvis.apps", "jarvis.channels", "jarvis.host", "legacy"]
+    banned = ["jarvis.node", "jarvis.apps", "jarvis.channels", "jarvis.host", "jarvis.speech", "legacy"]
     assert hits("jarvis.core", banned) == []
 
 
 def test_channels_import_only_the_channel_interface_contract_and_protocol():
-    allowed = ["jarvis.core.channel", "jarvis.contract", "jarvis.protocol", "jarvis.channels"]
+    allowed = ["jarvis.core.channel", "jarvis.contract", "jarvis.protocol", "jarvis.speech", "jarvis.channels"]
     assert hits("jarvis.channels", ["jarvis"], allowed=allowed) == []
 
 
@@ -69,6 +69,16 @@ def test_only_the_discord_adapter_imports_discord():
 
 def test_node_never_imports_core():
     assert hits("jarvis.node", ["jarvis.core"]) == []
+
+
+def test_speech_imports_nothing_else_from_jarvis():
+    assert hits("jarvis.speech", ["jarvis"], allowed=["jarvis.speech"]) == []
+
+
+def test_only_channels_and_the_host_import_speech():
+    importers = sorted({n for p, n in modules() if not within(n, "jarvis.speech")
+                        and any(within(i, "jarvis.speech") for i in imports(p, n)) and ".tests." not in n})
+    assert all(within(n, "jarvis.channels") or n == "jarvis.host" for n in importers), importers
 
 
 def test_protocol_imports_nothing_else_from_jarvis():
