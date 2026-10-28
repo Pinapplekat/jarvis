@@ -190,3 +190,31 @@ def test_a_token_still_wins_when_there_is_one(real_apps):
     with pytest.raises(RuntimeError, match="token path"):
         job(app, "sync")
     assert browser.requests == []
+
+
+def test_a_module_date_he_already_imported_isnt_listed_twice(real_apps):
+    # ECON Module 5 showed up twice: "ECON 100" from his import, "ECON100 1F2F 35268" from the module title.
+    due = datetime(2026, 10, 30, 23, 59, tzinfo=LA)
+    real_apps.conn.execute(
+        "INSERT INTO school_deadlines (key, course, title, due, status, trackable, kind, source, updated_at) "
+        "VALUES ('manual:econ-module-5', 'ECON 100', 'Module 5 (Ch. 9 & 10): Smartwork', "
+        "'2026-11-20T23:59:00-08:00', 'unknown', 0, 'due', 'manual', '2026-10-28T00:00:00+00:00')")
+    modules = [{"id": 12, "name": "Module 5: Money and banking (DUE NOV 20)"}]
+    app = setup(real_apps, FakeBrowser(routes(due, modules)))
+    job(app, "sync")
+    r = rows(real_apps)
+    assert "module:7:12" not in r and "manual:econ-module-5" in r
+
+
+def test_a_browser_sync_keeps_the_school_calendars_events_from_the_feed(real_apps, monkeypatch):
+    # Holidays, no-class days and tuition deadlines are only in the feed: 43 of them vanished on the first browser sync.
+    due = NOW + timedelta(days=2)
+    ics = ("BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:event-calendar-event-205590\nDTSTART;VALUE=DATE:20261222\n"
+           "SUMMARY:Tuition deadline - winter quarter\nEND:VEVENT\nEND:VCALENDAR\n")
+    app = setup(real_apps, FakeBrowser(routes(due)), {"CANVAS_ICS_URL": FEED_URL})
+    monkeypatch.setattr(app.module.canvas, "fetch_feed", lambda url, opener=None: ics.encode())
+    monkeypatch.setattr(app.module, "_opener", lambda: None)  # (another test leaves its own in place)
+    job(app, "sync")
+    r = rows(real_apps)
+    events = [v for v in r.values() if v["kind"] == "event"]
+    assert [e["title"] for e in events] == ["Tuition deadline - winter quarter"] and "canvas:1" in r

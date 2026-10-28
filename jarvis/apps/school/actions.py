@@ -59,8 +59,8 @@ def fetch(ctx: AppContext) -> Fetched:
     why, sign_in, no_node = "", False, False
     try:
         client = browse.BrowserClient(ctx, base)
-        return Fetched(client.fetch_deadlines(ctx.tz, ctx.now().date()), client.fetch_notices(ctx.now().date()),
-                       source="browser")
+        found = client.fetch_deadlines(ctx.tz, ctx.now().date())
+        return Fetched(found + _feed_events(ctx, feed), client.fetch_notices(ctx.now().date()), source="browser")
     except browse.SignedOut:
         why, sign_in = "Canvas wants a sign-in", True
     except AppUnavailable as e:  # not a sign-in problem: the host starts before the Mac connects, and links drop
@@ -74,9 +74,40 @@ def fetch(ctx: AppContext) -> Fetched:
                    "Calendar Feed link) to the .env file.") from None
 
 
+def _feed_events(ctx: AppContext, feed: str | None) -> list[Deadline]:
+    """The school calendar's events (holidays, no-class days, withdrawal and tuition deadlines) are only in the feed,
+    not in Canvas's assignment lists, so a browser sync keeps them from it. A feed that fails costs only these."""
+    if not feed:
+        return []
+    try:
+        return [d for d in canvas.from_feed(canvas.fetch_feed(feed, _opener()), ctx.tz) if d.kind == "event"]
+    except Exception as e:
+        ctx.log.info("the calendar feed's events weren't read: %s", e)
+        return []
+
+
+def _course_key(course: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", course.lower())
+
+
+def _imported(ctx: AppContext) -> list[tuple[str, datetime]]:
+    rows = ctx.db.execute("SELECT course, due FROM school_deadlines WHERE source IN ('weekly', 'manual')")
+    return [(_course_key(r["course"]), datetime.fromisoformat(r["due"])) for r in rows]
+
+
+def _covered(d: Deadline, imported: list[tuple[str, datetime]]) -> bool:
+    """A date read from a module title that Elijah already has as an imported deadline: same course ("ECON 100" and
+    "ECON100 1F2F 35268") and the same moment. ECON Module 5 showed up twice."""
+    course = _course_key(d.course)
+    return any((course.startswith(c) or c.startswith(course)) and abs((d.due - due).total_seconds()) <= 3600
+               for c, due in imported if c)
+
+
 def store(ctx: AppContext, found: list[Deadline]) -> tuple[int, int]:
     """Make Canvas's rows match what was just fetched, keeping what Elijah marked done. Returns (count, new)."""
     now = _utc(ctx.now())
+    imported = _imported(ctx)
+    found = [d for d in found if not (d.key.startswith("module:") and _covered(d, imported))]
     known = {r["key"] for r in ctx.db.execute("SELECT key FROM school_deadlines")}
     for d in found:  # a row from /weekly keeps its own course, title and date; Canvas still updates its status
         ctx.db.execute(
