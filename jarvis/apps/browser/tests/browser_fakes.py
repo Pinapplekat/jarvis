@@ -89,7 +89,10 @@ class FakeSession:
         if (why := check(url)):
             raise PageFailed(why)
         self.driver.gets.append(url)
-        return self.driver.json.get(url, (404, None, None, url))
+        found = self.driver.json.get(url)
+        if found is None and self.driver.json_fallback:
+            found = self.driver.json_fallback(url)
+        return found or (404, None, None, url)
 
     def close(self):
         self.open = False
@@ -99,6 +102,7 @@ class FakeDriver:
     def __init__(self, sites=None):
         self.sites = dict(sites or {})
         self.json = {}  # url -> (status, data, next, final url)
+        self.json_fallback = None  # url -> the same, for addresses the test didn't list
         self.launches, self.requests, self.ran, self.gets = [], [], [], []
         self.contexts = 0
         self.sessions = []
