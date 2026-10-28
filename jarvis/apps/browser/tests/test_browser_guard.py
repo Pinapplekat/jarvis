@@ -36,7 +36,7 @@ def test_allowed_here_and_in_web(url):
 
 def test_the_two_copies_have_the_same_rules():
     assert guard.BLOCKED_SITES == web_page.BLOCKED_SITES
-    for url in REFUSED + ALLOWED:
+    for url in REFUSED + ALLOWED + NOT_ADDRESSES:
         assert guard.blocked_site(url, "extra.test") == web_page.blocked_site(url, "extra.test"), url
         assert guard.check_url(url, resolver()) == web_page.check_url(url, resolver()), url
     assert guard.blocked_site("https://shop.extra.test/", "extra.test")

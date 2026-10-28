@@ -46,7 +46,11 @@ def check_url(url: str, resolve=socket.getaddrinfo) -> str | None:
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         return "only http and https links can be opened"
     try:
-        infos = resolve(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+        port = parsed.port
+    except ValueError:  # "https://javascript:alert(1)" is not an address at all
+        return "only http and https links can be opened"
+    try:
+        infos = resolve(parsed.hostname, port or (443 if parsed.scheme == "https" else 80))
     except (socket.gaierror, UnicodeError):
         return "that site doesn't exist (its name didn't resolve)"
     for info in infos:
