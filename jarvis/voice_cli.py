@@ -60,4 +60,12 @@ def setup(settings: Settings) -> int:
             return 1
         print("downloading the Kokoro voice (about 330 MB)...")
         download(KOKORO_REPO, models / KOKORO_FOLDER, KOKORO_FILES)
+    vad = models / "silero_vad.onnx"
+    if not vad.exists():
+        import urllib.request
+
+        from jarvis.speech.vad import SILERO_URL
+
+        print("downloading the speech detector for calls (2 MB)...")
+        urllib.request.urlretrieve(SILERO_URL, vad)
     return status(settings)

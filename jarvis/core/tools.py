@@ -205,6 +205,21 @@ def _send_image_tool(turn: TurnState) -> Tool:
     return Tool(f"{CORE}{SEP}send_image", desc, schema, call)
 
 
+def _call_tool(reg: Registry, turn: TurnState) -> Tool:
+    async def call(args: dict) -> ToolReply:
+        turn.tools_used.append(f"{CORE}{SEP}call")
+        link = reg.call_link()
+        if link is None:
+            return ToolReply("Calls aren't set up yet.", is_error=True)
+        outbox.add(reg.conn, f"Join me here: {link}", SEND_TEXT_SOURCE)  # bots can't ring, so this is the ring
+        reg.outbox_nudge()
+        return ToolReply("Sent him a link to the call in Discord.")
+
+    desc = ("Call Elijah: send him a link in Discord that opens the voice channel, where you will talk with him. Use it "
+            "when he says \"call me\".")
+    return Tool(f"{CORE}{SEP}call", desc, {"type": "object", "additionalProperties": False, "properties": {}}, call)
+
+
 def shared_images(turn: TurnState) -> tuple[Image, ...]:
     return tuple(turn.images[i] for i in turn.shared)
 
@@ -214,6 +229,8 @@ def build_tools(reg: Registry, turn: TurnState) -> list[Tool]:
     tools += [_answer_ask_tool(reg, turn), _undo_tool(reg, turn)]
     if turn.origin.channel in turn.own_channels:  # a chat reply to Elijah; job turns deliver text only
         tools.append(_send_image_tool(turn))
+    if reg.call_link() is not None:
+        tools.append(_call_tool(reg, turn))
     if turn.spoken:
         tools.append(_send_text_tool(reg, turn))
     if any(a.kind == "image" for a in turn.attachments):

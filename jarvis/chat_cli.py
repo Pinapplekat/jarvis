@@ -16,7 +16,8 @@ from jarvis.core.brain import Brain
 from jarvis.core.brain_sdk import SdkBrain
 from jarvis.core.channel import Incoming
 from jarvis.core.settings import Settings
-from jarvis.host import Host, build_channels, voice_channel
+from jarvis.host import Host, build_channels
+from jarvis.voice_wiring import call_channel, voice_channel
 
 
 FIXTURE_APPS = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "apps"
@@ -106,6 +107,10 @@ def serve(settings: Settings, with_fixtures: bool = False, with_node: bool = Fal
         print("No channel is enabled, so there is nothing to serve. See docs/briefs/M4.md for the Discord setup.",
               file=sys.stderr)
         return 1
+    if (call := call_channel(host)) is not None:
+        host.add_channel(call)
+        if "desk" in host.brains:
+            host.brains["discord_call"] = host.brains["desk"]
     child = node_cli.start_child(settings) if with_node else None
     try:
         asyncio.run(host.run(handle_signals=True))

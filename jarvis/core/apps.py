@@ -52,6 +52,7 @@ class Registry:
         self.apps = apps
         self.nodes = None  # the NodeLink that reaches devices; set by jarvis serve (see core/dispatch.py)
         self.outbox_nudge = lambda: None  # wakes the outbox sender; the host replaces it
+        self.call_link = lambda: None  # the link that opens the Discord voice channel, or None when calls aren't set up
 
     def actions(self) -> list[ToolSpec]:
         return [

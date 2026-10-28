@@ -26,8 +26,9 @@ from jarvis.core.tools import SEND_TEXT_SOURCE
 
 log = logging.getLogger("jarvis.host")
 
-CHANNEL_MODULES = {"discord": "jarvis.channels.discord", "desk": "jarvis.channels.desk"}  # sections settings.toml accepts
-WIRED_BY_SERVE = {"desk"}  # channels that need the node hub, so `serve` builds them (see voice_channel)
+CHANNEL_MODULES = {"discord": "jarvis.channels.discord", "desk": "jarvis.channels.desk",
+                   "discord_call": "jarvis.channels.discord_call"}  # sections settings.toml accepts
+WIRED_BY_SERVE = {"desk", "discord_call"}  # channels `serve` builds itself (see voice_channel and call_channel)
 TERMINAL = "cli"
 SWEEP_EVERY = 30  # seconds
 MAX_SPOKEN_FIRST = 400  # characters; anything longer that Falak says first goes to Discord
@@ -79,29 +80,6 @@ def build_channels(settings: Settings, host: Host) -> list[Channel]:
         except ChannelUnavailable as e:
             log.warning("%s: skipped, %s", name.capitalize(), e)
     return channels
-
-
-def voice_channel(host: "Host", hub) -> Channel | None:
-    """The desk channel, when the voice and desk apps are on and `[channels.desk]` isn't disabled: it takes the audio
-    frames the node hub receives and sends its speech back through the hub."""
-    from jarvis.channels import desk
-    from jarvis.core import share
-    from jarvis.speech import VoiceProfile
-
-    reg = host.reg
-    if "voice" not in reg.apps or "desk" not in reg.apps or reg.settings.channels.get("desk", {}).get("enabled") is False:
-        return None
-    voice = reg.apps["voice"].ctx.settings
-
-    def profile() -> VoiceProfile:
-        return VoiceProfile.from_dict(share.call(reg, "desk", "voice", "current_voice", {}).data["profile"])
-
-    services = desk.make_services(data_dir=reg.settings.data_dir, engine=lambda: voice["engine"], profile=profile,
-                                  idle_minutes=voice["idle_minutes"])
-    host.voice_services = services
-    channel = desk.DeskChannel(services=services, send_frame=hub.send_voice)
-    hub.voice_sink = channel.on_frame
-    return channel
 
 
 @dataclass(frozen=True)
@@ -275,6 +253,8 @@ class Host:
             await channel.start(self.deliver)
         except asyncio.CancelledError:
             raise
+        except ChannelUnavailable as e:
+            log.warning("%s: skipped, %s", channel.name, e)
         except Exception:
             log.exception("channel %s stopped with an error", channel.name)
 
