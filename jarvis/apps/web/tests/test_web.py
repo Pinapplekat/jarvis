@@ -204,3 +204,42 @@ def test_search_runs_in_a_plain_turn_and_asks_after_outside_content(real_apps, m
     out = actions.run(real_apps, "web__search", {"query": "what the page said"}, steered)
     assert isinstance(out, actions.Asked) and out.question == 'Search the web for "what the page said"?'
 
+
+
+@pytest.mark.parametrize("url,view", [
+    ("https://docs.google.com/document/d/1wshgTUtUZW-WS9ulWj8pSLszh-zLUGXMQ3vaI1Gyg-I/edit?usp=drive_web",
+     "https://docs.google.com/document/d/1wshgTUtUZW-WS9ulWj8pSLszh-zLUGXMQ3vaI1Gyg-I/export?format=txt"),
+    ("https://docs.google.com/document/u/1/d/1wshgTUtUZW-WS9ulWj8pSLszh-zLUGXMQ3vaI1Gyg-I/",
+     "https://docs.google.com/document/d/1wshgTUtUZW-WS9ulWj8pSLszh-zLUGXMQ3vaI1Gyg-I/export?format=txt"),
+    ("https://drive.google.com/drive/folders/1Iy8JFN0NIv00V7oWcTx29FqB_E2bVT-F?usp=sharing",
+     "https://drive.google.com/embeddedfolderview?id=1Iy8JFN0NIv00V7oWcTx29FqB_E2bVT-F"),
+    ("https://youneedawiki.com/app/page/1xsCaRGw3OgSSIGQ7KDwdHzBcq9sr5PGoAHzgBDTsqo8?p=1FiyBUnjpLuI1mrb6FwLzF9Wo_GPl_GIC",
+     "https://docs.google.com/document/d/1xsCaRGw3OgSSIGQ7KDwdHzBcq9sr5PGoAHzgBDTsqo8/export?format=txt"),
+    ("https://example.com/document/d/1wshgTUtUZW-WS9ulWj8pSLszh", None),
+    ("https://docs.google.com/spreadsheets/d/1wshgTUtUZW-WS9ulWj8pSLszh-zLUGXMQ3vaI1Gyg-I/edit", None),
+])
+def test_google_docs_folders_and_wiki_pages_are_read_through_googles_plain_view(url, view):
+    from jarvis.apps.web import plain
+
+    assert plain.plain_view(url) == view
+
+
+def test_a_wiki_page_is_read_as_its_google_doc_and_offers_the_wiki_folder(real_apps, monkeypatch):
+    monkeypatch.setitem(TABLE, "docs.google.com", ["142.250.1.1"])
+    app = real_apps.apps["web"]
+    asked = []
+    monkeypatch.setattr(app.module, "_check", lambda ctx, u: page.blocked_site(u) or page.check_url(u, resolver(TABLE)))
+
+    def opener(ctx):
+        def open_(req, timeout=None):
+            asked.append(req.full_url)
+            return Resp("﻿Week 5\nWatch The Matrix in class.".encode(), "text/plain; charset=utf-8", req.full_url)
+        return open_
+
+    monkeypatch.setattr(app.module, "_page_opener", opener)
+    wiki = "https://youneedawiki.com/app/page/1xsCaRGw3OgSSIGQ7KDwdHzBcq9sr5PGoAHzgBDTsqo8?p=1FiyBUnjpLuI1mrb6FwLzF9Wo_GPl_GIC"
+    out = actions.run(real_apps, "web__read_page", {"url": wiki}, CLI)
+    assert asked == ["https://docs.google.com/document/d/1xsCaRGw3OgSSIGQ7KDwdHzBcq9sr5PGoAHzgBDTsqo8/export?format=txt"]
+    text = out.result.text
+    assert wiki in text and "Watch The Matrix in class." in text and "needs a browser" not in text
+    assert "https://drive.google.com/drive/folders/1FiyBUnjpLuI1mrb6FwLzF9Wo_GPl_GIC" in text

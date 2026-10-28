@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, time, timezone
 
-from jarvis.apps.web import page
+from jarvis.apps.web import page, plain
 from jarvis.contract.api import ActionError, AppContext, Result
 
 BRAVE = "https://api.search.brave.com/res/v1/web/search"
@@ -120,10 +120,17 @@ def read_page(ctx: AppContext, url: str) -> Result:
     url = url.strip()
     if "://" not in url:
         url = "https://" + url
+    view = plain.plain_view(url)  # a Google Doc or Drive folder: Google's plain view of it, which needs no browser
     try:
-        got = page.fetch(url, lambda u: _check(ctx, u), lambda req: _page_opener(ctx)(req, timeout=page.TIMEOUT))
+        got = page.fetch(view or url, lambda u: _check(ctx, u), lambda req: _page_opener(ctx)(req, timeout=page.TIMEOUT))
     except page.Refused as e:
+        if view and "answered 4" in str(e):
+            raise ActionError(f"I can't read that page: it isn't shared publicly, or it isn't a Google Doc or "
+                              f"folder ({e}).") from None
         raise ActionError(f"I can't read that page: {e}.") from None
+    if view:
+        got.url = url  # say what he linked, not Google's export address
+        got.links = got.links + plain.extra_links(url)
     if got.thin:
         return Result(f"{got.url}: the page needs a browser to show its text, and I read pages without one. "
                       "All I got was:\n" + (got.text or "(nothing)"), data={"url": got.url, "thin": True})
