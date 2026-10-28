@@ -5,7 +5,7 @@ import pytest
 from fake_channel import FakeChannel
 from scripted_brain import ScriptedBrain
 
-from jarvis.core import loop
+from jarvis.core import actions, loop
 from jarvis.core.actions import Origin
 from jarvis.contract.api import Attachment
 from jarvis.core.channel import Incoming
@@ -330,3 +330,21 @@ def test_job_turns_have_no_send_image_tool(echo):
     asyncio.run(loop.handle_job(echo, Peek(), "morning", Origin("job:checkins.morning")))
     asyncio.run(Host(echo, Peek(), [FakeChannel()]).turn(Incoming("discord", "hi")))
     assert "falak__send_image" not in names[0] and "falak__send_image" in names[1]
+
+
+def test_a_read_approved_by_button_goes_back_to_falak_to_finish_the_answer(echo):
+    # The CMST discussions page was read after Elijah pressed Yes, and nothing ever answered him (2026-10-28).
+    host = Host(echo, ScriptedBrain(), [FakeChannel()])
+    steered = actions.Origin("discord", outside_content=True)
+    asked = actions.run(echo, "echo__fetch", {"url": "https://canvas.test/discussions"}, steered)
+    assert isinstance(asked, actions.Asked)
+
+    async def go():
+        return await host.answer(asked.ask_id, True)
+
+    result = asyncio.run(go())
+    assert result.ok and result.message == "Done. Reading it now."
+    incoming = host._queue.get_nowait()
+    assert incoming.channel == "discord" and incoming.untrusted  # a page's words steer nothing
+    assert incoming.text.startswith("[I pressed Yes on: Open https://canvas.test/discussions?]")
+    assert "Discussion: Week 5 prompt." in incoming.text and "(cut short)" in incoming.text

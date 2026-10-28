@@ -25,6 +25,7 @@ SETTINGS = {"owner_id": {"type": "integer", "minimum": 1}}  # `enabled` is handl
 MESSAGE_LIMIT = 2000
 IMAGE_LIMIT = 10 * 1024 * 1024
 IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+OUTCOME_MAX = 300  # characters of an action's result shown under the ask it answered
 ASK_BUTTONS_FOR = 24 * 3600  # asks expire after a day
 
 
@@ -115,6 +116,8 @@ def with_notes(text: str, notes: list[str]) -> str:
 
 def edited_text(original: str, outcome: str) -> str:
     """The message after a button press: the original with the outcome under it, still within Discord's limit."""
+    if len(outcome) > OUTCOME_MAX:  # a page's text can be thousands of characters; Discord takes 2000 in all
+        outcome = outcome[:OUTCOME_MAX].rstrip() + "…"
     tail = f"\n\n**{outcome}**"
     return original[: MESSAGE_LIMIT - len(tail)].rstrip() + tail
 

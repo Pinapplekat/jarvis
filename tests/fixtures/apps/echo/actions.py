@@ -49,3 +49,7 @@ def boom(ctx: AppContext) -> Result:
 def project(ctx: AppContext, plan: str) -> Result:
     WIPED.append(f"project:{plan}")
     return Result("started")
+
+
+def fetch(ctx: AppContext, url: str) -> Result:
+    return Result(f"{url}\n" + "Discussion: Week 5 prompt. " * 300)

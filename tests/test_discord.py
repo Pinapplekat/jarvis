@@ -65,6 +65,7 @@ def test_attachments_are_sorted():
 def test_edited_text_fits_discord():
     assert dc.edited_text("Send it?", "Sent.") == "Send it?\n\n**Sent.**"
     assert len(dc.edited_text("x" * 2000, "Okay, I won't.")) <= 2000
+    assert len(dc.edited_text("Open the page?", "page text " * 400)) <= 2000  # a long result is clipped too
 
 
 def test_press_is_owner_only():

@@ -85,3 +85,17 @@ required = ["plan"]
 additionalProperties = false
 [actions.input.properties.plan]
 type = "string"
+
+[[actions]]
+name = "fetch"
+description = "Read a page (its address leaves the device)."
+effect = "read"
+untrusted_output = true
+sends_data = true
+confirm = "Open {url}?"
+[actions.input]
+type = "object"
+required = ["url"]
+additionalProperties = false
+[actions.input.properties.url]
+type = "string"

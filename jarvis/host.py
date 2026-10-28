@@ -82,6 +82,15 @@ def build_channels(settings: Settings, host: Host) -> list[Channel]:
     return channels
 
 
+CONTINUE_MAX = 6000  # characters of a read's result handed back to Falak after he says yes
+
+
+def _continue_text(question: str, result: str) -> str:
+    clipped = result if len(result) <= CONTINUE_MAX else result[:CONTINUE_MAX] + "\n(cut short)"
+    return (f"[I pressed Yes on: {question}]\n\nWhat it returned:\n{clipped}\n\n"
+            "[Now finish what I asked with it.]")
+
+
 @dataclass(frozen=True)
 class _Stop:
     """Queue marker: no more turns."""
@@ -189,12 +198,20 @@ class Host:
         self.notify(reply.text, source, not_before)
         return "replied"
 
-    async def answer(self, ask_id: int, yes: bool) -> AskResult:
-        """A Yes/No button was pressed: answer the ask exactly as the loop's answer_ask would."""
+    async def answer(self, ask_id: int, yes: bool, channel: str = "discord") -> AskResult:
+        """A Yes/No button was pressed: answer the ask exactly as the loop's answer_ask would. When what ran was a read
+        (a page, a search), its result is what he was waiting for, so it goes back to Falak as a turn to finish his
+        request; the button only shows that it ran. (The CMST discussions were read and then never answered.)"""
+        row = self.reg.conn.execute("SELECT tool, question FROM asks WHERE id=?", (ask_id,)).fetchone()
         async with self._turn_lock:
             out = await asyncio.to_thread(actions.answer_ask, self.reg, ask_id, yes)
         if isinstance(out, actions.Ran):
             actions.release(out)
+            found = self.reg.find(row["tool"]) if row else None
+            if found and found[1].effect == "read" and channel in self.channels:
+                await self.deliver(Incoming(channel, _continue_text(row["question"], out.result.text),
+                                            untrusted=found[1].untrusted_output))
+                return AskResult(True, "Done. Reading it now.")
             return AskResult(True, out.result.text)
         if isinstance(out, actions.Declined):
             return AskResult(True, "Okay, I won't.")
