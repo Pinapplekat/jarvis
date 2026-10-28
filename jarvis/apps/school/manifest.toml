@@ -3,6 +3,7 @@ name = "school"
 description = "Canvas deadlines: syncs your courses, answers what's due, and nudges before things are due."
 runs_on = "host"
 secrets = ["CANVAS_TOKEN", "CANVAS_ICS_URL"]
+uses = ["browser"]
 context = "context"
 
 [settings.canvas_url]
@@ -41,6 +42,21 @@ description = "ISO 8601 with offset; included."
 [actions.input.properties.end]
 type = "string"
 description = "ISO 8601 with offset; excluded."
+
+[[actions]]
+name = "date_notices"
+description = "For other apps: announcements that look like they move a date, first seen after `since`. They never change a deadline by themselves."
+effect = "read"
+share = true
+tool = false
+untrusted_output = true
+[actions.input]
+type = "object"
+required = ["since"]
+additionalProperties = false
+[actions.input.properties.since]
+type = "string"
+description = "ISO 8601 with offset; announcements first seen after this."
 
 [[actions]]
 name = "mark_done"
@@ -90,7 +106,7 @@ type = "boolean"
 
 [[actions]]
 name = "sync_now"
-description = "Fetch the latest deadlines from Canvas right now."
+description = "Fetch the latest deadlines from Canvas right now (through the signed-in browser, else the calendar feed)."
 effect = "local"
 [actions.input]
 type = "object"
@@ -104,7 +120,7 @@ kind = "sync"
 every = "2h"
 needs = ["network"]
 quiet = "ignore"
-timeout_s = 120
+timeout_s = 240
 
 [[jobs]]
 name = "nudge"

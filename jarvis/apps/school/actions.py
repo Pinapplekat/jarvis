@@ -1,10 +1,11 @@
 import re
 import urllib.request
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 
-from jarvis.apps.school import canvas
+from jarvis.apps.school import browse, canvas
 from jarvis.apps.school.canvas import Deadline
-from jarvis.contract.api import ActionError, AppContext, JobResult, JobRun, Result
+from jarvis.contract.api import ActionError, AppContext, AppUnavailable, JobResult, JobRun, Result
 
 CONTEXT_LINES = 6
 NUDGE_KEEP = timedelta(days=60)
@@ -29,15 +30,47 @@ def load_deadlines(ctx: AppContext) -> list[Deadline]:
     return canvas.merge(primary, hand)
 
 
-def fetch(ctx: AppContext) -> list[Deadline] | None:
-    """Deadlines from the Canvas API, else from the calendar feed. None if neither is set up."""
+SIGN_IN_AGAIN = "Canvas wants you to sign in again; say 'sign in to Canvas' at your Mac."
+SIGNED_OUT = "canvas_signed_out"  # in school_state: set once Elijah has been told, cleared when Canvas works again
+NOTICE_KEEP = timedelta(days=60)
+
+
+class NotSetUp(ActionError):
+    """No token, no browser login and no calendar feed: nothing to sync from."""
+
+
+@dataclass
+class Fetched:
+    deadlines: list[Deadline]
+    notices: list[browse.Notice] = field(default_factory=list)
+    source: str = "feed"  # token | browser | feed
+    why_not_browser: str = ""  # set when the browser was tried and the feed was used instead
+    asked_to_sign_in: bool = False  # the browser said unavailable or signed out
+
+
+def fetch(ctx: AppContext) -> Fetched:
+    """Deadlines from the Canvas API (a token, else Falak's browser), else from the calendar feed."""
     token, feed = ctx.secrets.get("CANVAS_TOKEN"), ctx.secrets.get("CANVAS_ICS_URL")
+    base = str(ctx.settings["canvas_url"])
     if token:
-        client = canvas.CanvasClient(str(ctx.settings["canvas_url"]), token, _opener())
-        return client.fetch_deadlines(ctx.tz, ctx.now().date())
+        return Fetched(canvas.CanvasClient(base, token, _opener()).fetch_deadlines(ctx.tz, ctx.now().date()),
+                       source="token")
+    why, sign_in = "", False
+    try:
+        client = browse.BrowserClient(ctx, base)
+        return Fetched(client.fetch_deadlines(ctx.tz, ctx.now().date()), client.fetch_notices(ctx.now().date()),
+                       source="browser")
+    except browse.SignedOut:
+        why, sign_in = "Canvas wants a sign-in", True
+    except AppUnavailable as e:
+        why, sign_in = str(e), True
+    except ActionError as e:  # the browser answered but couldn't do it (not installed, the site was down)
+        why = str(e)
     if feed:
-        return canvas.from_feed(canvas.fetch_feed(feed, _opener()), ctx.tz)
-    return None
+        return Fetched(canvas.from_feed(canvas.fetch_feed(feed, _opener()), ctx.tz), source="feed",
+                       why_not_browser=why, asked_to_sign_in=sign_in)
+    raise NotSetUp(f"Canvas isn't set up: {SIGN_IN_AGAIN[:-1] if sign_in else why} Or add CANVAS_ICS_URL (the "
+                   "Calendar Feed link) to the .env file.") from None
 
 
 def store(ctx: AppContext, found: list[Deadline]) -> tuple[int, int]:
@@ -60,20 +93,67 @@ def store(ctx: AppContext, found: list[Deadline]) -> tuple[int, int]:
     return len(found), sum(1 for k in keep if k not in known)
 
 
-def run_sync(ctx: AppContext) -> str:
-    found = fetch(ctx)
-    if found is None:
-        raise ActionError("Canvas isn't set up: add CANVAS_ICS_URL (the Calendar Feed link) or CANVAS_TOKEN to the "
-                          ".env file.")
-    count, new = store(ctx, found)
+def store_notices(ctx: AppContext, notices: list[browse.Notice]) -> int:
+    """Remember announcements that look like they move a date. Returns how many are new."""
+    now = ctx.now()
+    new = 0
+    for n in notices:
+        new += ctx.db.execute("INSERT OR IGNORE INTO school_notices (id, course, title, body, posted_at, first_seen_at) "
+                              "VALUES (?,?,?,?,?,?)", (n.id, n.course, n.title, n.body, _utc(n.posted_at),
+                                                       _utc(now))).rowcount
+    ctx.db.execute("DELETE FROM school_notices WHERE first_seen_at < ?", (_utc(now - NOTICE_KEEP),))
+    return new
+
+
+def _state(ctx: AppContext, key: str, value: str | None = None) -> str | None:
+    if value is None:
+        row = ctx.db.execute("SELECT value FROM school_state WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else None
+    ctx.db.execute("INSERT INTO school_state (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=?",
+                   (key, value, value))
+    return value
+
+
+def run_sync(ctx: AppContext) -> tuple[str, str | None, str]:
+    """Sync once. Returns (what happened, a message for Elijah or None, why the browser wasn't used). The sign-in
+    message goes out once, and not again until Canvas has worked."""
+    got = fetch(ctx)
+    count, new = store(ctx, got.deadlines)
+    summary = f"{count} deadlines, {new} new"
+    message = None
+    if got.source == "browser":
+        ctx.db.execute("DELETE FROM school_state WHERE key=?", (SIGNED_OUT,))
+        if (fresh := store_notices(ctx, got.notices)):
+            summary += f", {fresh} announcement{'s' if fresh != 1 else ''} about dates"
+    elif got.source == "feed" and got.asked_to_sign_in and _state(ctx, SIGNED_OUT) is None:
+        _state(ctx, SIGNED_OUT, _utc(ctx.now()))
+        message = SIGN_IN_AGAIN
+    if got.why_not_browser:
+        ctx.log.info("Canvas came from the calendar feed: %s", got.why_not_browser)
     ctx.wake("nudge")
-    return f"{count} deadlines, {new} new"
+    return summary, message, got.why_not_browser
 
 
 def sync(ctx: AppContext, run: JobRun) -> JobResult:
-    if not (ctx.secrets.get("CANVAS_TOKEN") or ctx.secrets.get("CANVAS_ICS_URL")):
-        return JobResult("not set up (no CANVAS_ICS_URL or CANVAS_TOKEN)")  # nothing to fail at yet; not worth a message
-    return JobResult(run_sync(ctx))
+    try:
+        summary, message, _ = run_sync(ctx)
+    except NotSetUp:
+        return JobResult("not set up (no sign-in, CANVAS_ICS_URL or CANVAS_TOKEN)")  # not worth a message
+    return JobResult(summary, (message,) if message else ())
+
+
+def date_notices(ctx: AppContext, since: str) -> Result:
+    """For the check-ins: announcements that look like they move a date and were first seen after `since`."""
+    try:
+        cutoff = datetime.fromisoformat(since)
+    except ValueError:
+        raise ActionError("since needs to look like 2026-10-26T07:00:00-07:00.") from None
+    if cutoff.tzinfo is None:
+        raise ActionError("since needs a UTC offset.")
+    rows = ctx.db.execute("SELECT * FROM school_notices WHERE first_seen_at > ? ORDER BY posted_at", (_utc(cutoff),))
+    found = [{"course": r["course"], "title": r["title"], "body": r["body"],
+              "posted_at": datetime.fromisoformat(r["posted_at"]).astimezone(ctx.tz).isoformat()} for r in rows]
+    return Result(f"{len(found)} announcements", data={"notices": found})
 
 
 IMPORT_MAX = 200
@@ -133,7 +213,12 @@ def undo_import_deadlines(ctx: AppContext, undo: dict) -> Result:
 
 
 def sync_now(ctx: AppContext) -> Result:
-    return Result(f"Synced Canvas: {run_sync(ctx)}.")
+    try:
+        summary, message, why = run_sync(ctx)
+    except NotSetUp as e:
+        raise ActionError(str(e)) from None
+    return Result(f"Synced Canvas: {summary}." + (f" (From the calendar feed: {why}.)" if why else "")
+                  + (f" {message}" if message else ""))
 
 
 def nudge(ctx: AppContext, run: JobRun) -> JobResult:

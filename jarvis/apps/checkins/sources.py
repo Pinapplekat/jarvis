@@ -55,3 +55,10 @@ def latest_journal(ctx: AppContext) -> str | None:
         return None
     loops = data["open_loops"]
     return f"{data['day']}:\n{data['entry'][:900]}" + (f"\nOpen loops: {'; '.join(loops)}" if loops else "")
+
+
+def date_notices(ctx: AppContext, since: datetime) -> list[str]:
+    """Announcements that look like they move a date, first seen since the last check-in. Quoted, never applied."""
+    data = _data(ctx, "school", "date_notices", since=since.isoformat())
+    return [f"- {n['course']}, posted {datetime.fromisoformat(n['posted_at']):%a %b %-d}: {n['title']}"
+            + (f" ({n['body']})" if n["body"] else "") for n in (data or {}).get("notices", [])]
