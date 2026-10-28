@@ -78,3 +78,11 @@ def test_act_fills_and_presses_for_real_and_never_types_a_password(live):
     assert "sent Elijah" in got.loaded.text and "(scripted)" in got.loaded.title
     with pytest.raises(ActionError, match="no fill target"):
         live.act(url, ['fill "Nope" with "x"'])
+
+
+def test_fetch_json_is_a_real_get_with_the_next_page_and_a_signed_out_answer(live):
+    live.sites.add("api.github.com")
+    got = live.fetch_json("https://api.github.com/repos/python/cpython/issues?per_page=1")
+    assert got["signed_out"] is False and len(got["json"]) == 1 and "rel" not in str(got["next"]) and got["next"]
+    assert live.fetch_json("https://api.github.com/user")["signed_out"] is True  # a 401: no login
+    assert live.fetch_json("https://example.com/")["listed"] is False

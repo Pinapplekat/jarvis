@@ -38,7 +38,7 @@ def link(data_dir, tmp_path, monkeypatch):
     node = NodeThread(tmp_path, hub.port, pair(reg), apps_dir=DEFAULT_APPS_DIR).start()
     node.wait_connected()
     wait_for(hub.connected, what="the hub to see the node")
-    yield SimpleNamespace(reg=reg, driver=driver, node_dir=node.config.node_dir)
+    yield SimpleNamespace(reg=reg, driver=driver, node_dir=node.config.node_dir, node_runtime=node.runtime)
     node.runtime.close()
     node.stop()
     hub.stop()
@@ -104,3 +104,10 @@ def test_school_reads_canvas_through_the_node_and_the_signed_in_profile(link):
     row = link.reg.conn.execute("SELECT status, trackable, source FROM school_deadlines WHERE key='canvas:1'").fetchone()
     assert tuple(row) == ("submitted", 1, "canvas")
     assert link.driver.launches == [(True, False)]  # the profile, headless: Canvas is on the list
+
+
+def test_the_node_closes_the_browser_when_it_shuts_down(link, tmp_path):
+    actions.run(link.reg, "browser__read", {"url": "https://example.com/"}, CLI)
+    assert link.driver.sessions[0].open
+    link.node_runtime.close()
+    assert not link.driver.sessions[0].open

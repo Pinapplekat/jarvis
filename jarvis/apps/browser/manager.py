@@ -203,6 +203,7 @@ class Manager:
         host = host_of(url)
         if self.sites.covers(url) is None:
             return {"signed_out": True, "listed": False, "host": host}
+        self.guard.new_page()
         if (why := self.guard.check(url)):
             raise ActionError(f"I can't fetch that: {why}.")
         session, _ = self._acquire(url)

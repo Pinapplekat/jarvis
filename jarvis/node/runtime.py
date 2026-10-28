@@ -98,7 +98,7 @@ class NodeRuntime:
 
     def close(self) -> None:
         """The node is shutting down: let each started app stop its background threads."""
-        for name in sorted(self._started):
+        for name in sorted(self._apps):  # every enabled app with a stop handler, whether or not it had a start
             app = self._apps[name]
             if app.manifest.stop and app.ctx is not None:
                 try:
