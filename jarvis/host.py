@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from jarvis.contract.api import ActionError, Think
-from jarvis.core import actions, loop, outbox, sessions
+from jarvis.core import actions, conversation, loop, outbox, sessions
 from jarvis.core.actions import Origin
 from jarvis.core.apps import Registry, tmp_dir
 from jarvis.core.brain import Brain
@@ -21,12 +21,15 @@ from jarvis.core.scheduler import Scheduler, Skip
 from jarvis.contract.schema import validate
 from jarvis.contract.envfile import load_secrets
 from jarvis.core.settings import Settings, SettingsError
+from jarvis.core.timeutil import in_quiet_hours, parse_quiet_hours
+from jarvis.core.tools import SEND_TEXT_SOURCE
 
 log = logging.getLogger("jarvis.host")
 
 CHANNEL_MODULES = {"discord": "jarvis.channels.discord"}  # channels that settings.toml and .env can switch on
 TERMINAL = "cli"
 SWEEP_EVERY = 30  # seconds
+MAX_SPOKEN_FIRST = 400  # characters; anything longer that Falak says first goes to Discord
 
 
 def check_channel_sections(settings: Settings) -> list[str]:
@@ -95,6 +98,7 @@ class Host:
         self._budget_logged = None  # the local day the over-budget line was last logged
         self.sender = outbox.Sender(reg.conn, self._notify_channel, lambda: datetime.now(timezone.utc),
                                     reg.settings.tz())
+        reg.outbox_nudge = self.sender.nudge
         self._scheduler: Scheduler | None = None
         self._loop: asyncio.AbstractEventLoop | None = None  # set by run(); app threads notify through it
         for app in reg.apps.values():
@@ -132,9 +136,21 @@ class Host:
             self._scheduler = Scheduler(self.reg, self.notify, self.think)
         return self._scheduler
 
-    def _notify_channel(self) -> Channel | None:
-        """Where Falak speaks first: the notify_channel setting, else the first channel that's running."""
-        return self.channels.get(self.reg.settings.notify_channel) or next(iter(self.channels.values()), None)
+    def _notify_channel(self, source: str = "", text: str = "") -> Channel | None:
+        """Where Falak speaks first: the desk when Elijah is there to hear it, else the notify_channel setting, else
+        the first channel that's running. Text that falak__send_text queued is for reading, so it never goes to the desk."""
+        desk = self.channels.get("desk")
+        if desk is not None and source != SEND_TEXT_SOURCE and self._desk_can_speak(desk, text):
+            return desk
+        return self.channels.get(self.reg.settings.notify_channel) or next(
+            (c for c in self.channels.values() if c is not desk), None)
+
+    def _desk_can_speak(self, desk: Channel, text: str) -> bool:
+        """Speaking first at the desk: a conversation is open or he was at the Mac in the last minute, never in quiet
+        hours, and only short things (a long message is for reading)."""
+        now = datetime.now(self.reg.settings.tz())
+        quiet = in_quiet_hours(now.time().replace(tzinfo=None), parse_quiet_hours(self.reg.settings.quiet_hours))
+        return not quiet and len(text) <= MAX_SPOKEN_FIRST and desk.can_speak_first()
 
     def notify(self, text: str, source: str, not_before: datetime | None = None) -> None:
         """Say something to Elijah unprompted: one row in the outbox, and the sender is woken."""
@@ -179,22 +195,40 @@ class Host:
         return AskResult(False, out.message)
 
     async def turn(self, incoming: Incoming) -> loop.Reply:
-        """One message in, one reply sent back through the channel it came from."""
+        """One message in, one reply sent back through the channel it came from (or said, on a voice channel)."""
         channel = self.channels[incoming.channel]
+        begin = getattr(channel, "begin_speech", None)
+        speech = begin(incoming.reply_to) if begin else None
         async with self._turn_lock:
             async with channel.typing(incoming.reply_to):
                 reply = await loop.handle_message(
                     self.reg, self.brain, incoming.text, Origin(incoming.channel, incoming.untrusted),
-                    own_channels=self.own_channels, attachments=incoming.attachments,
+                    own_channels=self.own_channels, attachments=incoming.attachments, speech=speech,
                 )
         log.info("turn channel=%s ms=%d tools=%s error=%s", incoming.channel, reply.ms,
                  ",".join(reply.tools) or "-", reply.error or "-")
-        ask_id = reply.new_asks[-1] if reply.new_asks else None  # buttons go on the latest ask only
-        pictures = tuple(Picture(img.mime, base64.b64decode(img.data)) for img in reply.images)
-        await channel.send(reply.text, reply_to=incoming.reply_to, ask_id=ask_id, images=pictures)
+        if speech is not None:
+            await self._finish_speech(speech, reply)
+        else:
+            ask_id = reply.new_asks[-1] if reply.new_asks else None  # buttons go on the latest ask only
+            pictures = tuple(Picture(img.mime, base64.b64decode(img.data)) for img in reply.images)
+            await channel.send(reply.text, reply_to=incoming.reply_to, ask_id=ask_id, images=pictures)
         if self.on_reply:
             self.on_reply(incoming, reply)
         return reply
+
+    async def _finish_speech(self, speech, reply: loop.Reply) -> None:
+        """A spoken turn is over: the rest of the reply is said, the log keeps what was actually said, and an ask
+        also appears in Discord with its buttons (it is read aloud, but the buttons work too)."""
+        said = await speech.finish(reply.text)
+        if said is not None and reply.message_id:
+            conversation.amend(self.reg.conn, reply.message_id, said)
+        discord = self.channels.get("discord")
+        if discord is not None and reply.new_asks:
+            ask_id = reply.new_asks[-1]
+            row = self.reg.conn.execute("SELECT question FROM asks WHERE id=?", (ask_id,)).fetchone()
+            if row:
+                await discord.send(row["question"], ask_id=ask_id)
 
     async def _work(self) -> None:
         while True:

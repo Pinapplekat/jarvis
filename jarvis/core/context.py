@@ -18,8 +18,19 @@ RECENT_ACTIONS = 5
 MESSAGE_MAX = 600
 
 
-def system_prompt(assistant_name: str) -> str:
-    return (Path(__file__).with_name("persona.md").read_text()).replace("{name}", assistant_name).strip()
+SPOKEN_CHANNELS = frozenset({"desk", "discord_call"})  # replies on these are said aloud, not read
+
+VOICE_PRINCIPLE = (
+    "Your reply is spoken aloud, so write it the way you would say it: a sentence or two, conversational, no lists "
+    "and no markup. Anything he needs to read (a command, an error, code, a link, a list, a number he will need "
+    "later) goes to his Discord with falak__send_text, and the spoken reply just says so in a few words, like "
+    "\"I've put the full error in Discord.\" Before something slow, say in a few words what you are about to do."
+)
+
+
+def system_prompt(assistant_name: str, channel: str | None = None) -> str:
+    text = (Path(__file__).with_name("persona.md").read_text()).replace("{name}", assistant_name).strip()
+    return f"{text}\n\n{VOICE_PRINCIPLE}" if channel in SPOKEN_CHANNELS else text
 
 
 def _clip(text: str, limit: int) -> str:

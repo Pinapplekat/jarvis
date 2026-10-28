@@ -51,6 +51,7 @@ class Registry:
         self.conn = conn
         self.apps = apps
         self.nodes = None  # the NodeLink that reaches devices; set by jarvis serve (see core/dispatch.py)
+        self.outbox_nudge = lambda: None  # wakes the outbox sender; the host replaces it
 
     def actions(self) -> list[ToolSpec]:
         return [

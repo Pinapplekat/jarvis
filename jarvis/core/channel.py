@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
@@ -39,6 +40,22 @@ AnswerAsk = Callable[[int, bool], Awaitable[AskResult]]  # the host's way to ans
 
 class ChannelUnavailable(Exception):
     """A channel can't start (missing token, missing setting). The message is one plain line for Elijah."""
+
+
+class Speech(Protocol):
+    """A voice channel's side of one turn (the desk, a call): the host feeds it the text as the model writes it, and
+    the channel says it. Channels that speak also have `begin_speech(reply_to) -> Speech`, used instead of `send`."""
+
+    cancelled: asyncio.Event  # set when Elijah talks over Falak before it has answered
+
+    def on_text(self, delta: str) -> None: ...  # a piece of text; sentences are said as they complete
+
+    def mute(self) -> None: ...  # stop saying anything: Elijah interrupted after a tool had already run
+
+    async def finish(self, reply: str) -> str | None:
+        """The turn is over; say whatever is left of `reply`. Returns what to write in the conversation log in place
+        of `reply` (what was said, marked as interrupted), or None when all of it was said."""
+        ...
 
 
 class Channel(Protocol):

@@ -18,3 +18,8 @@ def recent(conn: sqlite3.Connection, n: int, before_id: int | None = None) -> li
         (before_id if before_id is not None else 2**62, n),
     ).fetchall()
     return rows[::-1]
+
+
+def amend(conn: sqlite3.Connection, message_id: int, text: str) -> None:
+    """Replace a message's text: a spoken reply that was cut off is logged as what was actually said."""
+    conn.execute("UPDATE chat_log SET text = ? WHERE id = ?", (text, message_id))

@@ -13,7 +13,8 @@ from jarvis.core import context, conversation, sessions
 from jarvis.core.actions import Origin
 from jarvis.contract.api import Attachment
 from jarvis.core.apps import Registry
-from jarvis.core.brain import Brain, BrainResult, Image
+from jarvis.core.brain import Brain, BrainResult, Image, TextSink
+from jarvis.core.channel import Speech
 from jarvis.core.timeutil import stamp
 from jarvis.core.tools import TurnState, build_tools, latest_ask_id, new_pending_asks, shared_images
 
@@ -29,6 +30,7 @@ class Reply:
     ms: int = 0
     new_asks: tuple[int, ...] = ()  # asks this turn created that are still pending
     images: tuple[Image, ...] = ()  # pictures the model chose to send with the reply (falak__send_image)
+    message_id: int = 0  # the conversation-log row of the reply (0 when nothing was logged)
 
 
 def _fallback(error: str, tools: list[str]) -> str:
@@ -38,10 +40,15 @@ def _fallback(error: str, tools: list[str]) -> str:
     return text
 
 
-async def _think(brain: Brain, reg: Registry, turn: TurnState, system: str, prompt: str) -> BrainResult:
+INTERRUPTED = "interrupted"
+
+
+async def _think(brain: Brain, reg: Registry, turn: TurnState, system: str, prompt: str,
+                 on_text: TextSink | None = None) -> BrainResult:
     limit = reg.settings.turn_timeout_seconds
+    streaming = {"on_text": on_text} if on_text else {}  # only voice channels stream; other brains needn't know
     try:
-        return await asyncio.wait_for(brain.run(system, prompt, build_tools(reg, turn)), limit)
+        return await asyncio.wait_for(brain.run(system, prompt, build_tools(reg, turn), **streaming), limit)
     except asyncio.TimeoutError:
         return BrainResult("", error=f"timed out after {limit}s")
     except Exception as e:
@@ -66,16 +73,42 @@ def thinking_runs_today(reg: Registry, now: datetime | None = None) -> int:
                             (stamp(start), stamp(end))).fetchone()[0]
 
 
-async def _run_turn(reg: Registry, brain: Brain, turn: TurnState, system: str,
-                    prompt: str) -> tuple[BrainResult, str | None]:
-    result = await _think(brain, reg, turn, system, prompt)
+async def _run_turn(reg: Registry, brain: Brain, turn: TurnState, system: str, prompt: str,
+                    speech: Speech | None = None) -> tuple[BrainResult, str | None]:
+    if speech is None:
+        result = await _think(brain, reg, turn, system, prompt)
+    else:
+        result = await _think_aloud(reg, brain, turn, system, prompt, speech)
+        if result is None:
+            return BrainResult(""), INTERRUPTED
     return result, result.error or (None if result.text.strip() else "the model said nothing")
+
+
+async def _think_aloud(reg: Registry, brain: Brain, turn: TurnState, system: str, prompt: str,
+                       speech: Speech) -> BrainResult | None:
+    """A turn that is being said as it is written. If Elijah talks over it before any tool ran, the turn is cancelled
+    (None); if a tool had run, it finishes without speaking so its result stays in the conversation."""
+    thinking = asyncio.ensure_future(_think(brain, reg, turn, system, prompt, speech.on_text))
+    cut = asyncio.ensure_future(speech.cancelled.wait())
+    try:
+        await asyncio.wait({thinking, cut}, return_when=asyncio.FIRST_COMPLETED)
+        if thinking.done():
+            return thinking.result()
+        if turn.tools_used:
+            speech.mute()
+            return await thinking
+        thinking.cancel()
+        await asyncio.gather(thinking, return_exceptions=True)
+        return None
+    finally:
+        cut.cancel()
 
 
 async def handle_message(reg: Registry, brain: Brain, text: str, origin: Origin, now: datetime | None = None, *,
                          own_channels: frozenset[str] = frozenset({"cli"}),
-                         attachments: tuple[Attachment, ...] = ()) -> Reply:
-    """Run one turn. The files in `attachments` are deleted when it ends, whether or not they were viewed."""
+                         attachments: tuple[Attachment, ...] = (), speech: Speech | None = None) -> Reply:
+    """Run one turn. The files in `attachments` are deleted when it ends, whether or not they were viewed. With
+    `speech`, the text goes to it as the model writes it, and Elijah can cut the turn short."""
     started = time.monotonic()
     try:
         await asyncio.to_thread(sessions.sweep, reg, now)  # a view whose device left or sat idle closes before this turn
@@ -83,13 +116,17 @@ async def handle_message(reg: Registry, brain: Brain, text: str, origin: Origin,
         turn = TurnState(origin, latest_ask_id(reg), own_channels, attachments)
         images = sum(a.kind == "image" for a in attachments)
         prompt = context.build_prompt(reg, text, origin.channel, message_id, now, images)
-        result, error = await _run_turn(reg, brain, turn, context.system_prompt(reg.settings.assistant_name), prompt)
-        reply = _fallback(error, turn.tools_used) if error else result.text.strip()
-        conversation.add(reg.conn, "assistant", reply, now)
+        system = context.system_prompt(reg.settings.assistant_name, origin.channel)
+        result, error = await _run_turn(reg, brain, turn, system, prompt, speech)
         ms = int((time.monotonic() - started) * 1000)
+        if error == INTERRUPTED:  # cut off before it answered or did anything: there is no reply to keep
+            turn_id = _record_turn(reg, origin.channel, ms, result, turn.tools_used, error)
+            return Reply("", (), error, turn_id, ms)
+        reply = _fallback(error, turn.tools_used) if error else result.text.strip()
+        message_id = conversation.add(reg.conn, "assistant", reply, now)
         turn_id = _record_turn(reg, origin.channel, ms, result, turn.tools_used, error)
         return Reply(reply, tuple(turn.tools_used), error, turn_id, ms, new_pending_asks(reg, turn),
-                     shared_images(turn))
+                     shared_images(turn), message_id)
     finally:
         for att in attachments:
             att.path.unlink(missing_ok=True)

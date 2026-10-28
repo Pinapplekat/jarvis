@@ -56,7 +56,7 @@ def _late_note(row: sqlite3.Row, channel: str, now: datetime, tz: tzinfo) -> str
 class Sender:
     """Sends due rows oldest first through the notify channel; a failure keeps the row and backs off."""
 
-    def __init__(self, conn: sqlite3.Connection, pick_channel: Callable[[], object | None],
+    def __init__(self, conn: sqlite3.Connection, pick_channel: Callable[[str, str], object | None],
                  clock: Callable[[], datetime], tz) -> None:
         self.conn, self.pick_channel, self.clock, self.tz = conn, pick_channel, clock, tz
         self._retry_at: dict[int, datetime] = {}  # in memory: a restart tries again at once
@@ -72,11 +72,11 @@ class Sender:
 
     async def flush(self) -> int:
         """One pass: send everything that is due. Returns how many went out."""
-        channel = self.pick_channel()
-        if channel is None:
-            return 0
         now, sent = self.clock(), 0
         for row in unsent(self.conn):
+            channel = self.pick_channel(row["source"], row["text"])  # per message: the desk may speak one and Discord get the next
+            if channel is None:
+                break
             if row["not_before"] and datetime.fromisoformat(row["not_before"]) > now:
                 continue
             if self._retry_at.get(row["id"], now) > now:

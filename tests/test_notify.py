@@ -134,7 +134,7 @@ def test_the_sender_delivers_the_event_to_elijah_once(reg):
 
     from datetime import datetime, timezone
 
-    sender = Sender(reg.conn, lambda: Chan(), lambda: datetime.now(timezone.utc), reg.settings.tz())
+    sender = Sender(reg.conn, lambda source, text: Chan(), lambda: datetime.now(timezone.utc), reg.settings.tz())
     asyncio.run(sender.flush())
     asyncio.run(sender.flush())
     assert sent == ["done"]

@@ -37,5 +37,10 @@ class BrainResult:
     error: str | None = None
 
 
+TextSink = Callable[[str], None]  # gets each piece of text as the model writes it
+
+
 class Brain(Protocol):
-    async def run(self, system: str, prompt: str, tools: list[Tool]) -> BrainResult: ...
+    async def run(self, system: str, prompt: str, tools: list[Tool], on_text: TextSink | None = None) -> BrainResult:
+        """`on_text` is only passed by voice channels, which say the text while the rest is still being written."""
+        ...

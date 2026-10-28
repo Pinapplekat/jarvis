@@ -6,11 +6,12 @@ import asyncio
 import base64
 from dataclasses import dataclass, field, replace
 
-from jarvis.core import actions
+from jarvis.core import actions, outbox
 from jarvis.core.actions import Origin
 from jarvis.contract.api import Attachment
 from jarvis.core.apps import SEP, Registry
 from jarvis.core.brain import Image, Tool, ToolReply
+from jarvis.core.context import SPOKEN_CHANNELS
 
 CORE = "falak"  # core tools are falak__<name>
 
@@ -152,6 +153,29 @@ def _view_attachment_tool(turn: TurnState) -> Tool:
 
 
 MAX_SHARED = 4
+SEND_TEXT_SOURCE = "send_text"  # the outbox rows this tool adds; the host sends them to Discord, never to the desk
+
+
+def _send_text_tool(reg: Registry, turn: TurnState) -> Tool:
+    async def call(args: dict) -> ToolReply:
+        turn.tools_used.append(f"{CORE}{SEP}send_text")
+        text = args.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return ToolReply("text must be the message to send.", is_error=True)
+        outbox.add(reg.conn, text.strip(), SEND_TEXT_SOURCE)
+        reg.outbox_nudge()
+        return ToolReply("Sent to Elijah's Discord.")
+
+    schema = {
+        "type": "object",
+        "required": ["text"],
+        "additionalProperties": False,
+        "properties": {"text": {"type": "string", "description": "The message, written to be read."}},
+    }
+    desc = ("Send a text message to Elijah's Discord. This is a spoken conversation, so use it for anything he needs "
+            "to read: a command, an error, code, a link, a list, a number he will need later. Say in a few words "
+            "that you sent it.")
+    return Tool(f"{CORE}{SEP}send_text", desc, schema, call)
 
 
 def _send_image_tool(turn: TurnState) -> Tool:
@@ -190,6 +214,8 @@ def build_tools(reg: Registry, turn: TurnState) -> list[Tool]:
     tools += [_answer_ask_tool(reg, turn), _undo_tool(reg, turn)]
     if turn.origin.channel in turn.own_channels:  # a chat reply to Elijah; job turns deliver text only
         tools.append(_send_image_tool(turn))
+    if turn.origin.channel in SPOKEN_CHANNELS:
+        tools.append(_send_text_tool(reg, turn))
     if any(a.kind == "image" for a in turn.attachments):
         tools.append(_view_attachment_tool(turn))
     return tools

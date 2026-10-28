@@ -6,10 +6,11 @@ import logging
 from pathlib import Path
 
 from claude_agent_sdk import (
-    AssistantMessage, ClaudeAgentOptions, ResultMessage, SdkMcpTool, ToolUseBlock, create_sdk_mcp_server, query,
+    AssistantMessage, ClaudeAgentOptions, ResultMessage, SdkMcpTool, StreamEvent, ToolUseBlock, create_sdk_mcp_server,
+    query,
 )
 
-from jarvis.core.brain import BrainResult, Tool
+from jarvis.core.brain import BrainResult, TextSink, Tool
 
 log = logging.getLogger("jarvis.core.brain")
 logging.getLogger("claude_agent_sdk").setLevel(logging.WARNING)  # its INFO lines would print on every turn
@@ -36,7 +37,7 @@ class SdkBrain:
     def __init__(self, model: str, max_turns: int, cwd: Path) -> None:
         self.model, self.max_turns, self.cwd = model, max_turns, cwd
 
-    def _options(self, system: str, tools: list[Tool]) -> ClaudeAgentOptions:
+    def _options(self, system: str, tools: list[Tool], partial: bool = False) -> ClaudeAgentOptions:
         self.cwd.mkdir(parents=True, exist_ok=True)
         return ClaudeAgentOptions(
             tools=[],  # no built-in tools: Falak can only use its own
@@ -55,12 +56,16 @@ class SdkBrain:
             # rejected a full screenshot. The node already caps a call's pictures at 10 MB.
             max_buffer_size=MAX_MESSAGE_BYTES,
             stderr=lambda line: log.debug("claude: %s", line.rstrip()),
+            include_partial_messages=partial,
         )
 
-    async def run(self, system: str, prompt: str, tools: list[Tool]) -> BrainResult:
+    async def run(self, system: str, prompt: str, tools: list[Tool], on_text: TextSink | None = None) -> BrainResult:
         result = BrainResult("")
-        async for message in query(prompt=prompt, options=self._options(system, tools)):
-            if isinstance(message, AssistantMessage):
+        spoke = False  # text already went to on_text, so a new text block starts a new thought
+        async for message in query(prompt=prompt, options=self._options(system, tools, partial=on_text is not None)):
+            if isinstance(message, StreamEvent) and on_text is not None:
+                spoke = _stream(message.event, on_text, spoke)
+            elif isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, ToolUseBlock):
                         result.tool_calls.append(block.name.removeprefix(PREFIX))
@@ -72,3 +77,15 @@ class SdkBrain:
                     detail = "; ".join(message.errors or []) or message.result or message.subtype
                     result.error = f"{message.subtype}: {detail}"[:200]
         return result
+
+
+def _stream(event: dict, on_text: TextSink, spoke: bool) -> bool:
+    """Pass the text of one partial-message event to `on_text`; a new text block after earlier text gets a line break
+    first so the last words of one block and the first of the next are never glued together."""
+    kind = event.get("type")
+    if kind == "content_block_start" and event.get("content_block", {}).get("type") == "text" and spoke:
+        on_text("\n")
+    elif kind == "content_block_delta" and event.get("delta", {}).get("type") == "text_delta":
+        on_text(event["delta"].get("text", ""))
+        return True
+    return spoke

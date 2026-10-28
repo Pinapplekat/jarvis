@@ -33,7 +33,7 @@ class Down(FakeChannel):
 
 
 def sender(reg, channel, clock):
-    return Sender(reg.conn, lambda: channel, clock, LA)
+    return Sender(reg.conn, lambda source, text: channel, clock, LA)
 
 
 def texts(ch):
@@ -129,7 +129,7 @@ def test_every_sent_message_joins_the_conversation(real_apps):
 def test_nothing_is_dropped_without_a_channel(real_apps):
     clock = Clock()
     add(real_apps, "waiting", clock)
-    nobody = Sender(real_apps.conn, lambda: None, clock, LA)
+    nobody = Sender(real_apps.conn, lambda source, text: None, clock, LA)
     assert asyncio.run(nobody.flush()) == 0
     assert [r["text"] for r in outbox.unsent(real_apps.conn)] == ["waiting"]
     ch = FakeChannel()
