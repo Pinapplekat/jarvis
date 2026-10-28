@@ -150,12 +150,25 @@ def test_a_stop_from_the_host_cuts_the_audio_and_opens_a_follow_up():
     assert m.host_stop(3.0, 1) == [("stop_playback", "stop"), ("playback_stopped", 1, "stop")] and m.state == FOLLOW_UP
 
 
-def test_speak_first_from_idle_then_follow_up():
+def test_speaking_first_goes_back_to_idle_and_never_opens_a_follow_up():
+    # In class, a notice Falak said on its own opened a follow-up window, and people talking nearby became turns
+    # (2026-10-28). Only a conversation he started gets follow-ups.
     m = DeskMachine()
     m.host_speak_start(1.0, 2**31)
     assert m.state == SPEAKING and m.reply_stream == 2**31
+    assert m.vad(1.6, 900, 0) == []  # someone nearby talking over it doesn't cut in either
     m.host_speak_end(2.0, 2**31)
-    assert m.playback_idle(3.0) == [("playback_stopped", 2**31, "done")] and m.state == FOLLOW_UP
+    assert m.playback_idle(3.0) == [("playback_stopped", 2**31, "done")] and m.state == IDLE
+    assert m.vad(4.0, 900, 0) == [] and m.state == IDLE  # and nothing nearby starts a turn afterwards
+    assert ("voice_start", 1, "push") in m.push_down(5.0)  # the key still works
+
+
+def test_a_reply_to_him_still_opens_a_follow_up():
+    m = DeskMachine()
+    speaking(m, now=2.0)
+    m.host_speak_end(3.0, 1)
+    m.playback_idle(3.5)
+    assert m.state == FOLLOW_UP
 
 
 def test_the_tracker_counts_speech_and_silence_and_forgives_a_breath():

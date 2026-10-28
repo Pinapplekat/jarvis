@@ -49,7 +49,8 @@ class DeskMachine:
         self._push_at: float | None = None  # push-to-talk key is down since
         self._audio_ended = False  # speaking: the host sent SpeakEnd
         self._idle = True  # speaking: the speakers have played everything sent so far
-        self.voice_barge_in = True  # off when macOS gave no echo cancellation: the mic then hears Falak's own voice
+        self.voice_barge_in = True
+        self._spoke_first = False  # speaking: Falak started this, not him (see host_speak_start)  # off when macOS gave no echo cancellation: the mic then hears Falak's own voice
 
     # ---- what happened ----------------------------------------------------------------------------------------
 
@@ -94,7 +95,7 @@ class DeskMachine:
             return self._listen(now, "follow_up", chime=False)
         elif self.state == WAITING and speech_ms >= t.barge_in_ms:
             return self._barge_in(now)
-        elif (self.state == SPEAKING and self.voice_barge_in and speech_ms >= t.barge_in_ms
+        elif (self.state == SPEAKING and self.voice_barge_in and not self._spoke_first and speech_ms >= t.barge_in_ms
               and (now - self._since) * 1000 >= t.echo_warmup_ms):
             return self._barge_in(now)
         return []
@@ -112,6 +113,9 @@ class DeskMachine:
         talked over is stale."""
         if self.state == LISTENING:
             return []
+        # Speaking first (a reminder, a notice, "say it out loud") isn't a conversation he started: when it ends the
+        # desk goes back to idle, never into a follow-up window that would take whoever is talking nearby as him.
+        self._spoke_first = self.state == IDLE
         self.state, self._since, self.reply_stream = SPEAKING, now, stream
         self._audio_ended, self._idle = False, False
         return []
@@ -127,6 +131,10 @@ class DeskMachine:
 
     def host_stop(self, now: float, stream: int) -> list[Effect]:
         if self.state == SPEAKING and stream == self.reply_stream:
+            if self._spoke_first:
+                out = self._cut(now, "stop")
+                self.state, self._since = IDLE, now
+                return out
             return self._cut(now, "stop") + self._follow_up(now)
         return []
 
@@ -170,5 +178,8 @@ class DeskMachine:
     def _maybe_done(self, now: float) -> list[Effect]:
         if self._audio_ended and self._idle:
             out = [("playback_stopped", self.reply_stream, "done")]
+            if self._spoke_first:
+                self.state, self._since = IDLE, now
+                return out
             return out + self._follow_up(now)
         return []

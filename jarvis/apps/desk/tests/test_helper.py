@@ -131,3 +131,13 @@ def test_an_app_that_never_connects_fails_plainly(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="didn't connect"):
         helper.launch(tmp_path / "Falak Ears.app", tmp_path / "run", lambda pcm: None, lambda ev: None, connect_timeout=0.2)
     assert not list(Path(tempfile.gettempdir()).glob("falak-ears-*"))
+
+
+def test_the_no_echo_cancellation_notice_is_said_once_ever(make_ctx):
+    ctx = make_ctx("desk")
+    said = []
+    ctx.notify_hook = lambda name, text: said.append(text)
+    runner = actions.Runner(ctx)
+    runner._helper_error("no echo cancellation")
+    runner._helper_error("no echo cancellation")  # the next start
+    assert len(said) == 1 and "echo cancellation" in said[0]

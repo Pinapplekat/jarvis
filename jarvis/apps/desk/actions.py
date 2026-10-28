@@ -66,6 +66,11 @@ class Runner:
 
     def _helper_error(self, what: str) -> None:
         if what == "no echo cancellation":
+            told = self.ctx.data_dir / "told-no-echo-cancellation"
+            if told.exists():  # once is enough: it was said on every start, and opened the desk each time
+                return
+            told.parent.mkdir(parents=True, exist_ok=True)
+            told.touch()
             self.ctx.notify("The desk is on, but macOS wouldn't give it echo cancellation, so on speakers I'd hear "
                             "myself. Talking over me won't stop me; press ⌥Space to cut in. With headphones it's fine.")
         elif "not allowed" in what:
