@@ -309,3 +309,9 @@ def test_a_task_in_falaks_own_folder_may_only_look(ctx, tmp_path):
     ro.mkdir()
     out = terminal.start_task(ctx, "explain it", str(ro), "read the code")
     assert "read-only" in out.text
+
+
+def test_a_long_goal_is_cut_at_a_word_in_messages():
+    goal = 'In m8-sandbox, add hello.py that prints "hi", add a test for it (test_hello.py), then commit'
+    assert TaskRunner._short({"goal": goal}) == 'In m8-sandbox, add hello.py that prints "hi", add a test…'
+    assert TaskRunner._short({"goal": "fix the typo"}) == "fix the typo"

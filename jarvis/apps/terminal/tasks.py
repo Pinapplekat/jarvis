@@ -261,8 +261,13 @@ class TaskRunner:
                                                    "going towards the goal; end with the STATUS line when done.")
 
     @staticmethod
-    def _short(t: dict) -> str:
-        return t["goal"].strip().splitlines()[0][:60]
+    def _short(t: dict, limit: int = 60) -> str:
+        """The goal's first line, cut at a word with "…" when it's long, so a message never ends mid-word."""
+        goal = t["goal"].strip().splitlines()[0]
+        if len(goal) <= limit:
+            return goal
+        cut = goal[:limit].rsplit(" ", 1)[0] if " " in goal[:limit] else goal[:limit]
+        return cut.rstrip(" ,;:(") + "…"
 
     def _ran_out(self, t: dict, which: str) -> str:
         tried = "; ".join(s["update"] for s in t["steps"][-4:]) or "nothing yet"

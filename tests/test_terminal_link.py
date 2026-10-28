@@ -95,7 +95,7 @@ def test_a_task_asks_with_the_plan_every_time_runs_and_one_message_comes_back_fr
     args = {"goal": "add hello.py", "folder": "proj", "plan": "write hello.py and a test, then commit"}
     ask = actions.run(link.reg, "terminal__start_task", args, CLI, allowed={"terminal__start_task"})
     assert isinstance(ask, actions.Asked) and ask.question == (
-        "Start a task in proj: write hello.py and a test, then commit. Go?")
+        "Here's my plan for a task in proj:\nwrite hello.py and a test, then commit\nGo?")
     assert isinstance(actions.run(link.reg, "terminal__start_task", args, CLI, allowed={"terminal__start_task"}),
                       actions.Asked)  # a learned rule doesn't help
     assert link.played == []

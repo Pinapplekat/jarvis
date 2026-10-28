@@ -139,7 +139,7 @@ minimum = 1
 name = "start_task"
 description = "Start a Claude Code task in a project folder: it reads, edits, runs tests and commits on its own and Elijah gets one message when it ends. Use it for multi-step work (add a feature, fix a bug, write tests), not for one command. Write the plan in Elijah's words: what will change and how it will be checked. He is asked once with the plan. Tasks can't push, install elsewhere or delete; those come back as commands for him to approve."
 effect = "plan"
-confirm = "Start a task in {folder}: {plan}. Go?"
+confirm = "Here's my plan for a task in {folder}:\n{plan}\nGo?"  # on its own line, so the plan's own full stop stays its own
 timeout_s = 10
 [actions.input]
 type = "object"
@@ -198,7 +198,7 @@ additionalProperties = false
 
 [[actions]]
 name = "repo_state"
-description = "A git repo's branch, last commit, uncommitted file count and how far ahead or behind its upstream it is."
+description = "A git repo's branch, last commit, uncommitted file count and how far ahead or behind its upstream it is. `path` is a folder path or a project folder name."
 effect = "read"
 share = true
 timeout_s = 20
