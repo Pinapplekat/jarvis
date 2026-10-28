@@ -12,7 +12,6 @@ from jarvis.channels import voice_services
 from jarvis.channels.desk import DeskChannel
 from jarvis.channels.voice_services import VoiceServices
 from jarvis.core import conversation, outbox
-from jarvis.core.brain import BrainResult
 from jarvis.host import Host
 from jarvis.protocol import messages as m
 from jarvis.speech import VoiceManager, VoiceProfile

@@ -12,11 +12,11 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from jarvis.core.channel import ChannelUnavailable, Deliver, Incoming
+from jarvis.core.channel import Deliver, Incoming
 from jarvis.channels.desk_speech import DeskReply, DeskSpeech, TurnTimes
 from jarvis.channels.voice_services import Joiner, VoiceServices
 from jarvis.protocol import messages as m
-from jarvis.speech import Listener, VoiceManager, VoiceProfile
+from jarvis.speech import VoiceManager, VoiceProfile
 
 log = logging.getLogger("jarvis.channels.desk")
 

@@ -40,15 +40,18 @@ class KokoroVoice:
             from misaki import espeak
             from mlx_audio.tts.utils import load
 
-            if not HOMEBREW_ESPEAK.exists():
-                # The espeakng-loader wheel kills the process on this Mac; without espeak, Kokoro skips words that
-                # are missing from its dictionary. `brew install espeak-ng` turns the fallback back on.
+            if HOMEBREW_ESPEAK.exists():
+                from phonemizer.backend.espeak.wrapper import EspeakWrapper
+
+                EspeakWrapper.set_library(str(HOMEBREW_ESPEAK))  # misaki points at a wheel that is broken on macOS
+            else:
+                # The espeakng-loader wheel kills the process on macOS. Without espeak, Kokoro skips every word that
+                # is missing from its dictionary, and that includes names (Emily, Spotify, Falak): install it with
+                # `brew install espeak-ng` (`jarvis voice status` says when it is missing).
                 def unavailable(*_a, **_k):
                     raise RuntimeError("espeak is not installed")
 
                 espeak.EspeakFallback = unavailable
-            else:
-                os.environ.setdefault("PHONEMIZER_ESPEAK_LIBRARY", str(HOMEBREW_ESPEAK))
             self._model = load(str(self._dir))
         return self._model
 

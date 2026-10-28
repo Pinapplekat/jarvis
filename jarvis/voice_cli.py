@@ -29,8 +29,13 @@ def _status_lines(settings: Settings) -> list[tuple[str, Path | None]]:
 
 
 def status(settings: Settings) -> int:
+    from jarvis.speech.voice import HOMEBREW_ESPEAK
+
     for name, path in _status_lines(settings):
         print(f"{name}: {path or 'missing (run `jarvis voice setup`)'}")
+    if not HOMEBREW_ESPEAK.exists():
+        print("pronunciation of unknown words: espeak-ng is not installed, so names and rare words (Emily, Spotify, "
+              "Falak) are skipped when spoken. Fix: brew install espeak-ng")
     return 0
 
 
