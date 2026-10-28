@@ -12,7 +12,7 @@ class ScriptedBrain:
         self.steps, self.text, self.error, self.raises, self.hang = list(steps), text, error, raises, hang
         self.systems, self.prompts, self.replies = [], [], []
 
-    async def run(self, system, prompt, tools):
+    async def run(self, system, prompt, tools, on_text=None):
         self.systems.append(system)
         self.prompts.append(prompt)
         if self.hang:
@@ -25,4 +25,6 @@ class ScriptedBrain:
             args = args(self.replies) if callable(args) else args
             self.replies.append(await by_name[name].call(args))
             used.append(name)
+        if on_text:
+            on_text(self.text)
         return BrainResult(self.text, used, num_turns=len(used) + 1, cost_usd=0.01, error=self.error)

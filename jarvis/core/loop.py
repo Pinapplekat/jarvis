@@ -9,14 +9,16 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, time as clock_time, timedelta, timezone
 
-from jarvis.core import context, conversation, sessions
+from jarvis.core import context, conversation, outbox, sessions
 from jarvis.core.actions import Origin
 from jarvis.contract.api import Attachment
 from jarvis.core.apps import Registry
 from jarvis.core.brain import Brain, BrainResult, Image, TextSink
 from jarvis.core.channel import Speech
 from jarvis.core.timeutil import stamp
-from jarvis.core.tools import TurnState, build_tools, latest_ask_id, new_pending_asks, shared_images
+from jarvis.core.tools import (
+    SEND_TEXT_SOURCE, TurnState, build_tools, latest_ask_id, new_pending_asks, shared_images,
+)
 
 log = logging.getLogger("jarvis.core.loop")
 
@@ -125,6 +127,10 @@ async def handle_message(reg: Registry, brain: Brain, text: str, origin: Origin,
             turn_id = _record_turn(reg, origin.channel, ms, result, turn.tools_used, error, model)
             return Reply("", (), error, turn_id, ms)
         reply = _fallback(error, turn.tools_used) if error else result.text.strip()
+        if error and speech is not None:  # an error is for reading, not for saying
+            outbox.add(reg.conn, reply, SEND_TEXT_SOURCE, now)
+            reg.outbox_nudge()
+            reply = "Sorry, sir, something went wrong. I've put the details in Discord."
         message_id = conversation.add(reg.conn, "assistant", reply, now)
         turn_id = _record_turn(reg, origin.channel, ms, result, turn.tools_used, error, model)
         return Reply(reply, tuple(turn.tools_used), error, turn_id, ms, new_pending_asks(reg, turn),

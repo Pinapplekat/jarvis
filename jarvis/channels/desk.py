@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+import re
 import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -32,6 +33,10 @@ AT_THE_MAC = 60.0  # seconds since his last key or mouse input that still count 
 PRESENCE_FRESH = 45.0  # a Presence report older than this means the node is gone or quiet
 SPEAK_FIRST_STREAMS = 1 << 31  # ids for things Falak says first; his utterances count up from 1 on the node
 SPOKEN_ERROR = "Sorry sir, I couldn't make that out."
+# A turn that trails off ("and...", "um") is held for a moment: he usually carries on, and the two parts are one request.
+TRAILING = re.compile(r"(?:\b(?:and|um+|uh+|er|so|but|or|then|because)\b|…|\.\.\.)[\s,.]*$", re.IGNORECASE)
+GRACE_S = 2.5
+MAX_GRACES = 2
 
 
 class DeskChannel:
@@ -52,6 +57,8 @@ class DeskChannel:
         self._presence: tuple[float, float, bool] | None = None  # (when, idle_s, conversation open)
         self._ids = itertools.count(SPEAK_FIRST_STREAMS)
         self._warmed = False
+        self._held: tuple[str, str, int, TurnTimes, int] | None = None  # text, node, stream, clock, graces used
+        self._release_timer: asyncio.TimerHandle | None = None
 
     # ---- frames from the node (arrive in the hub's thread) -------------------------------------------------
 
@@ -112,7 +119,30 @@ class DeskChannel:
         if not text.strip() or self._deliver is None:
             return  # a cough or a click
         log.info("desk heard (%.1fs of audio): %r", len(pcm) / 32000, text[:80])
+        graces = 0
+        if self._held is not None:  # he carried on: one request in two parts
+            held_text, _, _, held_times, graces = self._held
+            self._cancel_hold()
+            text, times.speech_ended = f"{held_text} {text.strip()}", held_times.speech_ended
+        if TRAILING.search(text) and graces < MAX_GRACES:
+            self._held = (text.strip(), node, stream, times, graces + 1)
+            self._release_timer = asyncio.get_running_loop().call_later(
+                GRACE_S, lambda: asyncio.ensure_future(self._release()))
+            return
         await self._deliver(Incoming(NAME, text.strip(), reply_to=DeskReply(node, stream, times)))
+
+    def _cancel_hold(self) -> None:
+        self._held = None
+        if self._release_timer is not None:
+            self._release_timer.cancel()
+            self._release_timer = None
+
+    async def _release(self) -> None:
+        """He did not carry on: the held request goes ahead as it was."""
+        held, self._held, self._release_timer = self._held, None, None
+        if held is not None and self._deliver is not None:
+            text, node, stream, times, _ = held
+            await self._deliver(Incoming(NAME, text, reply_to=DeskReply(node, stream, times)))
 
     def _transcribe(self, pcm: bytes) -> str:
         if self._listener is None:

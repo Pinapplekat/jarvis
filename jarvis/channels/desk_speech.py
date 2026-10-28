@@ -119,8 +119,9 @@ class DeskSpeech:
         if self.muted:
             await self._close()
             return f"{reply} (not spoken: he cut in before I could say it)"
+        if not self.cancelled.is_set():  # (after a barge-in the node is already listening to him)
+            self.send(m.SpeakEnd(self.stream).to_json())  # also when there was nothing to say: the node moves on
         if self._started:
-            self.send(m.SpeakEnd(self.stream).to_json())
             await self._playback_finished()
         await self._close()
         stopped = self._stopped_with
