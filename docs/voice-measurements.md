@@ -5,10 +5,8 @@ Spotify, VS Code and `falak start` running as usual. Nothing touched Falak-dev, 
 engines ran from a throwaway venv, downloads and test audio went to a scratch folder, and Kokoro and the Whisper
 `base.en` weights were only read or re-downloaded.
 
-**Status: OmniVoice did not load.** After disk was freed it downloaded (3.04 GiB) and then sat at "Loading weights
-0/313" for 20 minutes on MPS/fp16 with swap climbing from 3.5 to 5.1 GB. It never produced a sentence and I killed it.
-The load alone fails the decision rule on this Mac as it is used. A retry with Chrome, Discord and the rest closed
-would show whether it's only memory pressure; it can't be the engine for a Mac that's running everything else.
+**Status: OmniVoice measured, and it fails the decision rule.** A warm sentence takes 11 s at 32 steps and 6 s at 16
+steps (the rule is 1 s), and it is charged about 3 GB (the rule is 2.5 GB). **Kokoro on CPU is the engine.**
 
 ## The machine while measuring
 
@@ -58,22 +56,34 @@ dictionary, and the `espeakng-loader` wheel is broken on this Mac (it kills the 
 fallback, so a rare unknown word is dropped. Fixing it is a section 1 decision (`brew install espeak-ng`, or a
 fallback of our own).
 
-## OmniVoice (`k2-fsa/OmniVoice`, MPS, fp16, `"male, low pitch, british accent"`)
+## OmniVoice (`k2-fsa/OmniVoice`, MPS, fp16, `"male, low pitch, british accent"`, 3.7 s of audio)
 
-No timings: loading never finished (20 min, process footprint 2.6 GB while CPU stayed at ~190%, swap +1.6 GB).
+| | time | footprint after |
+|---|---|---|
+| load (CPU, then moved to MPS) | 6.9 s | 2.6 GB |
+| first sentence, 32 steps | 13.6 s | |
+| **warm, 32 steps (median of 3)** | **11.2 s** | 3.0 GB |
+| **warm, 16 steps (median of 3)** | **5.9 s** | 3.0 GB |
 
-- The repo is 3.27 GB (2.45 GB model, 0.81 GB audio tokenizer, which loads in fp32 unless told otherwise).
+Real-time factor about 3 at 32 steps and 1.6 at 16 steps, so it is slower than speech and can't stream a reply. Swap
+rose by about 0.6 GB during the runs.
+
+- **Loading straight onto MPS crashes.** `from_pretrained(..., device_map="mps")` hung for 20 minutes the first time
+  and segfaulted the next, in transformers' threaded weight loader (`core_model_loading.py`). Loading on the CPU
+  and calling `.to("mps")` works, and the bench does that.
+- The repo is 3.27 GB (2.45 GB model, 0.81 GB audio tokenizer).
 - The code is Apache-2.0, but the README says **the pre-trained weights are CC-BY-NC** (non-commercial). The brief says
   Apache-2.0. Fine for personal use; worth knowing if Falak is ever shared.
 - Installing with `--no-deps` plus torch, torchaudio, transformers>=5.3 and librosa works; Gradio isn't needed.
+- Not tried: the CPU device (the process was stopped mid-run), or fewer than 16 steps. Neither is likely to reach 1 s.
 
 ## Against the decision rule
 
 | Rule | OmniVoice | Kokoro |
 |---|---|---|
-| warm sentence ≤ 1 s | did not load | 0.75 s (MPS), 0.99 s (CPU): passes |
-| resident RAM ≤ 2.5 GB | 2.6 GB charged and still loading | 1.4 GB (CPU), 2.2 GB (MPS): passes |
-| no swap with everything open | swap rose from 3.5 to 5.1 GB: fails | CPU adds none; MPS adds ~0.4 GB |
+| warm sentence ≤ 1 s | 11.2 s (32 steps), 5.9 s (16): fails | 0.75 s (MPS), 0.99 s (CPU): passes |
+| resident RAM ≤ 2.5 GB | about 3.0 GB charged: fails | 1.4 GB (CPU), 2.2 GB (MPS): passes |
+| no swap with everything open | swap +0.6 GB: fails | CPU adds none; MPS adds ~0.4 GB |
 
-Kokoro on CPU meets all three. OmniVoice fails the rule on this Mac, so Kokoro (CPU, `bm_george`) is the engine,
-with OmniVoice as a setting for the Mac mini.
+Kokoro on CPU meets all three. OmniVoice fails all three, so Kokoro (CPU, `bm_george`) is the engine, with OmniVoice
+as a setting for the Mac mini.

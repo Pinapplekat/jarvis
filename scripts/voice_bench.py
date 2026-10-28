@@ -155,7 +155,9 @@ def bench_omnivoice(args: argparse.Namespace, scratch: Path) -> dict:
     path = download("k2-fsa/OmniVoice", scratch)
     meter = Meter()
     t = time.perf_counter()
-    model = OmniVoice.from_pretrained(str(path), device_map=args.device, dtype=torch.float16)
+    # Loading straight onto MPS segfaults (or hangs) in transformers' threaded weight loader on this Mac, so load on
+    # the CPU and move the model afterwards.
+    model = OmniVoice.from_pretrained(str(path), device_map="cpu", dtype=torch.float16).to(args.device)
     out = {"device": args.device, "load_s": round(time.perf_counter() - t, 2)}
     out["after_load"] = meter.report()
 
