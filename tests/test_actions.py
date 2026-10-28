@@ -197,3 +197,9 @@ def test_a_plan_asks_every_time_with_the_plan_in_the_question_even_with_a_learne
     assert echo.apps["echo"].module.WIPED == []
     done = actions.answer_ask(echo, out.ask_id, True)
     assert isinstance(done, actions.Ran) and echo.apps["echo"].module.WIPED == ["project:add a README"]
+
+
+def test_confirm_shows_a_list_of_words_as_words():
+    got = actions._plain({"steps": ['press "Go"', 'check "Agree"'], "n": 2, "mixed": [1, 2]})
+    assert "{steps}".format_map(got) == 'press "Go"; check "Agree"'
+    assert "{n}".format_map(got) == "2" and "{missing}".format_map(got) == "(not given)"

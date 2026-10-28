@@ -85,6 +85,12 @@ class _Fields(dict):
         return "(not given)"
 
 
+def _plain(args: dict) -> _Fields:
+    """What a confirm question shows for each argument: a list of words reads as "a; b", not as Python."""
+    return _Fields({k: "; ".join(map(str, v)) if isinstance(v, list) and all(isinstance(x, str) for x in v) else v
+                    for k, v in args.items()})
+
+
 def _fail(reg: Registry, app: LoadedApp, action: ActionSpec, args: object, message: str) -> Failed:
     _log(reg, f"{app.manifest.name}__{action.name}", action.effect, "failed", _args_text(action, args), message)
     return Failed(message)
@@ -120,7 +126,7 @@ def run(reg: Registry, tool_name: str, args: object, origin: Origin,
         return _fail(reg, app, action, args, "Invalid input: " + "; ".join(problems))
     if not needs_confirmation(action.effect, origin, tool_name in allowed, action.sends_data):
         return _execute(reg, app, action, args)
-    question = action.confirm.format_map(_Fields(args))
+    question = action.confirm.format_map(_plain(args))
     cur = reg.conn.execute(
         "INSERT INTO asks (tool, args_json, question, status, created_at, origin_json) VALUES (?,?,?,?,?,?)",
         (tool_name, json.dumps(args), question, "pending", stamp(), json.dumps(asdict(origin))),
