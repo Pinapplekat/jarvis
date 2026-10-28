@@ -177,7 +177,7 @@ def test_read_page_returns_the_readable_text_and_links(real_apps, monkeypatch):
 
 def test_a_script_only_page_says_it_needs_a_browser(real_apps, monkeypatch):
     out = read(real_apps, monkeypatch, b"<html><body><div id=app></div><script src=app.js></script></body></html>")
-    assert "needs a browser" in out.result.text and out.result.data["thin"]
+    assert "this page needs a browser; use browser__read" in out.result.text and out.result.data["thin"]
 
 
 def test_read_page_refuses_files_and_blocked_addresses(real_apps, monkeypatch):

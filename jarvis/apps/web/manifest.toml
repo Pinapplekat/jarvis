@@ -45,7 +45,7 @@ default = 5
 
 [[actions]]
 name = "read_page"
-description = "Read a web page: its text and links. Pages that need JavaScript come back thin. Never banking or payment sites, or addresses on this Mac or its network."
+description = "Read a web page: its text and links. Pages that need JavaScript come back thin, and then browser__read (Falak's own browser) can read them. Never banking or payment sites, or addresses on this Mac or its network."
 effect = "read"
 untrusted_output = true
 sends_data = true

@@ -132,8 +132,8 @@ def read_page(ctx: AppContext, url: str) -> Result:
         got.url = url  # say what he linked, not Google's export address
         got.links = got.links + plain.extra_links(url)
     if got.thin:
-        return Result(f"{got.url}: the page needs a browser to show its text, and I read pages without one. "
-                      "All I got was:\n" + (got.text or "(nothing)"), data={"url": got.url, "thin": True})
+        return Result(f"{got.url}: this page needs a browser; use browser__read. All I got without one was:\n"
+                      + (got.text or "(nothing)"), data={"url": got.url, "thin": True})
     links = "\n".join(f"- {t or '(no text)'}: {h}" for t, h in got.links)
     cut = " (cut short)" if len(got.text) >= page.MAX_TEXT else ""
     text = f"{got.title or got.url}\n{got.url}\n\nText{cut}:\n{got.text or '(none)'}\n\nLinks:\n{links or '(none)'}"
