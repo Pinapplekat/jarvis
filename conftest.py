@@ -3,6 +3,18 @@ import pytest
 from jarvis.core.settings import load_settings
 
 
+@pytest.fixture(autouse=True)
+def _no_real_desk(monkeypatch):
+    """No test starts the real desk: it downloads models, builds Falak Ears and opens it, which asks for the
+    microphone (and, with the old named pipes, hung LaunchServices). A node test that loads every app, as the terminal
+    link tests do, would otherwise do all of that."""
+    try:
+        from jarvis.apps.desk import actions as desk
+    except ImportError:
+        return
+    monkeypatch.setattr(desk.Runner, "start", lambda self: None)
+
+
 @pytest.fixture
 def data_dir(tmp_path, monkeypatch):
     d = tmp_path / "falak-data"
