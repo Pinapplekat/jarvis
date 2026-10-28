@@ -11,8 +11,10 @@ Falak is the public name. The code name is `jarvis`: the package, CLI, paths and
 ```
 jarvis/
   core/       # the brain side: agent loop, memory, confirmations, scheduler, channel interface, settings
-  channels/   # one adapter per way of talking to Falak (discord.py, terminal.py)
+  channels/   # one adapter per way of talking to Falak (discord.py, terminal.py, desk.py, discord_call.py)
+  speech/     # the speech engines: text to speech, speech to text, the sentence splitter. Imports nothing from jarvis
   host.py     # composition root: loads apps and channels, routes each message to the agent loop
+  voice_wiring.py  # the same, for the voice channels (the desk, Discord calls)
   contract/   # what apps, host and node share: handler API, manifest parser, schema subset
   node/       # the device runtime: runs device apps, talks to the host
   protocol/   # host-node message types, shared by core and node
@@ -39,8 +41,10 @@ docs/briefs/  # one brief per milestone
    - `apps` may import `jarvis.contract.api`, `jarvis.protocol` and their own folder. They never import
      another app, `jarvis.node` or `jarvis.core`.
    - `core`, `node` and `channels` may import `contract` and `protocol`.
-   - `channels` may import `jarvis.core.channel` and nothing else from the core. Only `channels/discord.py`
-     imports `discord`.
+   - `channels` may import `jarvis.core.channel`, `jarvis.speech` and nothing else from the core. Only
+     `channels/discord.py` imports `discord`.
+   - `speech` imports nothing else from `jarvis`. Only `channels`, `host.py`, `voice_wiring.py` and `voice_cli.py`
+     import it; the core and the node never do.
    - `core` never imports `channels` or `host`. `host.py` is the one place that wires them together.
    - `core` and `node` never import each other.
    - `protocol` imports nothing else from `jarvis`. Both sides depend on it, so it depends on neither.
@@ -107,6 +111,15 @@ docs/briefs/  # one brief per milestone
 - Pictures a tool returns reach the model and are then deleted. One goes to Elijah only when the model calls
   `falak__send_image` in a chat turn; it is held in memory and attached to the reply, never written to disk. The
   brain runs Claude Code with `--no-session-persistence`, so it keeps no copies either.
+- **Voice.** The host does the speech work (speech to text, the turn, text to speech, the voice itself); the node does
+  the desk (microphone, speakers, echo cancellation, wake word, push-to-talk, deciding that Elijah is talking, and
+  stopping playback). Protocol version 2 adds binary audio frames (stream id, sequence number, kind, PCM16) and the
+  messages `VoiceStart`, `VoiceEnd`, `SpeakStart`, `SpeakEnd`, `SpeakStop`, `PlaybackStopped` and `Presence`; the host
+  still accepts version 1 nodes, which simply get no voice. An app sends and receives them with `ctx.send_to_host` and
+  `ctx.on_host_frame`. Live audio is never queued while the link is down. Nothing is written to disk: audio lives in
+  memory and is dropped after it is transcribed or played (the last-resort `say` engine passes each sentence through a
+  private temp file that is deleted before the call returns). A channel that speaks has `begin_speech`, and a turn that
+  has a `Speech` is a spoken turn: the voice principle is added to the system prompt and `falak__send_text` exists.
 - Tasks are the one place the node runs Claude: the terminal app starts `claude_agent_sdk.query` on the node, because
   the project files are on the node and the host never sees them. It is the only app that imports the SDK. Every
   tool call of a task is graded in-process by a PreToolUse hook, and the whole `claude` process is sandboxed.

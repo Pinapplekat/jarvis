@@ -87,3 +87,55 @@ rose by about 0.6 GB during the runs.
 
 Kokoro on CPU meets all three. OmniVoice fails all three, so Kokoro (CPU, `bm_george`) is the engine, with OmniVoice
 as a setting for the Mac mini.
+
+## Section 1: Kokoro through MLX (the trial Elijah asked for)
+
+Same machine, same conditions, same sentence, three rounds each, alternating:
+
+| | warm sentence | footprint | first call | install |
+|---|---|---|---|---|
+| Kokoro, torch on the CPU | 0.85 to 0.90 s | 1480 MB | 0.9 s | torch (526 MB) |
+| **Kokoro, MLX on the GPU** | **0.70 s** | 1512 MB, then 741 MB | 5.2 s (compiles once) | no torch |
+
+MLX is about 20% faster, uses no more memory, and drops torch from the install, so **the `kokoro` engine is MLX**.
+The one-time 5 s compile happens in the background when a conversation starts (`VoiceManager.warm`).
+
+Through the real code (`jarvis.speech.KokoroVoice`, the folder `jarvis voice setup` makes), warm, `bm_george`:
+
+| sentence | time | audio |
+|---|---|---|
+| "Ready." | 0.15 s | 1.2 s |
+| "One sec, checking." | **0.26 s** | 2.2 s |
+| "Of course, sir." | 0.23 s | 1.7 s |
+| "You have two meetings tomorrow, the first at nine." | 0.49 s | 3.7 s |
+| a 17-word sentence | 0.83 s | 6.3 s |
+
+The first spoken sentence of a reply is usually short, so first audio comes about 0.3 s after the first sentence is
+written. A blended voice (`bm_george,am_onyx`) and a slower speed cost the same.
+Whisper `base.en` (faster-whisper, int8), read from the old JARVIS folder, heard its own Kokoro speech correctly,
+0.4 to 0.5 s for clips of 2 to 6 seconds.
+
+**Names are dropped without espeak-ng.** Words missing from Kokoro's dictionary (Emily, Okafor, Falak, Spotify) were
+silently skipped when spoken, because its fallback needs espeak and the `espeakng-loader` wheel kills the process on
+macOS. `brew install espeak-ng` fixes it; `jarvis voice status` says when it is missing. The Homebrew library path is
+wired in but was not exercised here (nothing was installed on this Mac).
+
+## What a spoken turn costs (from the numbers above, not yet measured on real turns)
+
+| stage | expected |
+|---|---|
+| end of speech to transcript (Whisper base.en, a few seconds of speech) | 0.4 to 0.5 s |
+| transcript to first text (haiku through the SDK, no tools) | 1.5 s |
+| first text to first audio (a short first sentence) | 0.3 s |
+| **end of speech to first audio** | **about 2.3 s**, 0.3 s over the 2 s target, and the brain is 65% of it |
+
+The desk logs the three gaps on every turn (`desk latency: end of speech -> transcript ..., -> first text ..., -> first
+audio ...`), so real turns will show where the time goes. The cheapest ways to shave it are a shorter end-of-speech
+wait (`end_silence_ms`, now 700) and the model (`voice_model`, haiku already).
+
+## Not measured
+
+- Echo cancellation on speakers and on AirPods: it needs Elijah's microphone permission and a person at the desk.
+  macOS voice processing is on the input node and playback uses the same engine, which is what lets it cancel Falak's
+  own voice; AirPods route audio through their own path, so they are the case most likely to differ.
+- Real end-to-end turns at the desk and on a call.
