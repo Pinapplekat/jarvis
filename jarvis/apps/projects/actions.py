@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import timedelta, timezone
 from pathlib import Path
 
 from jarvis.contract.api import ActionError, AppContext, AppUnavailable, JobResult, JobRun, Result
@@ -98,12 +98,17 @@ def undo_add_project(ctx: AppContext, undo: dict) -> Result:
     return Result("Removed the project again.")
 
 
+RETRY = timedelta(minutes=10)
+
+
 def sync(ctx: AppContext, run: JobRun) -> JobResult:
     """Add a project for every repo the Mac finds that isn't one yet. Says nothing to Elijah."""
     try:
         repos = ctx.call("terminal", "find_repos").data["repos"]
     except AppUnavailable:
-        return JobResult("the Mac isn't connected")
+        # The host starts before the Mac connects, so a sync at startup always lands here; try again soon instead of
+        # in six hours.
+        return JobResult("the Mac isn't connected; trying again in 10 minutes", wake_at=run.now + RETRY)
     known = {p for (p,) in ctx.db.execute("SELECT path FROM projects_items WHERE path IS NOT NULL")}
     taken = {n.lower() for (n,) in ctx.db.execute("SELECT name FROM projects_items")}
     new = 0

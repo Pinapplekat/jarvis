@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -147,8 +147,10 @@ def test_sync_adds_a_project_for_each_new_repo_and_says_nothing(projects):
     assert sync(projects, ["/Users/e/Developer/falak/"]).summary == "1 repos, 0 new"  # already known, trailing slash or not
 
 
-def test_sync_with_no_mac_connected_is_a_quiet_no_op(projects):
-    assert sync(projects, unavailable=True).summary == "the Mac isn't connected"
+def test_sync_with_no_mac_connected_tries_again_soon(projects):
+    out = sync(projects, unavailable=True)
+    assert out.summary.startswith("the Mac isn't connected") and out.messages == ()
+    assert out.wake_at == NOW + timedelta(minutes=10)  # not six hours later: the host starts before the Mac connects
     assert len(rows(projects)) == 3
 
 
