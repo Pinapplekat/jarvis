@@ -35,6 +35,7 @@ def voice_channel(host: "Host", hub) -> Channel | None:
     host.voice_services = services
     channel = desk.DeskChannel(services=services, send_frame=hub.send_voice)
     hub.voice_sink = channel.on_frame
+    reg.say_aloud = channel.say_aloud  # "say it out loud" from Discord
     return channel
 
 

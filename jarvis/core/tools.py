@@ -224,6 +224,31 @@ def _call_tool(reg: Registry, turn: TurnState) -> Tool:
     return Tool(f"{CORE}{SEP}call", desc, {"type": "object", "additionalProperties": False, "properties": {}}, call)
 
 
+SAY_ALOUD_MAX = 600
+
+
+def _say_aloud_tool(reg: Registry, turn: TurnState) -> Tool:
+    async def call(args: dict) -> ToolReply:
+        turn.tools_used.append(f"{CORE}{SEP}say_aloud")
+        text = args.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return ToolReply("say_aloud needs the text to say.", is_error=True)
+        why = reg.say_aloud(text.strip()[:SAY_ALOUD_MAX])
+        if why:
+            return ToolReply(why, is_error=True)
+        return ToolReply("Saying it at his desk now.")
+
+    schema = {
+        "type": "object",
+        "required": ["text"],
+        "additionalProperties": False,
+        "properties": {"text": {"type": "string", "description": "What to say, written the way it should sound."}},
+    }
+    desc = ("Say something out loud at Elijah's desk, in your voice, through the Mac's speakers or his headphones. "
+            "Use it when he asks you to say something out loud or to speak at his desk.")
+    return Tool(f"{CORE}{SEP}say_aloud", desc, schema, call)
+
+
 def shared_images(turn: TurnState) -> tuple[Image, ...]:
     return tuple(turn.images[i] for i in turn.shared)
 
@@ -237,6 +262,8 @@ def build_tools(reg: Registry, turn: TurnState) -> list[Tool]:
         tools.append(_call_tool(reg, turn))
     if turn.spoken:
         tools.append(_send_text_tool(reg, turn))
+    elif reg.say_aloud is not None and turn.origin.channel in turn.own_channels:  # he typed it; a spoken turn just talks
+        tools.append(_say_aloud_tool(reg, turn))
     if any(a.kind == "image" for a in turn.attachments):
         tools.append(_view_attachment_tool(turn))
     return tools

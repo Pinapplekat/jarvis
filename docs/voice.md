@@ -36,6 +36,9 @@ Settings (all optional, under `[apps.desk]`): `push_to_talk`, `wake_word`, `end_
 
 Change how it sounds by asking: "make your voice deeper and a bit older", then "undo that".
 
+From Discord, "say good morning out loud" speaks at the desk (the speakers or your headphones), as long as the Mac's
+node is connected.
+
 ## On a Discord call
 
 Off until you turn it on. Falak joins the voice channel when you do; "call me" sends you a link, because bots can't ring.

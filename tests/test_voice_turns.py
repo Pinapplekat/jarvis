@@ -226,3 +226,22 @@ def test_a_spoken_turn_hears_when_an_app_action_starts(echo):
     brain = StreamingBrain(pieces=("", "Done."), tool=("echo__note", {"text": "x"}))
     handle(echo, brain, speech)
     assert speech.text[:2] == ["", "<tool>"]  # before the model said anything, the speech knew a lookup began
+
+
+def test_say_aloud_is_offered_on_his_typed_turns_when_the_desk_is_on(echo):
+    def names(channel, spoken=False):
+        turn = TurnState(Origin(channel), latest_ask_id(echo), own_channels=frozenset({"discord", "cli", "desk"}),
+                         spoken=spoken)
+        return {t.name: t for t in build_tools(echo, turn)}
+
+    assert "falak__say_aloud" not in names("discord")  # no desk: nothing to say it with
+    said = []
+    echo.say_aloud = lambda text: said.append(text) or None
+    assert "falak__say_aloud" in names("discord")
+    assert "falak__say_aloud" not in names("desk", spoken=True)  # a spoken turn just talks
+    assert "falak__say_aloud" not in names("job:checkins.morning")  # a job speaks first through the outbox
+    out = asyncio.run(names("discord")["falak__say_aloud"].call({"text": "Good morning, sir."}))
+    assert not out.is_error and said == ["Good morning, sir."]
+    echo.say_aloud = lambda text: "The desk isn't connected right now, so I can't say it out loud."
+    out = asyncio.run(names("discord")["falak__say_aloud"].call({"text": "hi"}))
+    assert out.is_error and "isn't connected" in out.text

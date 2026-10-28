@@ -132,6 +132,14 @@ class DeskChannel:
         self._speeches[stream] = speech
         return speech
 
+    def say_aloud(self, text: str) -> str | None:
+        """Say `text` at the desk now, because he asked from another channel. Returns why it can't, or None."""
+        if self._loop is None or not self._node or self._presence is None \
+                or self._clock() - self._presence[0] > PRESENCE_FRESH:
+            return "The desk isn't connected right now, so I can't say it out loud."
+        asyncio.run_coroutine_threadsafe(self._say_now(self._node, text), self._loop)
+        return None
+
     async def send(self, text: str, *, reply_to: object = None, ask_id: int | None = None, images: tuple = ()) -> None:
         """Something Falak says first (the outbox): spoken whole. The ask's question is in `text`; buttons are Discord's."""
         await self._say_now(self._node, text)

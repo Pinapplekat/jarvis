@@ -383,3 +383,18 @@ def test_no_filler_once_falak_has_started_talking_or_was_cut_off():
         return said, cut_said
 
     assert asyncio.run(go()) == (["Checking your calendar."], [])
+
+
+def test_say_aloud_speaks_at_the_desk_only_when_it_is_connected(echo):
+    desk, sent = make_desk(Listener())
+    assert "isn't connected" in desk.say_aloud("hi")  # not running
+
+    async def scenario(host):
+        assert "isn't connected" in desk.say_aloud("hi")  # running, but no node has reported in
+        desk.on_frame("mac", m.Presence(900.0, False).to_json())  # away from the Mac: he asked, so it still speaks
+        await until(lambda: desk._node == "mac", "presence")
+        assert desk.say_aloud("Good morning, sir.") is None
+        await until(lambda: kinds(sent).count("SpeakEnd") == 1, "it to be spoken")
+
+    run(echo, ScriptedBrain(), desk, scenario)
+    assert kinds(sent)[0] == "SpeakStart" and "audio" in kinds(sent)
